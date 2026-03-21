@@ -4,13 +4,11 @@ using MagnetometerSystem.Core.Models;
 namespace MagnetometerSystem.Core.Communication;
 
 /// <summary>
-/// 串口设备连接实现
+/// 串口设备连接实现（使用 DataReceived 事件模式）
 /// </summary>
 public class SerialDeviceConnection : IDeviceConnection
 {
     private SerialPort? _serialPort;
-    private CancellationTokenSource? _readCts;
-    private Task? _readTask;
     private bool _disposed;
 
     public event EventHandler<byte[]>? DataReceived;
@@ -52,19 +50,17 @@ public class SerialDeviceConnection : IDeviceConnection
                     "space" => System.IO.Ports.Parity.Space,
                     _ => System.IO.Ports.Parity.None
                 },
-                ReadTimeout = 1000,
-                WriteTimeout = 1000,
                 ReadBufferSize = 65536,
+                ReceivedBytesThreshold = 1,
             };
+
+            _serialPort.DataReceived += OnSerialDataReceived;
+            _serialPort.ErrorReceived += OnSerialErrorReceived;
 
             _serialPort.Open();
             _serialPort.DiscardInBuffer();
 
             ConnectionStateChanged?.Invoke(this, true);
-
-            // 启动后台读取任务
-            _readCts = new CancellationTokenSource();
-            _readTask = Task.Run(() => ReadLoopAsync(_readCts.Token), _readCts.Token);
         }
         catch (Exception ex)
         {
@@ -75,37 +71,85 @@ public class SerialDeviceConnection : IDeviceConnection
         return Task.CompletedTask;
     }
 
-    public async Task DisconnectAsync()
+    private void OnSerialDataReceived(object sender, SerialDataReceivedEventArgs e)
     {
-        if (_readCts != null)
+        try
         {
-            await _readCts.CancelAsync();
-            if (_readTask != null)
-            {
-                try { await _readTask; }
-                catch (OperationCanceledException) { }
-            }
-            _readCts.Dispose();
-            _readCts = null;
-            _readTask = null;
-        }
+            if (_serialPort?.IsOpen != true)
+                return;
 
-        if (_serialPort?.IsOpen == true)
+            int bytesToRead = _serialPort.BytesToRead;
+            if (bytesToRead <= 0)
+                return;
+
+            var buffer = new byte[bytesToRead];
+            int bytesRead = _serialPort.Read(buffer, 0, bytesToRead);
+
+            if (bytesRead > 0)
+            {
+                if (bytesRead < buffer.Length)
+                {
+                    var data = new byte[bytesRead];
+                    Array.Copy(buffer, data, bytesRead);
+                    DataReceived?.Invoke(this, data);
+                }
+                else
+                {
+                    DataReceived?.Invoke(this, buffer);
+                }
+            }
+        }
+        catch (IOException ex)
         {
-            try
-            {
-                _serialPort.Close();
-            }
-            catch (Exception ex)
-            {
-                ErrorOccurred?.Invoke(this, $"串口关闭异常: {ex.Message}");
-            }
+            ErrorOccurred?.Invoke(this, $"串口读取错误（设备可能已断开）: {ex.Message}");
+            ConnectionStateChanged?.Invoke(this, false);
         }
+        catch (InvalidOperationException ex)
+        {
+            ErrorOccurred?.Invoke(this, $"串口已关闭: {ex.Message}");
+            ConnectionStateChanged?.Invoke(this, false);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            ErrorOccurred?.Invoke(this, $"串口访问被拒绝: {ex.Message}");
+            ConnectionStateChanged?.Invoke(this, false);
+        }
+        catch (Exception ex)
+        {
+            ErrorOccurred?.Invoke(this, $"串口读取异常: {ex.Message}");
+        }
+    }
 
-        _serialPort?.Dispose();
-        _serialPort = null;
+    private void OnSerialErrorReceived(object sender, SerialErrorReceivedEventArgs e)
+    {
+        ErrorOccurred?.Invoke(this, $"串口硬件错误: {e.EventType}");
+    }
+
+    public Task DisconnectAsync()
+    {
+        if (_serialPort != null)
+        {
+            _serialPort.DataReceived -= OnSerialDataReceived;
+            _serialPort.ErrorReceived -= OnSerialErrorReceived;
+
+            if (_serialPort.IsOpen)
+            {
+                try
+                {
+                    _serialPort.Close();
+                }
+                catch (Exception ex)
+                {
+                    ErrorOccurred?.Invoke(this, $"串口关闭异常: {ex.Message}");
+                }
+            }
+
+            _serialPort.Dispose();
+            _serialPort = null;
+        }
 
         ConnectionStateChanged?.Invoke(this, false);
+        return Task.CompletedTask;
     }
 
     public Task SendAsync(byte[] data, CancellationToken ct = default)
@@ -115,55 +159,6 @@ public class SerialDeviceConnection : IDeviceConnection
 
         _serialPort.Write(data, 0, data.Length);
         return Task.CompletedTask;
-    }
-
-    private async Task ReadLoopAsync(CancellationToken ct)
-    {
-        var buffer = new byte[4096];
-
-        while (!ct.IsCancellationRequested)
-        {
-            try
-            {
-                if (_serialPort?.IsOpen != true)
-                {
-                    await Task.Delay(100, ct);
-                    continue;
-                }
-
-                var stream = _serialPort.BaseStream;
-                int bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length, ct);
-
-                if (bytesRead > 0)
-                {
-                    var data = new byte[bytesRead];
-                    Array.Copy(buffer, data, bytesRead);
-                    DataReceived?.Invoke(this, data);
-                }
-            }
-            catch (OperationCanceledException)
-            {
-                break;
-            }
-            catch (IOException ex)
-            {
-                // 设备可能被拔出
-                ErrorOccurred?.Invoke(this, $"串口读取错误（设备可能已断开）: {ex.Message}");
-                ConnectionStateChanged?.Invoke(this, false);
-                break;
-            }
-            catch (UnauthorizedAccessException ex)
-            {
-                ErrorOccurred?.Invoke(this, $"串口访问被拒绝: {ex.Message}");
-                ConnectionStateChanged?.Invoke(this, false);
-                break;
-            }
-            catch (Exception ex)
-            {
-                ErrorOccurred?.Invoke(this, $"串口读取异常: {ex.Message}");
-                await Task.Delay(100, ct);
-            }
-        }
     }
 
     public async ValueTask DisposeAsync()

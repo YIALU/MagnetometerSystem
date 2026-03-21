@@ -3,10 +3,20 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:models="clr-namespace:MagnetometerSystem.Core.Models;assembly=MagnetometerSystem.Core"
+             xmlns:sys="clr-namespace:System;assembly=System.Runtime"
              mc:Ignorable="d"
-             d:DesignHeight="600" d:DesignWidth="800">
+             d:DesignHeight="800" d:DesignWidth="900">
+    <UserControl.Resources>
+        <ObjectDataProvider x:Key="FieldDataTypeValues" MethodName="GetValues" ObjectType="{x:Type sys:Enum}">
+            <ObjectDataProvider.MethodParameters>
+                <x:Type TypeName="models:FieldDataType"/>
+            </ObjectDataProvider.MethodParameters>
+        </ObjectDataProvider>
+    </UserControl.Resources>
     <Grid Margin="15">
         <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
@@ -14,7 +24,7 @@
         </Grid.RowDefinitions>
 
         <!-- 传感器配置区 -->
-        <GroupBox Grid.Row="0" Header="传感器配置" Margin="0,0,0,10" Padding="10">
+        <GroupBox Grid.Row="0" Header="传感器配置" Margin="0,0,0,8" Padding="10">
             <WrapPanel>
                 <StackPanel Margin="0,0,20,0">
                     <TextBlock Text="传感器类型" Margin="0,0,0,3"/>
@@ -28,16 +38,11 @@
                               IsEditable="True"
                               Text="{Binding SampleRate, UpdateSourceTrigger=LostFocus}"/>
                 </StackPanel>
-                <StackPanel Margin="0,0,20,0">
-                    <TextBlock Text="通信协议" Margin="0,0,0,3"/>
-                    <ComboBox Width="130" ItemsSource="{Binding ProtocolTypes}"
-                              SelectedItem="{Binding ProtocolType}"/>
-                </StackPanel>
             </WrapPanel>
         </GroupBox>
 
         <!-- 连接参数区 -->
-        <GroupBox Grid.Row="1" Header="连接参数" Margin="0,0,0,10" Padding="10">
+        <GroupBox Grid.Row="1" Header="连接参数" Margin="0,0,0,8" Padding="10">
             <StackPanel>
                 <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
                     <TextBlock Text="连接方式" VerticalAlignment="Center" Margin="0,0,10,0"/>
@@ -73,10 +78,8 @@
                     </StackPanel>
                     <StackPanel Margin="0,0,15,0">
                         <TextBlock Text="数据位" Margin="0,0,0,3"/>
-                        <ComboBox Width="60" SelectedItem="{Binding DataBits}">
-                            <ComboBoxItem Content="7"/>
-                            <ComboBoxItem Content="8"/>
-                        </ComboBox>
+                        <ComboBox Width="60" ItemsSource="{Binding DataBitsOptions}"
+                                  SelectedItem="{Binding DataBits}"/>
                     </StackPanel>
                     <StackPanel Margin="0,0,15,0">
                         <TextBlock Text="校验位" Margin="0,0,0,3"/>
@@ -85,11 +88,8 @@
                     </StackPanel>
                     <StackPanel Margin="0,0,15,0">
                         <TextBlock Text="停止位" Margin="0,0,0,3"/>
-                        <ComboBox Width="60" SelectedItem="{Binding StopBits}">
-                            <ComboBoxItem Content="1"/>
-                            <ComboBoxItem Content="1.5"/>
-                            <ComboBoxItem Content="2"/>
-                        </ComboBox>
+                        <ComboBox Width="60" ItemsSource="{Binding StopBitsOptions}"
+                                  SelectedItem="{Binding StopBits}"/>
                     </StackPanel>
                 </WrapPanel>
 
@@ -117,15 +117,129 @@
             </StackPanel>
         </GroupBox>
 
-        <!-- 连接/断开按钮 -->
-        <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,0,0,10">
+        <!-- 协议配置区 -->
+        <GroupBox Grid.Row="2" Header="协议配置" Margin="0,0,0,8" Padding="10">
+            <StackPanel>
+                <!-- 预设/加载 -->
+                <WrapPanel Margin="0,0,0,8">
+                    <StackPanel Margin="0,0,15,0">
+                        <TextBlock Text="预设协议" Margin="0,0,0,3"/>
+                        <StackPanel Orientation="Horizontal">
+                            <ComboBox Width="200" ItemsSource="{Binding SavedProtocols}"
+                                      SelectedItem="{Binding SelectedSavedProtocol}"
+                                      DisplayMemberPath="Name"/>
+                            <Button Content="加载" Margin="5,0,0,0" Padding="8,2"
+                                    Command="{Binding LoadSelectedProtocolCommand}"/>
+                            <Button Content="保存当前" Margin="5,0,0,0" Padding="8,2"
+                                    Command="{Binding SaveProtocolCommand}"/>
+                        </StackPanel>
+                    </StackPanel>
+                </WrapPanel>
+
+                <!-- 基本参数 -->
+                <WrapPanel Margin="0,0,0,8">
+                    <StackPanel Margin="0,0,15,0">
+                        <TextBlock Text="协议名称" Margin="0,0,0,3"/>
+                        <TextBox Width="180" Text="{Binding ProtocolConfig.Name, UpdateSourceTrigger=PropertyChanged}"/>
+                    </StackPanel>
+                    <StackPanel Margin="0,0,15,0">
+                        <TextBlock Text="协议类型" Margin="0,0,0,3"/>
+                        <ComboBox Width="100" ItemsSource="{Binding ProtocolCategories}"
+                                  SelectedItem="{Binding ProtocolConfig.Category}"/>
+                    </StackPanel>
+                </WrapPanel>
+
+                <!-- ASCII 参数 -->
+                <WrapPanel Margin="0,0,0,8">
+                    <WrapPanel.Style>
+                        <Style TargetType="WrapPanel">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding ProtocolConfig.Category}" Value="{x:Static models:ProtocolCategory.Ascii}">
+                                    <Setter Property="Visibility" Value="Visible"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </WrapPanel.Style>
+                    <StackPanel Margin="0,0,15,0">
+                        <TextBlock Text="分隔符" Margin="0,0,0,3"/>
+                        <TextBox Width="80" Text="{Binding ProtocolConfig.AsciiDelimiter, UpdateSourceTrigger=LostFocus}"/>
+                    </StackPanel>
+                    <StackPanel Margin="0,0,15,0">
+                        <CheckBox Content="首行为表头" Margin="0,5,0,0"
+                                  IsChecked="{Binding ProtocolConfig.AsciiHasHeader}"/>
+                    </StackPanel>
+                </WrapPanel>
+
+                <!-- 二进制参数 -->
+                <WrapPanel Margin="0,0,0,8">
+                    <WrapPanel.Style>
+                        <Style TargetType="WrapPanel">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding ProtocolConfig.Category}" Value="{x:Static models:ProtocolCategory.Binary}">
+                                    <Setter Property="Visibility" Value="Visible"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </WrapPanel.Style>
+                    <StackPanel Margin="0,0,15,0">
+                        <TextBlock Text="帧头 (Hex)" Margin="0,0,0,3"/>
+                        <TextBox Width="100" Text="{Binding ProtocolConfig.FrameHeader, UpdateSourceTrigger=LostFocus}"/>
+                    </StackPanel>
+                    <StackPanel Margin="0,0,15,0">
+                        <TextBlock Text="帧尾 (Hex)" Margin="0,0,0,3"/>
+                        <TextBox Width="100" Text="{Binding ProtocolConfig.FrameTail, UpdateSourceTrigger=LostFocus}"/>
+                    </StackPanel>
+                    <StackPanel Margin="0,0,15,0">
+                        <CheckBox Content="有长度字节" Margin="0,5,0,0"
+                                  IsChecked="{Binding ProtocolConfig.HasLengthByte}"/>
+                    </StackPanel>
+                    <StackPanel Margin="0,0,15,0">
+                        <TextBlock Text="校验方式" Margin="0,0,0,3"/>
+                        <ComboBox Width="90" ItemsSource="{Binding ChecksumTypes}"
+                                  SelectedItem="{Binding ProtocolConfig.Checksum}"/>
+                    </StackPanel>
+                </WrapPanel>
+
+                <!-- 字段映射 -->
+                <Expander Header="字段映射" Margin="0,0,0,0" IsExpanded="False">
+                    <StackPanel Margin="0,5,0,0">
+                        <DataGrid ItemsSource="{Binding ProtocolConfig.FieldMappings}"
+                                  AutoGenerateColumns="False"
+                                  CanUserAddRows="False"
+                                  CanUserDeleteRows="False"
+                                  Height="150"
+                                  FontSize="12">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="名称" Binding="{Binding Name}" Width="60"/>
+                                <DataGridTextColumn Header="通道" Binding="{Binding ChannelIndex}" Width="50"/>
+                                <DataGridTextColumn Header="偏移" Binding="{Binding ByteOffset}" Width="50"/>
+                                <DataGridComboBoxColumn Header="数据类型" Width="80"
+                                    SelectedItemBinding="{Binding DataType}"
+                                    ItemsSource="{Binding Source={StaticResource FieldDataTypeValues}}"/>
+                                <DataGridTextColumn Header="缩放" Binding="{Binding Scale}" Width="60"/>
+                                <DataGridTextColumn Header="偏移量" Binding="{Binding Offset}" Width="60"/>
+                                <DataGridCheckBoxColumn Header="大端序" Binding="{Binding BigEndian}" Width="55"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                        <StackPanel Orientation="Horizontal" Margin="0,5,0,0">
+                            <Button Content="添加字段" Padding="8,3" Command="{Binding AddFieldMappingCommand}"/>
+                        </StackPanel>
+                    </StackPanel>
+                </Expander>
+            </StackPanel>
+        </GroupBox>
+
+        <!-- 操作按钮 -->
+        <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,0,0,8">
             <Button Padding="20,8" Command="{Binding ConnectCommand}">
                 <Button.Style>
                     <Style TargetType="Button">
-                        <Setter Property="Content" Value="连接"/>
+                        <Setter Property="Content" Value="开始"/>
                         <Style.Triggers>
                             <DataTrigger Binding="{Binding IsConnected}" Value="True">
-                                <Setter Property="Content" Value="断开"/>
+                                <Setter Property="Content" Value="停止"/>
                             </DataTrigger>
                         </Style.Triggers>
                     </Style>
@@ -144,10 +258,14 @@
                     </Style>
                 </TextBlock.Style>
             </TextBlock>
+            <CheckBox Content="显示 Hex" VerticalAlignment="Center" Margin="20,0,0,0"
+                      IsChecked="{Binding ShowHex}"/>
+            <Button Content="清空" Padding="8,4" Margin="15,0,0,0"
+                    Command="{Binding ClearRawDataCommand}"/>
         </StackPanel>
 
         <!-- 原始数据显示区 -->
-        <GroupBox Grid.Row="3" Header="原始数据" Padding="5">
+        <GroupBox Grid.Row="4" Header="原始数据" Padding="5">
             <ListBox ItemsSource="{Binding RawDataLines}" FontFamily="Consolas" FontSize="12"
                      ScrollViewer.VerticalScrollBarVisibility="Auto"
                      ScrollViewer.HorizontalScrollBarVisibility="Auto">
