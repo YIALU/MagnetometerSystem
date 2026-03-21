@@ -8,11 +8,27 @@ public class SensorConfig
     /// <summary>传感器类型</summary>
     public SensorType Type { get; set; }
 
-    /// <summary>采样率 (Hz)</summary>
+    /// <summary>
+    /// 采样率 (Hz)。
+    /// 注: 当前版本仅用于 UI 显示和会话元数据记录。
+    /// 实际采样节奏由设备硬件决定，降采样/插值功能（SamplingRateAdapter）尚未实现。
+    /// </summary>
     public double SampleRate { get; set; } = 10.0;
 
-    /// <summary>通道数（根据传感器类型自动确定）</summary>
-    public int ChannelCount => Type switch
+    /// <summary>
+    /// 通道数覆盖值（由协议配置动态设置）。
+    /// 若 > 0 则优先使用此值，否则根据传感器类型自动确定。
+    /// </summary>
+    public int ChannelCountOverride { get; set; }
+
+    /// <summary>
+    /// 通道名称覆盖（由协议配置动态设置）。
+    /// 若非空则优先使用此值，否则根据传感器类型自动确定。
+    /// </summary>
+    public string[]? ChannelNamesOverride { get; set; }
+
+    /// <summary>通道数（优先使用覆盖值，否则根据传感器类型确定）</summary>
+    public int ChannelCount => ChannelCountOverride > 0 ? ChannelCountOverride : Type switch
     {
         SensorType.SingleAxisFluxgate => 1,
         SensorType.TriaxialFluxgate => 3,
@@ -21,8 +37,8 @@ public class SensorConfig
         _ => 1
     };
 
-    /// <summary>通道名称</summary>
-    public string[] ChannelNames => Type switch
+    /// <summary>通道名称（优先使用覆盖值，否则根据传感器类型确定）</summary>
+    public string[] ChannelNames => ChannelNamesOverride ?? Type switch
     {
         SensorType.SingleAxisFluxgate => ["B"],
         SensorType.TriaxialFluxgate => ["X", "Y", "Z"],

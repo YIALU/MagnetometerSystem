@@ -9,6 +9,7 @@ using MagnetometerSystem.Core.Communication;
 using MagnetometerSystem.Core.Models;
 using MagnetometerSystem.Core.Protocol;
 using MagnetometerSystem.Core.Sensors;
+using MagnetometerSystem.Core.Services;
 
 namespace MagnetometerSystem.App.ViewModels;
 
@@ -18,6 +19,7 @@ namespace MagnetometerSystem.App.ViewModels;
 public partial class ConnectionViewModel : ObservableObject
 {
     private readonly IConnectionFactory _connectionFactory;
+    private readonly DataBus _dataBus;
     private IDeviceConnection? _connection;
     private IDataParser? _parser;
     private ISensorAdapter? _sensorAdapter;
@@ -50,6 +52,15 @@ public partial class ConnectionViewModel : ObservableObject
     public ChecksumType[] ChecksumTypes { get; } = Enum.GetValues<ChecksumType>();
 
     public FieldDataType[] FieldDataTypes { get; } = Enum.GetValues<FieldDataType>();
+
+    public SegmentType[] AvailableSegmentTypes { get; } =
+        [SegmentType.Header, SegmentType.LengthField, SegmentType.DataField,
+         SegmentType.Checksum, SegmentType.Tail, SegmentType.Padding];
+
+    public ChecksumAlgorithm[] ChecksumAlgorithms { get; } = Enum.GetValues<ChecksumAlgorithm>();
+
+    [ObservableProperty]
+    private ObservableCollection<FrameSegment> _protocolSegments = new();
 
     // ---- 连接类型 ----
 
@@ -113,9 +124,22 @@ public partial class ConnectionViewModel : ObservableObject
     private static readonly string ProtocolConfigDir = Path.Combine(
         AppDomain.CurrentDomain.BaseDirectory, "Protocols");
 
-    public ConnectionViewModel(IConnectionFactory connectionFactory)
+    public ConnectionViewModel(IConnectionFactory connectionFactory, DataBus dataBus)
     {
         _connectionFactory = connectionFactory;
+        _dataBus = dataBus;
+
+        // 监听段列表变化，订阅每个段的 PropertyChanged
+        ProtocolSegments.CollectionChanged += (s, e) =>
+        {
+            if (e.NewItems != null)
+                foreach (FrameSegment seg in e.NewItems)
+                    seg.PropertyChanged += OnSegmentPropertyChanged;
+            if (e.OldItems != null)
+                foreach (FrameSegment seg in e.OldItems)
+                    seg.PropertyChanged -= OnSegmentPropertyChanged;
+        };
+
         RefreshPorts();
         LoadSavedProtocols();
     }
@@ -151,6 +175,20 @@ public partial class ConnectionViewModel : ObservableObject
                 SampleRate = SampleRate,
             };
 
+            // 从协议配置中提取通道信息，覆盖传感器类型的默认值
+            if (ProtocolConfig.UsesSegments)
+            {
+                var dataFields = ProtocolConfig.Segments
+                    .Where(s => s.Type == SegmentType.DataField)
+                    .OrderBy(s => s.ComputedOffset)
+                    .ToList();
+                if (dataFields.Count > 0)
+                {
+                    sensorConfig.ChannelCountOverride = dataFields.Count;
+                    sensorConfig.ChannelNamesOverride = dataFields.Select(f => f.Name).ToArray();
+                }
+            }
+
             if (!sensorConfig.ValidateSampleRate())
             {
                 StatusMessage = $"采样率超出范围: {sensorConfig.MinSampleRate}~{sensorConfig.MaxSampleRate} Hz";
@@ -184,9 +222,23 @@ public partial class ConnectionViewModel : ObservableObject
             StatusMessage = "正在连接...";
             await _connection.ConnectAsync();
             StatusMessage = "已连接";
+
+            // 通知数据总线采集开始
+            _dataBus.PublishAcquisitionStarted(sensorConfig);
         }
         catch (Exception ex)
         {
+            // 清理已创建但连接失败的资源
+            if (_connection != null)
+            {
+                _connection.DataReceived -= OnDataReceived;
+                _connection.ErrorOccurred -= OnErrorOccurred;
+                _connection.ConnectionStateChanged -= OnConnectionStateChanged;
+                try { await _connection.DisposeAsync(); } catch { }
+                _connection = null;
+            }
+            _parser = null;
+            _sensorAdapter = null;
             StatusMessage = $"连接失败: {ex.Message}";
         }
     }
@@ -205,6 +257,7 @@ public partial class ConnectionViewModel : ObservableObject
         _parser?.Reset();
         _parser = null;
         _sensorAdapter = null;
+        _dataBus.PublishAcquisitionStopped();
         IsConnected = false;
         StatusMessage = "已断开";
     }
@@ -228,6 +281,9 @@ public partial class ConnectionViewModel : ObservableObject
         while (_parser?.TryParse(out var reading) == true && reading != null)
         {
             var processed = _sensorAdapter?.Process(reading) ?? reading;
+
+            // 发布到数据总线（供实时图表等消费者使用）
+            _dataBus.PublishReading(processed);
 
             Application.Current?.Dispatcher.BeginInvoke(() =>
             {
@@ -302,6 +358,7 @@ public partial class ConnectionViewModel : ObservableObject
         if (SelectedSavedProtocol != null)
         {
             ProtocolConfig = SelectedSavedProtocol;
+            SyncSegmentsFromConfig();
             StatusMessage = $"已加载协议: {ProtocolConfig.Name}";
         }
     }
@@ -332,10 +389,170 @@ public partial class ConnectionViewModel : ObservableObject
         }
     }
 
+    // ---- 帧段操作 ----
+
+    [RelayCommand]
+    private void AddSegment(SegmentType type)
+    {
+        var seg = type switch
+        {
+            SegmentType.Header => new FrameSegment { Type = type, Name = "帧头", ByteCount = 2, FixedHexValue = "AA55" },
+            SegmentType.Tail => new FrameSegment { Type = type, Name = "帧尾", ByteCount = 1, FixedHexValue = "0D" },
+            SegmentType.LengthField => new FrameSegment { Type = type, Name = "长度", ByteCount = 1 },
+            SegmentType.Checksum => new FrameSegment { Type = type, Name = "校验", ByteCount = 1 },
+            SegmentType.Padding => new FrameSegment { Type = type, Name = "填充", ByteCount = 1, FixedHexValue = "00" },
+            SegmentType.DataField => new FrameSegment
+            {
+                Type = type,
+                Name = $"CH{ProtocolSegments.Count(s => s.Type == SegmentType.DataField)}",
+                ByteCount = 4,
+                DataType = FieldDataType.Float,
+                ChannelIndex = ProtocolSegments.Count(s => s.Type == SegmentType.DataField),
+            },
+            _ => new FrameSegment { Type = type, Name = "未知", ByteCount = 1 },
+        };
+
+        ProtocolSegments.Add(seg);
+        SyncSegmentsToConfig();
+    }
+
+    [RelayCommand]
+    private void RemoveSegment(FrameSegment? seg)
+    {
+        if (seg != null)
+        {
+            ProtocolSegments.Remove(seg);
+            SyncSegmentsToConfig();
+        }
+    }
+
+    [RelayCommand]
+    private void MoveSegmentUp(FrameSegment? seg)
+    {
+        if (seg == null) return;
+        int idx = ProtocolSegments.IndexOf(seg);
+        if (idx > 0)
+        {
+            ProtocolSegments.Move(idx, idx - 1);
+            SyncSegmentsToConfig();
+        }
+    }
+
+    [RelayCommand]
+    private void MoveSegmentDown(FrameSegment? seg)
+    {
+        if (seg == null) return;
+        int idx = ProtocolSegments.IndexOf(seg);
+        if (idx >= 0 && idx < ProtocolSegments.Count - 1)
+        {
+            ProtocolSegments.Move(idx, idx + 1);
+            SyncSegmentsToConfig();
+        }
+    }
+
+    /// <summary>将 ObservableCollection 同步回 ProtocolConfig.Segments 并重算偏移</summary>
+    public void SyncSegmentsToConfig()
+    {
+        ProtocolConfig.Segments = [.. ProtocolSegments];
+        ProtocolConfig.ComputeSegmentOffsets();
+        // 同步回来以更新 ComputedOffset
+        for (int i = 0; i < ProtocolSegments.Count && i < ProtocolConfig.Segments.Count; i++)
+        {
+            ProtocolSegments[i].ComputedOffset = ProtocolConfig.Segments[i].ComputedOffset;
+        }
+        OnPropertyChanged(nameof(ProtocolConfig));
+        OnPropertyChanged(nameof(TotalFrameLength));
+    }
+
+    /// <summary>总帧长度（供 UI 显示）</summary>
+    public int TotalFrameLength => ProtocolSegments.Sum(s => s.ByteCount);
+
+    /// <summary>从 ProtocolConfig.Segments 同步到 ObservableCollection</summary>
+    private void SyncSegmentsFromConfig()
+    {
+        ProtocolSegments.Clear();
+        foreach (var seg in ProtocolConfig.Segments)
+        {
+            ProtocolSegments.Add(seg);
+        }
+        OnPropertyChanged(nameof(TotalFrameLength));
+    }
+
+    private void OnSegmentPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(FrameSegment.ByteCount))
+        {
+            SyncSegmentsToConfig();
+        }
+    }
+
     [RelayCommand]
     private void ClearRawData()
     {
         RawDataLines.Clear();
+    }
+
+    [RelayCommand]
+    private void ExportProtocol()
+    {
+        try
+        {
+            var dialog = new Microsoft.Win32.SaveFileDialog
+            {
+                Title = "导出协议配置",
+                Filter = "JSON 文件 (*.json)|*.json",
+                FileName = $"{ProtocolConfig.Name}.json",
+            };
+
+            if (dialog.ShowDialog() == true)
+            {
+                File.WriteAllText(dialog.FileName, ProtocolConfig.ToJson());
+                StatusMessage = $"协议已导出: {dialog.FileName}";
+            }
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"导出失败: {ex.Message}";
+        }
+    }
+
+    [RelayCommand]
+    private void ImportProtocol()
+    {
+        try
+        {
+            var dialog = new Microsoft.Win32.OpenFileDialog
+            {
+                Title = "导入协议配置",
+                Filter = "JSON 文件 (*.json)|*.json",
+            };
+
+            if (dialog.ShowDialog() == true)
+            {
+                var json = File.ReadAllText(dialog.FileName);
+                if (json.Length > 1_000_000)
+                {
+                    StatusMessage = "导入失败: 文件过大";
+                    return;
+                }
+
+                var config = ProtocolConfig.FromJson(json);
+                if (config != null)
+                {
+                    ProtocolConfig = config;
+                    SyncSegmentsFromConfig();
+                    StatusMessage = $"已导入协议: {config.Name}";
+                }
+                else
+                {
+                    StatusMessage = "导入失败: 无效的协议配置文件";
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"导入失败: {ex.Message}";
+        }
     }
 
     private void LoadSavedProtocols()
@@ -345,6 +562,7 @@ public partial class ConnectionViewModel : ObservableObject
         // 添加内置预设
         SavedProtocols.Add(ProtocolConfig.CreateDefaultAsciiTriaxial());
         SavedProtocols.Add(ProtocolConfig.CreateDefaultBinaryTriaxial());
+        SavedProtocols.Add(ProtocolConfig.CreateDefaultBinaryTriaxialSegments());
 
         // 从文件加载
         if (Directory.Exists(ProtocolConfigDir))
@@ -358,7 +576,10 @@ public partial class ConnectionViewModel : ObservableObject
                     if (config != null)
                         SavedProtocols.Add(config);
                 }
-                catch { /* 跳过损坏的配置文件 */ }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"跳过损坏的协议配置文件 {file}: {ex.Message}");
+                }
             }
         }
     }

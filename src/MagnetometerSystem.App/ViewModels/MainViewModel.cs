@@ -1,4 +1,5 @@
 using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
 
 namespace MagnetometerSystem.App.ViewModels;
 
@@ -23,10 +24,12 @@ public partial class MainViewModel : ObservableObject
     private long _dataCount;
 
     public ConnectionViewModel ConnectionVM { get; }
+    public RealtimeChartViewModel RealtimeChartVM { get; }
 
-    public MainViewModel(ConnectionViewModel connectionVm)
+    public MainViewModel(ConnectionViewModel connectionVm, RealtimeChartViewModel realtimeChartVm)
     {
         ConnectionVM = connectionVm;
+        RealtimeChartVM = realtimeChartVm;
         CurrentView = connectionVm;
 
         // 订阅连接状态变化
@@ -35,6 +38,12 @@ public partial class MainViewModel : ObservableObject
             if (e.PropertyName == nameof(ConnectionViewModel.IsConnected))
             {
                 ConnectionStatus = ConnectionVM.IsConnected ? "已连接" : "未连接";
+
+                // 连接成功后自动切换到实时采集页面
+                if (ConnectionVM.IsConnected)
+                {
+                    CurrentView = RealtimeChartVM;
+                }
             }
             else if (e.PropertyName == nameof(ConnectionViewModel.SelectedSensorType))
             {
@@ -45,5 +54,26 @@ public partial class MainViewModel : ObservableObject
                 SampleRateInfo = $"{ConnectionVM.SampleRate} Hz";
             }
         };
+
+        // 订阅实时图表的数据点计数
+        RealtimeChartVM.PropertyChanged += (s, e) =>
+        {
+            if (e.PropertyName == nameof(RealtimeChartViewModel.DataPointCount))
+            {
+                DataCount = RealtimeChartVM.DataPointCount;
+            }
+        };
+    }
+
+    [RelayCommand]
+    private void NavigateToConnection()
+    {
+        CurrentView = ConnectionVM;
+    }
+
+    [RelayCommand]
+    private void NavigateToRealtimeChart()
+    {
+        CurrentView = RealtimeChartVM;
     }
 }

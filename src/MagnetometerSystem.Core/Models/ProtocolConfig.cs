@@ -133,10 +133,19 @@ public class ProtocolConfig
     /// <summary>校验计算的范围起始（0=从帧头开始，通常为 0）</summary>
     public int ChecksumStartOffset { get; set; } = 0;
 
-    // ==== 字段映射 ====
+    // ==== 字段映射（旧模式，保留兼容） ====
 
     /// <summary>字段映射列表（描述数据区中各字段的位置和含义）</summary>
     public List<FieldMapping> FieldMappings { get; set; } = [];
+
+    // ==== 帧段配置（新模式） ====
+
+    /// <summary>帧段列表（顺序拼接，系统自动计算偏移）</summary>
+    public List<FrameSegment> Segments { get; set; } = [];
+
+    /// <summary>是否使用帧段模式</summary>
+    [JsonIgnore]
+    public bool UsesSegments => Segments.Count > 0;
 
     /// <summary>备注</summary>
     public string? Notes { get; set; }
@@ -166,23 +175,42 @@ public class ProtocolConfig
     [JsonIgnore]
     public byte[] FrameTailBytes => string.IsNullOrEmpty(FrameTail) ? [] : HexToBytes(FrameTail);
 
-    /// <summary>序列化为 JSON 字符串（用于保存）</summary>
+    private static readonly JsonSerializerOptions _jsonWriteOptions = new()
+    {
+        WriteIndented = true,
+        Converters = { new JsonStringEnumConverter() },
+    };
+
+    /// <summary>序列化为 JSON 字符串（用于保存，枚举以字符串输出便于人工编辑）</summary>
     public string ToJson()
     {
-        return JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true });
+        return JsonSerializer.Serialize(this, _jsonWriteOptions);
     }
 
     private static readonly JsonSerializerOptions _safeJsonOptions = new()
     {
         MaxDepth = 8,
+        Converters = { new JsonStringEnumConverter() },
     };
 
-    /// <summary>从 JSON 字符串反序列化（用于加载）</summary>
+    /// <summary>从 JSON 字符串反序列化（用于加载），自动迁移旧格式</summary>
     public static ProtocolConfig? FromJson(string json)
     {
         if (string.IsNullOrEmpty(json) || json.Length > 1_000_000)
             return null;
-        return JsonSerializer.Deserialize<ProtocolConfig>(json, _safeJsonOptions);
+        var config = JsonSerializer.Deserialize<ProtocolConfig>(json, _safeJsonOptions);
+        if (config != null)
+        {
+            // 旧格式自动迁移：如果没有 Segments 但有 FieldMappings 且是二进制协议
+            if (config.Category == ProtocolCategory.Binary
+                && config.Segments.Count == 0
+                && config.FieldMappings.Count > 0)
+            {
+                config.MigrateFromLegacy();
+            }
+            config.ComputeSegmentOffsets();
+        }
+        return config;
     }
 
     /// <summary>
@@ -209,7 +237,7 @@ public class ProtocolConfig
     /// </summary>
     public static ProtocolConfig CreateDefaultBinaryTriaxial()
     {
-        return new ProtocolConfig
+        var config = new ProtocolConfig
         {
             Name = "三轴 Binary (AA55 帧头, Double)",
             Category = ProtocolCategory.Binary,
@@ -222,7 +250,145 @@ public class ProtocolConfig
                 new() { Name = "X", ChannelIndex = 0, ByteOffset = 0, DataType = FieldDataType.Double },
                 new() { Name = "Y", ChannelIndex = 1, ByteOffset = 8, DataType = FieldDataType.Double },
                 new() { Name = "Z", ChannelIndex = 2, ByteOffset = 16, DataType = FieldDataType.Double },
-            ]
+            ],
+            Segments =
+            [
+                new() { Type = SegmentType.Header, Name = "帧头", ByteCount = 2, FixedHexValue = "AA55" },
+                new() { Type = SegmentType.LengthField, Name = "长度", ByteCount = 1, LengthBigEndian = false },
+                new() { Type = SegmentType.DataField, Name = "X通道", ByteCount = 8, DataType = FieldDataType.Double, ChannelIndex = 0 },
+                new() { Type = SegmentType.DataField, Name = "Y通道", ByteCount = 8, DataType = FieldDataType.Double, ChannelIndex = 1 },
+                new() { Type = SegmentType.DataField, Name = "Z通道", ByteCount = 8, DataType = FieldDataType.Double, ChannelIndex = 2 },
+                new() { Type = SegmentType.Checksum, Name = "校验", ByteCount = 1, ChecksumAlgorithm = ChecksumAlgorithm.Xor, ChecksumStartIndex = 0 },
+                new() { Type = SegmentType.Tail, Name = "帧尾", ByteCount = 1, FixedHexValue = "0D" },
+            ],
         };
+        config.ComputeSegmentOffsets();
+        return config;
+    }
+
+    /// <summary>
+    /// 创建一个纯段式三轴磁通门二进制协议（Float 类型，帧更短）
+    /// </summary>
+    public static ProtocolConfig CreateDefaultBinaryTriaxialSegments()
+    {
+        var config = new ProtocolConfig
+        {
+            Name = "三轴 Binary 段式 (AA55, Float)",
+            Category = ProtocolCategory.Binary,
+            Segments =
+            [
+                new() { Type = SegmentType.Header, Name = "帧头", ByteCount = 2, FixedHexValue = "AA55" },
+                new() { Type = SegmentType.LengthField, Name = "长度", ByteCount = 1, LengthBigEndian = false },
+                new() { Type = SegmentType.DataField, Name = "X通道", ByteCount = 4, DataType = FieldDataType.Float, ChannelIndex = 0 },
+                new() { Type = SegmentType.DataField, Name = "Y通道", ByteCount = 4, DataType = FieldDataType.Float, ChannelIndex = 1 },
+                new() { Type = SegmentType.DataField, Name = "Z通道", ByteCount = 4, DataType = FieldDataType.Float, ChannelIndex = 2 },
+                new() { Type = SegmentType.Checksum, Name = "校验", ByteCount = 1, ChecksumAlgorithm = ChecksumAlgorithm.Xor, ChecksumStartIndex = 0 },
+                new() { Type = SegmentType.Tail, Name = "帧尾", ByteCount = 1, FixedHexValue = "0D" },
+            ],
+        };
+        config.ComputeSegmentOffsets();
+        return config;
+    }
+
+    /// <summary>
+    /// 遍历 Segments 累加 ByteCount，设置每段的 ComputedOffset
+    /// </summary>
+    public void ComputeSegmentOffsets()
+    {
+        int offset = 0;
+        foreach (var seg in Segments)
+        {
+            seg.ComputedOffset = offset;
+            offset += seg.ByteCount;
+        }
+    }
+
+    /// <summary>
+    /// 计算段式配置的总帧长度
+    /// </summary>
+    [JsonIgnore]
+    public int TotalFrameLength => Segments.Sum(s => s.ByteCount);
+
+    /// <summary>
+    /// 将旧的 FieldMapping 格式迁移为 Segments 格式
+    /// </summary>
+    public void MigrateFromLegacy()
+    {
+        Segments.Clear();
+
+        // 帧头
+        if (!string.IsNullOrEmpty(FrameHeader))
+        {
+            var headerBytes = HexToBytes(FrameHeader);
+            Segments.Add(new FrameSegment
+            {
+                Type = SegmentType.Header,
+                Name = "帧头",
+                ByteCount = headerBytes.Length,
+                FixedHexValue = FrameHeader,
+            });
+        }
+
+        // 长度字段
+        if (HasLengthByte)
+        {
+            Segments.Add(new FrameSegment
+            {
+                Type = SegmentType.LengthField,
+                Name = "长度",
+                ByteCount = LengthByteCount,
+                LengthBigEndian = LengthBigEndian,
+            });
+        }
+
+        // 数据字段（按 ByteOffset 排序）
+        foreach (var field in FieldMappings.OrderBy(f => f.ByteOffset))
+        {
+            Segments.Add(new FrameSegment
+            {
+                Type = SegmentType.DataField,
+                Name = field.Name,
+                ByteCount = field.ByteSize,
+                DataType = field.DataType,
+                BigEndian = field.BigEndian,
+                ChannelIndex = field.ChannelIndex,
+                Scale = field.Scale,
+                Offset = field.Offset,
+            });
+        }
+
+        // 校验
+        if (Checksum != ChecksumType.None)
+        {
+            Segments.Add(new FrameSegment
+            {
+                Type = SegmentType.Checksum,
+                Name = "校验",
+                ByteCount = 1,
+                ChecksumAlgorithm = Checksum switch
+                {
+                    ChecksumType.Xor => ChecksumAlgorithm.Xor,
+                    ChecksumType.Sum8 => ChecksumAlgorithm.Sum8,
+                    ChecksumType.CRC16 => ChecksumAlgorithm.CRC16,
+                    _ => ChecksumAlgorithm.Xor,
+                },
+                ChecksumStartIndex = 0,
+            });
+        }
+
+        // 帧尾
+        if (!string.IsNullOrEmpty(FrameTail))
+        {
+            var tailBytes = HexToBytes(FrameTail);
+            Segments.Add(new FrameSegment
+            {
+                Type = SegmentType.Tail,
+                Name = "帧尾",
+                ByteCount = tailBytes.Length,
+                FixedHexValue = FrameTail,
+            });
+        }
+
+        ComputeSegmentOffsets();
     }
 }

@@ -6,6 +6,7 @@ namespace MagnetometerSystem.Core.Protocol;
 /// <summary>
 /// 可配置的二进制帧协议解析器，由 ProtocolConfig 驱动
 /// 支持用户自定义帧头、帧尾、校验、字段映射
+/// 同时支持旧的 FieldMapping 模式和新的 FrameSegment 段式模式
 /// </summary>
 public class ConfigurableBinaryParser : IDataParser
 {
@@ -13,12 +14,43 @@ public class ConfigurableBinaryParser : IDataParser
     private readonly ProtocolConfig _config;
     private readonly byte[] _headerBytes;
     private readonly byte[] _tailBytes;
+    private readonly bool _useSegments;
+
+    // 段式模式缓存
+    private readonly List<FrameSegment> _dataSegments = [];
+    private readonly FrameSegment? _lengthSegment;
+    private readonly FrameSegment? _checksumSegment;
+    private readonly int _segmentFrameLength;
 
     public ConfigurableBinaryParser(ProtocolConfig config)
     {
         _config = config ?? throw new ArgumentNullException(nameof(config));
-        _headerBytes = config.FrameHeaderBytes;
-        _tailBytes = config.FrameTailBytes;
+        _useSegments = config.UsesSegments;
+
+        if (_useSegments)
+        {
+            config.ComputeSegmentOffsets();
+
+            // 从 Segments 提取帧头/帧尾
+            var headerSeg = config.Segments.FirstOrDefault(s => s.Type == SegmentType.Header);
+            var tailSeg = config.Segments.FirstOrDefault(s => s.Type == SegmentType.Tail);
+            _headerBytes = headerSeg != null && !string.IsNullOrEmpty(headerSeg.FixedHexValue)
+                ? ProtocolConfig.HexToBytes(headerSeg.FixedHexValue)
+                : [];
+            _tailBytes = tailSeg != null && !string.IsNullOrEmpty(tailSeg.FixedHexValue)
+                ? ProtocolConfig.HexToBytes(tailSeg.FixedHexValue)
+                : [];
+
+            _lengthSegment = config.Segments.FirstOrDefault(s => s.Type == SegmentType.LengthField);
+            _checksumSegment = config.Segments.FirstOrDefault(s => s.Type == SegmentType.Checksum);
+            _dataSegments = config.Segments.Where(s => s.Type == SegmentType.DataField).ToList();
+            _segmentFrameLength = config.TotalFrameLength;
+        }
+        else
+        {
+            _headerBytes = config.FrameHeaderBytes;
+            _tailBytes = config.FrameTailBytes;
+        }
     }
 
     public void Feed(byte[] data, int offset, int count)
@@ -30,14 +62,188 @@ public class ConfigurableBinaryParser : IDataParser
 
     public bool TryParse(out MagnetometerReading? reading)
     {
+        return _useSegments ? TryParseSegments(out reading) : TryParseLegacy(out reading);
+    }
+
+    public void Reset()
+    {
+        _ringBuffer.Clear();
+    }
+
+    // =====================================================================
+    // 段式解析模式
+    // =====================================================================
+
+    private bool TryParseSegments(out MagnetometerReading? reading)
+    {
         reading = null;
 
-        // 计算数据区长度
+        int frameLen;
+
+        if (_lengthSegment != null)
+        {
+            // 有长度字段：需要先读出长度值来确定帧长
+            int headerLen = _headerBytes.Length;
+            int lengthPos = _lengthSegment.ComputedOffset;
+
+            if (_ringBuffer.Count < lengthPos + _lengthSegment.ByteCount)
+                return false;
+
+            // 搜索帧头
+            if (!FindHeader())
+                return false;
+
+            if (_ringBuffer.Count < lengthPos + _lengthSegment.ByteCount)
+                return false;
+
+            // 读取长度值（长度值表示数据区字节数）
+            int dataLen;
+            if (_lengthSegment.ByteCount == 1)
+            {
+                dataLen = _ringBuffer.Peek(lengthPos);
+            }
+            else
+            {
+                byte b0 = _ringBuffer.Peek(lengthPos);
+                byte b1 = _ringBuffer.Peek(lengthPos + 1);
+                dataLen = _lengthSegment.LengthBigEndian
+                    ? (b0 << 8) | b1
+                    : b0 | (b1 << 8);
+            }
+
+            // 计算非数据区部分的长度
+            int nonDataLen = _segmentFrameLength - _dataSegments.Sum(s => s.ByteCount);
+            frameLen = nonDataLen + dataLen;
+        }
+        else
+        {
+            // 无长度字段：使用固定帧长
+            frameLen = _segmentFrameLength;
+
+            if (_ringBuffer.Count < frameLen)
+                return false;
+
+            if (!FindHeader())
+                return false;
+
+            if (_ringBuffer.Count < frameLen)
+                return false;
+        }
+
+        if (_ringBuffer.Count < frameLen)
+            return false;
+
+        // 验证帧尾
+        if (_tailBytes.Length > 0)
+        {
+            int tailOffset = frameLen - _tailBytes.Length;
+            for (int i = 0; i < _tailBytes.Length; i++)
+            {
+                if (_ringBuffer.Peek(tailOffset + i) != _tailBytes[i])
+                {
+                    _ringBuffer.Skip(_headerBytes.Length);
+                    return false;
+                }
+            }
+        }
+
+        // 验证校验
+        if (_checksumSegment != null)
+        {
+            int checksumPos = _checksumSegment.ComputedOffset;
+            byte expected = _ringBuffer.Peek(checksumPos);
+
+            // 计算校验起始位置
+            int checksumStart = 0;
+            if (_checksumSegment.ChecksumStartIndex > 0 && _checksumSegment.ChecksumStartIndex < _config.Segments.Count)
+            {
+                checksumStart = _config.Segments[_checksumSegment.ChecksumStartIndex].ComputedOffset;
+            }
+
+            byte computed = 0;
+            for (int i = checksumStart; i < checksumPos; i++)
+            {
+                byte b = _ringBuffer.Peek(i);
+                computed = _checksumSegment.ChecksumAlgorithm switch
+                {
+                    ChecksumAlgorithm.Xor => (byte)(computed ^ b),
+                    ChecksumAlgorithm.Sum8 => (byte)(computed + b),
+                    _ => computed
+                };
+            }
+
+            if (computed != expected)
+            {
+                _ringBuffer.Skip(1);
+                return false;
+            }
+        }
+
+        // 读取整帧
+        var frame = _ringBuffer.ReadBytes(frameLen);
+
+        // 提取数据字段
+        int maxChannel = _dataSegments.Count > 0
+            ? _dataSegments.Max(s => s.ChannelIndex) + 1
+            : 0;
+        var values = new double[maxChannel];
+
+        foreach (var seg in _dataSegments)
+        {
+            int fieldStart = seg.ComputedOffset;
+            if (fieldStart + seg.ByteCount > frame.Length)
+                continue;
+
+            double rawValue = ReadSegmentValue(frame, fieldStart, seg);
+            double finalValue = rawValue * seg.Scale + seg.Offset;
+
+            if (seg.ChannelIndex < values.Length)
+                values[seg.ChannelIndex] = finalValue;
+        }
+
+        reading = new MagnetometerReading
+        {
+            Timestamp = DateTime.Now,
+            ChannelValues = values,
+        };
+
+        return true;
+    }
+
+    private double ReadSegmentValue(byte[] frame, int offset, FrameSegment seg)
+    {
+        byte[] fieldBytes = new byte[seg.ByteCount];
+        Array.Copy(frame, offset, fieldBytes, 0, seg.ByteCount);
+
+        if (seg.BigEndian != !BitConverter.IsLittleEndian)
+        {
+            Array.Reverse(fieldBytes);
+        }
+
+        return seg.DataType switch
+        {
+            FieldDataType.Float => BitConverter.ToSingle(fieldBytes, 0),
+            FieldDataType.Double => BitConverter.ToDouble(fieldBytes, 0),
+            FieldDataType.Int16 => BitConverter.ToInt16(fieldBytes, 0),
+            FieldDataType.UInt16 => BitConverter.ToUInt16(fieldBytes, 0),
+            FieldDataType.Int32 => BitConverter.ToInt32(fieldBytes, 0),
+            FieldDataType.UInt32 => BitConverter.ToUInt32(fieldBytes, 0),
+            _ => 0
+        };
+    }
+
+    // =====================================================================
+    // 旧模式解析（FieldMapping）— 原有逻辑不变
+    // =====================================================================
+
+    private bool TryParseLegacy(out MagnetometerReading? reading)
+    {
+        reading = null;
+
         int dataLen = GetDataLength();
         if (dataLen < 0)
-            return false; // 数据不足以判断
+            return false;
 
-        // 计算整帧长度
         int headerLen = _headerBytes.Length;
         int lengthFieldLen = _config.HasLengthByte ? _config.LengthByteCount : 0;
         int checksumLen = _config.Checksum != ChecksumType.None ? 1 : 0;
@@ -47,38 +253,32 @@ public class ConfigurableBinaryParser : IDataParser
         if (_ringBuffer.Count < frameLen)
             return false;
 
-        // 搜索帧头
         if (!FindHeader())
             return false;
 
-        // 重新检查长度（FindHeader 可能跳过了字节）
         dataLen = GetDataLength();
         if (dataLen < 0) return false;
         frameLen = headerLen + lengthFieldLen + dataLen + checksumLen + tailLen;
         if (_ringBuffer.Count < frameLen)
             return false;
 
-        // 检查帧尾（如有）
         if (_tailBytes.Length > 0)
         {
             for (int i = 0; i < _tailBytes.Length; i++)
             {
                 if (_ringBuffer.Peek(frameLen - tailLen + i) != _tailBytes[i])
                 {
-                    // 帧尾不匹配，跳过帧头继续搜索
                     _ringBuffer.Skip(headerLen);
                     return false;
                 }
             }
         }
 
-        // 校验（如有）— 在消费数据前用 Peek 验证
         if (_config.Checksum != ChecksumType.None)
         {
             int checksumPos = headerLen + lengthFieldLen + dataLen;
             byte expected = _ringBuffer.Peek(checksumPos);
 
-            // 从 ringBuffer 中 Peek 数据计算校验
             byte computed = 0;
             for (int i = _config.ChecksumStartOffset; i < checksumPos; i++)
             {
@@ -93,16 +293,13 @@ public class ConfigurableBinaryParser : IDataParser
 
             if (computed != expected)
             {
-                // 校验失败，跳过 1 字节重新搜索，避免丢失后续有效帧
                 _ringBuffer.Skip(1);
                 return false;
             }
         }
 
-        // 读取整帧（校验通过后才消费）
         var frame = _ringBuffer.ReadBytes(frameLen);
 
-        // 解析字段映射
         int dataStart = headerLen + lengthFieldLen;
         int maxChannelIndex = _config.FieldMappings.Count > 0
             ? _config.FieldMappings.Max(f => f.ChannelIndex) + 1
@@ -131,10 +328,9 @@ public class ConfigurableBinaryParser : IDataParser
         return true;
     }
 
-    public void Reset()
-    {
-        _ringBuffer.Clear();
-    }
+    // =====================================================================
+    // 共用辅助方法
+    // =====================================================================
 
     private bool FindHeader()
     {
@@ -158,18 +354,15 @@ public class ConfigurableBinaryParser : IDataParser
         return false;
     }
 
-    /// <summary>获取数据区长度（-1 表示数据不足）</summary>
     private int GetDataLength()
     {
         int headerLen = _headerBytes.Length;
 
         if (!_config.HasLengthByte)
         {
-            // 固定长度
             if (_config.FixedDataLength > 0)
                 return _config.FixedDataLength;
 
-            // 根据字段映射自动计算
             if (_config.FieldMappings.Count > 0)
             {
                 return _config.FieldMappings.Max(f => f.ByteOffset + f.ByteSize);
@@ -177,7 +370,6 @@ public class ConfigurableBinaryParser : IDataParser
             return 0;
         }
 
-        // 有长度字节
         int lengthPos = headerLen;
         if (_ringBuffer.Count < lengthPos + _config.LengthByteCount)
             return -1;
@@ -186,7 +378,7 @@ public class ConfigurableBinaryParser : IDataParser
         {
             return _ringBuffer.Peek(lengthPos);
         }
-        else // 2 字节长度
+        else
         {
             byte b0 = _ringBuffer.Peek(lengthPos);
             byte b1 = _ringBuffer.Peek(lengthPos + 1);
@@ -198,13 +390,11 @@ public class ConfigurableBinaryParser : IDataParser
 
     private double ReadFieldValue(byte[] frame, int offset, FieldMapping field)
     {
-        // 如果需要翻转字节序
         byte[] fieldBytes = new byte[field.ByteSize];
         Array.Copy(frame, offset, fieldBytes, 0, field.ByteSize);
 
         if (field.BigEndian != !BitConverter.IsLittleEndian)
         {
-            // 系统字节序与字段字节序不同，需要翻转
             Array.Reverse(fieldBytes);
         }
 
@@ -218,31 +408,5 @@ public class ConfigurableBinaryParser : IDataParser
             FieldDataType.UInt32 => BitConverter.ToUInt32(fieldBytes, 0),
             _ => 0
         };
-    }
-
-    private byte ComputeChecksum(byte[] frame, int start, int end)
-    {
-        return _config.Checksum switch
-        {
-            ChecksumType.Xor => ComputeXor(frame, start, end),
-            ChecksumType.Sum8 => ComputeSum8(frame, start, end),
-            _ => 0
-        };
-    }
-
-    private static byte ComputeXor(byte[] data, int start, int end)
-    {
-        byte result = 0;
-        for (int i = start; i < end; i++)
-            result ^= data[i];
-        return result;
-    }
-
-    private static byte ComputeSum8(byte[] data, int start, int end)
-    {
-        byte result = 0;
-        for (int i = start; i < end; i++)
-            result += data[i];
-        return result;
     }
 }

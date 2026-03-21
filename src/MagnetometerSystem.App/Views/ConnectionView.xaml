@@ -13,6 +13,11 @@
                 <x:Type TypeName="models:FieldDataType"/>
             </ObjectDataProvider.MethodParameters>
         </ObjectDataProvider>
+        <ObjectDataProvider x:Key="ChecksumAlgorithmValues" MethodName="GetValues" ObjectType="{x:Type sys:Enum}">
+            <ObjectDataProvider.MethodParameters>
+                <x:Type TypeName="models:ChecksumAlgorithm"/>
+            </ObjectDataProvider.MethodParameters>
+        </ObjectDataProvider>
     </UserControl.Resources>
     <Grid Margin="15">
         <Grid.RowDefinitions>
@@ -132,6 +137,29 @@
                                     Command="{Binding LoadSelectedProtocolCommand}"/>
                             <Button Content="保存当前" Margin="5,0,0,0" Padding="8,2"
                                     Command="{Binding SaveProtocolCommand}"/>
+                            <Button Content="导入" Margin="10,0,0,0" Padding="8,2"
+                                    Command="{Binding ImportProtocolCommand}"/>
+                            <Button Content="导出" Margin="5,0,0,0" Padding="8,2"
+                                    Command="{Binding ExportProtocolCommand}"/>
+                            <TextBlock Text=" ?" FontWeight="Bold" FontSize="14" Foreground="#0078D4"
+                                       VerticalAlignment="Center" Margin="8,0,0,0" Cursor="Help">
+                                <TextBlock.ToolTip>
+                                    <ToolTip MaxWidth="350">
+                                        <TextBlock TextWrapping="Wrap" FontSize="12">
+配置文件格式: JSON
+主要字段:
+  Name - 协议名称
+  Category - Ascii 或 Binary
+  AsciiDelimiter - ASCII分隔符(如 ",")
+  FrameHeader/FrameTail - 帧头帧尾(Hex)
+  Checksum - None/Xor/Sum/Crc16
+  FieldMappings - 字段映射数组:
+    Name, ChannelIndex, ByteOffset,
+    DataType, Scale, Offset, BigEndian
+                                        </TextBlock>
+                                    </ToolTip>
+                                </TextBlock.ToolTip>
+                            </TextBlock>
                         </StackPanel>
                     </StackPanel>
                 </WrapPanel>
@@ -171,10 +199,10 @@
                     </StackPanel>
                 </WrapPanel>
 
-                <!-- 二进制参数 -->
-                <WrapPanel Margin="0,0,0,8">
-                    <WrapPanel.Style>
-                        <Style TargetType="WrapPanel">
+                <!-- 二进制参数 — 帧段配置 -->
+                <StackPanel Margin="0,0,0,8">
+                    <StackPanel.Style>
+                        <Style TargetType="StackPanel">
                             <Setter Property="Visibility" Value="Collapsed"/>
                             <Style.Triggers>
                                 <DataTrigger Binding="{Binding ProtocolConfig.Category}" Value="{x:Static models:ProtocolCategory.Binary}">
@@ -182,28 +210,229 @@
                                 </DataTrigger>
                             </Style.Triggers>
                         </Style>
-                    </WrapPanel.Style>
-                    <StackPanel Margin="0,0,15,0">
-                        <TextBlock Text="帧头 (Hex)" Margin="0,0,0,3"/>
-                        <TextBox Width="100" Text="{Binding ProtocolConfig.FrameHeader, UpdateSourceTrigger=LostFocus}"/>
-                    </StackPanel>
-                    <StackPanel Margin="0,0,15,0">
-                        <TextBlock Text="帧尾 (Hex)" Margin="0,0,0,3"/>
-                        <TextBox Width="100" Text="{Binding ProtocolConfig.FrameTail, UpdateSourceTrigger=LostFocus}"/>
-                    </StackPanel>
-                    <StackPanel Margin="0,0,15,0">
-                        <CheckBox Content="有长度字节" Margin="0,5,0,0"
-                                  IsChecked="{Binding ProtocolConfig.HasLengthByte}"/>
-                    </StackPanel>
-                    <StackPanel Margin="0,0,15,0">
-                        <TextBlock Text="校验方式" Margin="0,0,0,3"/>
-                        <ComboBox Width="90" ItemsSource="{Binding ChecksumTypes}"
-                                  SelectedItem="{Binding ProtocolConfig.Checksum}"/>
-                    </StackPanel>
-                </WrapPanel>
+                    </StackPanel.Style>
 
-                <!-- 字段映射 -->
-                <Expander Header="字段映射" Margin="0,0,0,0" IsExpanded="False">
+                    <!-- 添加段按钮行 -->
+                    <WrapPanel Margin="0,0,0,5">
+                        <TextBlock Text="添加帧段:" VerticalAlignment="Center" Margin="0,0,8,0" FontWeight="SemiBold"/>
+                        <Button Content="+帧头" Padding="6,2" Margin="0,0,4,0"
+                                Command="{Binding AddSegmentCommand}" CommandParameter="{x:Static models:SegmentType.Header}"/>
+                        <Button Content="+长度" Padding="6,2" Margin="0,0,4,0"
+                                Command="{Binding AddSegmentCommand}" CommandParameter="{x:Static models:SegmentType.LengthField}"/>
+                        <Button Content="+数据字段" Padding="6,2" Margin="0,0,4,0"
+                                Command="{Binding AddSegmentCommand}" CommandParameter="{x:Static models:SegmentType.DataField}"/>
+                        <Button Content="+校验" Padding="6,2" Margin="0,0,4,0"
+                                Command="{Binding AddSegmentCommand}" CommandParameter="{x:Static models:SegmentType.Checksum}"/>
+                        <Button Content="+帧尾" Padding="6,2" Margin="0,0,4,0"
+                                Command="{Binding AddSegmentCommand}" CommandParameter="{x:Static models:SegmentType.Tail}"/>
+                        <Button Content="+填充" Padding="6,2" Margin="0,0,4,0"
+                                Command="{Binding AddSegmentCommand}" CommandParameter="{x:Static models:SegmentType.Padding}"/>
+                    </WrapPanel>
+
+                    <!-- 帧段列表 -->
+                    <ListView ItemsSource="{Binding ProtocolSegments}" MaxHeight="280"
+                              ScrollViewer.VerticalScrollBarVisibility="Auto"
+                              ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                              BorderThickness="1" BorderBrush="#CCC">
+                        <ListView.View>
+                            <GridView>
+                                <GridViewColumn Header="类型" Width="65">
+                                    <GridViewColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <TextBlock FontSize="11">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Setter Property="Text" Value="{Binding Type}"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding Type}" Value="{x:Static models:SegmentType.Header}">
+                                                                <Setter Property="Text" Value="帧头"/>
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding Type}" Value="{x:Static models:SegmentType.LengthField}">
+                                                                <Setter Property="Text" Value="长度"/>
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding Type}" Value="{x:Static models:SegmentType.DataField}">
+                                                                <Setter Property="Text" Value="数据"/>
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding Type}" Value="{x:Static models:SegmentType.Checksum}">
+                                                                <Setter Property="Text" Value="校验"/>
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding Type}" Value="{x:Static models:SegmentType.Tail}">
+                                                                <Setter Property="Text" Value="帧尾"/>
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding Type}" Value="{x:Static models:SegmentType.Padding}">
+                                                                <Setter Property="Text" Value="填充"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                        </DataTemplate>
+                                    </GridViewColumn.CellTemplate>
+                                </GridViewColumn>
+                                <GridViewColumn Header="名称" Width="70">
+                                    <GridViewColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <TextBox Text="{Binding Name, UpdateSourceTrigger=LostFocus}" Width="60" FontSize="11" BorderThickness="0"/>
+                                        </DataTemplate>
+                                    </GridViewColumn.CellTemplate>
+                                </GridViewColumn>
+                                <GridViewColumn Header="字节" Width="50">
+                                    <GridViewColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <Grid>
+                                                <!-- DataField: 只读（由 DataType 自动计算） -->
+                                                <TextBlock Text="{Binding ByteCount}" FontSize="11" HorizontalAlignment="Center">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding Type}" Value="{x:Static models:SegmentType.DataField}">
+                                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+                                                <!-- 非 DataField: 可编辑 -->
+                                                <TextBox Text="{Binding ByteCount, UpdateSourceTrigger=LostFocus}"
+                                                         Width="35" FontSize="11" HorizontalAlignment="Center" BorderThickness="0">
+                                                    <TextBox.Style>
+                                                        <Style TargetType="TextBox">
+                                                            <Setter Property="Visibility" Value="Visible"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding Type}" Value="{x:Static models:SegmentType.DataField}">
+                                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBox.Style>
+                                                </TextBox>
+                                            </Grid>
+                                        </DataTemplate>
+                                    </GridViewColumn.CellTemplate>
+                                </GridViewColumn>
+                                <GridViewColumn Header="详情" Width="280">
+                                    <GridViewColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <StackPanel Orientation="Horizontal">
+                                                <!-- Header/Tail/Padding: Hex 值 -->
+                                                <TextBox Text="{Binding FixedHexValue, UpdateSourceTrigger=LostFocus}"
+                                                         Width="150" FontSize="11" FontFamily="Consolas" CharacterCasing="Upper"
+                                                         Margin="0,0,5,0" ToolTip="输入十六进制值，自动按字节数截断/补零">
+                                                    <TextBox.Style>
+                                                        <Style TargetType="TextBox">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding Type}" Value="{x:Static models:SegmentType.Header}">
+                                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                                </DataTrigger>
+                                                                <DataTrigger Binding="{Binding Type}" Value="{x:Static models:SegmentType.Tail}">
+                                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                                </DataTrigger>
+                                                                <DataTrigger Binding="{Binding Type}" Value="{x:Static models:SegmentType.Padding}">
+                                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBox.Style>
+                                                </TextBox>
+
+                                                <!-- DataField: 数据类型 + 大端序 + 通道 + 缩放 + 偏移 -->
+                                                <StackPanel Orientation="Horizontal">
+                                                    <StackPanel.Style>
+                                                        <Style TargetType="StackPanel">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding Type}" Value="{x:Static models:SegmentType.DataField}">
+                                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </StackPanel.Style>
+                                                    <ComboBox ItemsSource="{Binding Source={StaticResource FieldDataTypeValues}}"
+                                                              SelectedItem="{Binding DataType}" Width="60" FontSize="11" Margin="0,0,3,0"/>
+                                                    <CheckBox Content="大端" IsChecked="{Binding BigEndian}" VerticalAlignment="Center" FontSize="11" Margin="0,0,3,0"/>
+                                                    <TextBlock Text="CH" VerticalAlignment="Center" FontSize="11"/>
+                                                    <TextBox Text="{Binding ChannelIndex, UpdateSourceTrigger=LostFocus}" Width="25" FontSize="11" Margin="0,0,3,0"/>
+                                                    <TextBlock Text="x" VerticalAlignment="Center" FontSize="11"/>
+                                                    <TextBox Text="{Binding Scale, UpdateSourceTrigger=LostFocus}" Width="35" FontSize="11" Margin="0,0,2,0"/>
+                                                    <TextBlock Text="+" VerticalAlignment="Center" FontSize="11"/>
+                                                    <TextBox Text="{Binding Offset, UpdateSourceTrigger=LostFocus}" Width="35" FontSize="11"/>
+                                                </StackPanel>
+
+                                                <!-- LengthField: 大端序 -->
+                                                <CheckBox Content="大端序" IsChecked="{Binding LengthBigEndian}" VerticalAlignment="Center" FontSize="11">
+                                                    <CheckBox.Style>
+                                                        <Style TargetType="CheckBox">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding Type}" Value="{x:Static models:SegmentType.LengthField}">
+                                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </CheckBox.Style>
+                                                </CheckBox>
+
+                                                <!-- Checksum: 算法选择 -->
+                                                <ComboBox ItemsSource="{Binding Source={StaticResource ChecksumAlgorithmValues}}"
+                                                          SelectedItem="{Binding ChecksumAlgorithm}" Width="65" FontSize="11">
+                                                    <ComboBox.Style>
+                                                        <Style TargetType="ComboBox">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding Type}" Value="{x:Static models:SegmentType.Checksum}">
+                                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </ComboBox.Style>
+                                                </ComboBox>
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </GridViewColumn.CellTemplate>
+                                </GridViewColumn>
+                                <GridViewColumn Header="操作" Width="85">
+                                    <GridViewColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <StackPanel Orientation="Horizontal">
+                                                <Button Content="^" Width="22" FontSize="10" Padding="0"
+                                                        Command="{Binding DataContext.MoveSegmentUpCommand, RelativeSource={RelativeSource AncestorType=ListView}}"
+                                                        CommandParameter="{Binding}"/>
+                                                <Button Content="v" Width="22" FontSize="10" Padding="0" Margin="2,0,0,0"
+                                                        Command="{Binding DataContext.MoveSegmentDownCommand, RelativeSource={RelativeSource AncestorType=ListView}}"
+                                                        CommandParameter="{Binding}"/>
+                                                <Button Content="X" Width="22" FontSize="10" Padding="0" Margin="2,0,0,0" Foreground="Red"
+                                                        Command="{Binding DataContext.RemoveSegmentCommand, RelativeSource={RelativeSource AncestorType=ListView}}"
+                                                        CommandParameter="{Binding}"/>
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </GridViewColumn.CellTemplate>
+                                </GridViewColumn>
+                            </GridView>
+                        </ListView.View>
+                    </ListView>
+
+                    <!-- 总帧长度 -->
+                    <TextBlock Margin="0,4,0,0" FontSize="12">
+                        <Run Text="总帧长: "/>
+                        <Run Text="{Binding TotalFrameLength, Mode=OneWay}"/>
+                        <Run Text=" 字节"/>
+                    </TextBlock>
+                </StackPanel>
+
+                <!-- 字段映射（仅 ASCII 模式） -->
+                <Expander Header="字段映射 (ASCII)" Margin="0,0,0,0" IsExpanded="False">
+                    <Expander.Style>
+                        <Style TargetType="Expander">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding ProtocolConfig.Category}" Value="{x:Static models:ProtocolCategory.Ascii}">
+                                    <Setter Property="Visibility" Value="Visible"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Expander.Style>
                     <StackPanel Margin="0,5,0,0">
                         <DataGrid ItemsSource="{Binding ProtocolConfig.FieldMappings}"
                                   AutoGenerateColumns="False"

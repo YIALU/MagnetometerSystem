@@ -7,10 +7,10 @@
         xmlns:views="clr-namespace:MagnetometerSystem.App.Views"
         xmlns:vm="clr-namespace:MagnetometerSystem.App.ViewModels"
         mc:Ignorable="d"
-        Title="磁力仪数据采集与分析系统" Height="700" Width="1100"
+        Title="磁力仪数据采集与分析系统" Height="750" Width="1200"
         WindowStartupLocation="CenterScreen">
     <DockPanel>
-        <!-- 顶部状态栏 -->
+        <!-- 底部状态栏 -->
         <StatusBar DockPanel.Dock="Bottom" Height="28">
             <StatusBarItem>
                 <StackPanel Orientation="Horizontal">
@@ -43,14 +43,23 @@
                     <Run Text="{Binding SampleRateInfo, Mode=OneWay}"/>
                 </TextBlock>
             </StatusBarItem>
+            <Separator/>
+            <StatusBarItem>
+                <TextBlock>
+                    <Run Text="数据点: "/>
+                    <Run Text="{Binding DataCount, Mode=OneWay}"/>
+                </TextBlock>
+            </StatusBarItem>
         </StatusBar>
 
         <!-- 左侧导航栏 -->
         <Border DockPanel.Dock="Left" Width="160" Background="#F0F0F0" BorderBrush="#D0D0D0" BorderThickness="0,0,1,0">
             <StackPanel Margin="5">
                 <TextBlock Text="功能导航" FontWeight="Bold" FontSize="14" Margin="5,10,5,15" HorizontalAlignment="Center"/>
-                <Button Content="设备连接" Margin="3" Padding="8,6" HorizontalContentAlignment="Left"/>
-                <Button Content="实时采集" Margin="3" Padding="8,6" HorizontalContentAlignment="Left" IsEnabled="False"/>
+                <Button Content="设备连接" Margin="3" Padding="8,6" HorizontalContentAlignment="Left"
+                        Command="{Binding NavigateToConnectionCommand}"/>
+                <Button Content="实时采集" Margin="3" Padding="8,6" HorizontalContentAlignment="Left"
+                        Command="{Binding NavigateToRealtimeChartCommand}"/>
                 <Button Content="历史回放" Margin="3" Padding="8,6" HorizontalContentAlignment="Left" IsEnabled="False"/>
                 <Button Content="正交度校正" Margin="3" Padding="8,6" HorizontalContentAlignment="Left" IsEnabled="False"/>
                 <Button Content="传感器校准" Margin="3" Padding="8,6" HorizontalContentAlignment="Left" IsEnabled="False"/>
@@ -63,6 +72,9 @@
             <ContentControl.Resources>
                 <DataTemplate DataType="{x:Type vm:ConnectionViewModel}">
                     <views:ConnectionView/>
+                </DataTemplate>
+                <DataTemplate DataType="{x:Type vm:RealtimeChartViewModel}">
+                    <views:RealtimeChartView/>
                 </DataTemplate>
             </ContentControl.Resources>
         </ContentControl>
