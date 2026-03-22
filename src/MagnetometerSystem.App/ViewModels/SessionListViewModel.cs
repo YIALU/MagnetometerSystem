@@ -7,6 +7,7 @@ using CommunityToolkit.Mvvm.Input;
 using MagnetometerSystem.Core.Models;
 using MagnetometerSystem.Core.Services;
 using MagnetometerSystem.Core.Storage;
+using MagnetometerSystem.Infrastructure.Export;
 
 namespace MagnetometerSystem.App.ViewModels;
 
@@ -16,6 +17,7 @@ namespace MagnetometerSystem.App.ViewModels;
 public partial class SessionListViewModel : ObservableObject
 {
     private readonly IDataStorageService _storageService;
+    private readonly IDataExporter _dataExporter;
     private readonly DataBus _dataBus;
 
     // ---- 读数缓冲 ----
@@ -59,9 +61,15 @@ public partial class SessionListViewModel : ObservableObject
     // ---- 传感器类型列表（供 ComboBox 绑定） ----
     public SensorType[] SensorTypes { get; } = Enum.GetValues<SensorType>();
 
-    public SessionListViewModel(IDataStorageService storageService, DataBus dataBus)
+    /// <summary>
+    /// 请求回放指定会话 (传递 session ID)
+    /// </summary>
+    public event Action<string>? PlaybackRequested;
+
+    public SessionListViewModel(IDataStorageService storageService, IDataExporter dataExporter, DataBus dataBus)
     {
         _storageService = storageService;
+        _dataExporter = dataExporter;
         _dataBus = dataBus;
 
         Sessions = new ObservableCollection<SessionInfo>();
@@ -267,17 +275,43 @@ public partial class SessionListViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void ExportSession(SessionInfo? session)
+    private async Task ExportSessionAsync(SessionInfo? session)
     {
-        // D-4 CSV 导出功能尚未实现，暂时提示
-        MessageBox.Show("CSV 导出功能尚未实现，请等待 TASK-D4 完成。", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+        if (session == null) return;
+
+        var dialog = new Microsoft.Win32.SaveFileDialog
+        {
+            Title = "导出会话数据",
+            Filter = "CSV 文件 (*.csv)|*.csv",
+            FileName = $"{session.Name}.csv",
+            DefaultExt = ".csv"
+        };
+
+        if (dialog.ShowDialog() != true) return;
+
+        try
+        {
+            var options = new ExportOptions
+            {
+                IncludeHeader = true,
+                IncludeCalibratedData = false
+            };
+
+            await _dataExporter.ExportAsync(session.Id, dialog.FileName, options);
+
+            MessageBox.Show($"导出完成: {dialog.FileName}", "成功", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"导出失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
     }
 
     [RelayCommand]
     private void PlaybackSession(SessionInfo? session)
     {
-        // D-3 历史回放功能尚未实现，暂时提示
-        MessageBox.Show("历史回放功能尚未实现，请等待 TASK-D3 完成。", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+        if (session == null) return;
+        PlaybackRequested?.Invoke(session.Id);
     }
 
     // ---- 筛选 ----

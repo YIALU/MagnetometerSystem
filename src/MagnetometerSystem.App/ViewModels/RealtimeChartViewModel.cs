@@ -5,6 +5,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using MagnetometerSystem.Core.Helpers;
 using MagnetometerSystem.Core.Models;
+using MagnetometerSystem.Core.Processing;
 using MagnetometerSystem.Core.Services;
 using ScottPlot;
 
@@ -83,6 +84,34 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private int _downsampleTargetCount = 2000;
 
+    // ---- 滤波设置 ----
+
+    private bool _isFilterEnabled;
+    public bool IsFilterEnabled
+    {
+        get => _isFilterEnabled;
+        set => SetProperty(ref _isFilterEnabled, value);
+    }
+
+    private int _filterWindowSize = 5;
+    public int FilterWindowSize
+    {
+        get => _filterWindowSize;
+        set => SetProperty(ref _filterWindowSize, value);
+    }
+
+    private FilterType _selectedFilterType = FilterType.MovingAverage;
+    public FilterType SelectedFilterType
+    {
+        get => _selectedFilterType;
+        set => SetProperty(ref _selectedFilterType, value);
+    }
+
+    public FilterType[] FilterTypes { get; } = Enum.GetValues<FilterType>();
+
+    // 滤波处理器实例
+    private readonly DataProcessor _dataProcessor = new();
+
     // ---- 多图表模式 ----
     [ObservableProperty]
     private bool _isMultiPlotMode;
@@ -117,6 +146,14 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
     /// <summary>向导可选的梯度源列表（原始通道 + 已有计算通道）</summary>
     [ObservableProperty]
     private ObservableCollection<SourceOption> _wizardGradientSources = new();
+
+    /// <summary>梯度基线距离 (m)，用于将差值转换为梯度值 (nT/m)</summary>
+    private double _gradientBaselineDistance = 1.0;
+    public double GradientBaselineDistance
+    {
+        get => _gradientBaselineDistance;
+        set => SetProperty(ref _gradientBaselineDistance, value);
+    }
 
     public RealtimeChartViewModel(DataBus dataBus)
     {
@@ -285,6 +322,9 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
                     windowValues[i] += config.DisplayOffset;
             }
 
+            // 应用滤波
+            windowValues = ApplyFilter(windowValues);
+
             var (plotXs, plotYs) = ApplyDownsampling(windowTimes, windowValues);
             var sig = plot.Add.ScatterLine(plotXs, plotYs);
 
@@ -329,6 +369,9 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
                     for (int i = 0; i < windowValues.Length; i++)
                         windowValues[i] += config.DisplayOffset;
                 }
+
+                // 应用滤波
+                windowValues = ApplyFilter(windowValues);
 
                 var (plotXs, plotYs) = ApplyDownsampling(windowTimes, windowValues);
                 var sig = plot.Add.ScatterLine(plotXs, plotYs);
@@ -396,6 +439,22 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
             return (windowTimes, windowValues);
 
         return LttbDownsampler.Downsample(windowTimes, windowValues, DownsampleTargetCount);
+    }
+
+    /// <summary>
+    /// 根据滤波设置处理数据
+    /// </summary>
+    private double[] ApplyFilter(double[] values)
+    {
+        if (!IsFilterEnabled || FilterWindowSize <= 1 || values.Length == 0)
+            return values;
+
+        return SelectedFilterType switch
+        {
+            FilterType.MovingAverage => _dataProcessor.MovingAverage(values, FilterWindowSize),
+            FilterType.Median => _dataProcessor.MedianFilter(values, FilterWindowSize),
+            _ => values
+        };
     }
 
     private void ConfigurePlotAxes(ScottPlot.Plot plot, double xMin, double xMax)
@@ -620,7 +679,9 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
 
         var a = WizardGradientSources[WizardSourceA].FormulaExpr;
         var b = WizardGradientSources[WizardSourceB].FormulaExpr;
-        var formula = $"({a}) - ({b})";
+        var formula = GradientBaselineDistance != 0 && GradientBaselineDistance != 1.0
+            ? $"(({a}) - ({b})) / {GradientBaselineDistance:R}"
+            : $"({a}) - ({b})";
 
         int gradCount = ComputedChannels.Count(ch => ch.ChannelType == ComputedChannelType.Gradient) + 1;
         ComputedChannels.Add(new ComputedChannelDefinition

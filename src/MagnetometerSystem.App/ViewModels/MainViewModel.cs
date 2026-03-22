@@ -69,6 +69,20 @@ public partial class MainViewModel : ObservableObject
                 DataCount = RealtimeChartVM.DataPointCount;
             }
         };
+
+        // 订阅会话列表的回放请求，自动导航到回放页面并加载会话
+        SessionListVM.PlaybackRequested += sessionId =>
+        {
+            CurrentView = HistoryPlaybackVM;
+
+            // 在可用会话列表中选中对应会话，然后触发加载
+            var target = HistoryPlaybackVM.AvailableSessions.FirstOrDefault(s => s.Id == sessionId);
+            if (target != null)
+            {
+                HistoryPlaybackVM.SelectedSession = target;
+                HistoryPlaybackVM.LoadSessionCommand.Execute(null);
+            }
+        };
     }
 
     [RelayCommand]

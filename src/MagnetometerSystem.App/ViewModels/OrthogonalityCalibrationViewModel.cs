@@ -19,6 +19,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
     private readonly IOrthogonalityService _orthogonalityService;
     private readonly DataBus _dataBus;
     private readonly List<double[]> _collectedData = new();
+    private readonly List<double[]> _collectedDataSecondGroup = new();
 
     public OrthogonalityCalibrationViewModel(
         IOrthogonalityService orthogonalityService,
@@ -89,7 +90,9 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
             1 => SelectedSensorType == SensorType.TriaxialFluxgate
                  || SelectedSensorType == SensorType.DualTriaxialFluxgate,
             2 => CollectedSampleCount >= 3 && !IsCollecting,
-            3 => CalculationResult?.Success == true,
+            3 => SelectedSensorType == SensorType.DualTriaxialFluxgate
+                ? (CalculationResult?.Success == true && SecondCalculationResult?.Success == true)
+                : CalculationResult?.Success == true,
             4 => false, // 最后一步无下一步
             _ => false
         };
@@ -146,6 +149,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
     private void StartCollecting()
     {
         _collectedData.Clear();
+        _collectedDataSecondGroup.Clear();
         CollectedData.Clear();
         CollectedSampleCount = 0;
         SphericityCoverage = 0;
@@ -162,20 +166,26 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
 
     private void OnCalibrationDataReceived(MagnetometerReading reading)
     {
-        if (reading.ChannelValues.Length < 3) return;
+        double[] sample1;
 
-        var sample = new double[]
+        if (SelectedSensorType == SensorType.DualTriaxialFluxgate)
         {
-            reading.ChannelValues[0],
-            reading.ChannelValues[1],
-            reading.ChannelValues[2]
-        };
-
-        _collectedData.Add(sample);
+            if (reading.ChannelValues.Length < 6) return;
+            sample1 = new double[] { reading.ChannelValues[0], reading.ChannelValues[1], reading.ChannelValues[2] };
+            var sample2 = new double[] { reading.ChannelValues[3], reading.ChannelValues[4], reading.ChannelValues[5] };
+            _collectedData.Add(sample1);
+            _collectedDataSecondGroup.Add(sample2);
+        }
+        else
+        {
+            if (reading.ChannelValues.Length < 3) return;
+            sample1 = new double[] { reading.ChannelValues[0], reading.ChannelValues[1], reading.ChannelValues[2] };
+            _collectedData.Add(sample1);
+        }
 
         System.Windows.Application.Current?.Dispatcher?.Invoke(() =>
         {
-            CollectedData.Add(sample);
+            CollectedData.Add(sample1);
             CollectedSampleCount = _collectedData.Count;
 
             if (_collectedData.Count % 50 == 0)
@@ -258,20 +268,31 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         {
             var lines = File.ReadAllLines(dialog.FileName);
             var importedData = new List<double[]>();
+            var importedDataSecond = new List<double[]>();
             int skippedLines = 0;
+            int requiredCols = SelectedSensorType == SensorType.DualTriaxialFluxgate ? 6 : 3;
 
             foreach (var line in lines)
             {
                 if (string.IsNullOrWhiteSpace(line)) continue;
 
                 var parts = line.Split(new[] { ',', '\t', ';' }, StringSplitOptions.RemoveEmptyEntries);
-                if (parts.Length < 3) { skippedLines++; continue; }
+                if (parts.Length < requiredCols) { skippedLines++; continue; }
 
                 if (double.TryParse(parts[0].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double bx) &&
                     double.TryParse(parts[1].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double by) &&
                     double.TryParse(parts[2].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double bz))
                 {
                     importedData.Add(new[] { bx, by, bz });
+
+                    if (SelectedSensorType == SensorType.DualTriaxialFluxgate &&
+                        parts.Length >= 6 &&
+                        double.TryParse(parts[3].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double bx2) &&
+                        double.TryParse(parts[4].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double by2) &&
+                        double.TryParse(parts[5].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double bz2))
+                    {
+                        importedDataSecond.Add(new[] { bx2, by2, bz2 });
+                    }
                 }
                 else
                 {
@@ -286,8 +307,10 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
             }
 
             _collectedData.Clear();
+            _collectedDataSecondGroup.Clear();
             CollectedData.Clear();
             _collectedData.AddRange(importedData);
+            _collectedDataSecondGroup.AddRange(importedDataSecond);
             foreach (var d in importedData)
                 CollectedData.Add(d);
 
@@ -363,10 +386,32 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
             {
                 CalculationResult = result;
                 CalculationStatus = "计算完成";
+
+                // Populate visualization data
+                VisualizationRawData = rawData;
+                var corrected = new double[rawData.GetLength(0), 3];
+                for (int i = 0; i < rawData.GetLength(0); i++)
+                {
+                    var c = result.Parameters.Apply(rawData[i, 0], rawData[i, 1], rawData[i, 2]);
+                    corrected[i, 0] = c[0]; corrected[i, 1] = c[1]; corrected[i, 2] = c[2];
+                }
+                VisualizationCorrectedData = corrected;
+                OnPropertyChanged(nameof(VisualizationRawData));
+                OnPropertyChanged(nameof(VisualizationCorrectedData));
             }
             else
             {
                 CalculationStatus = $"计算失败: {result.ErrorMessage}";
+            }
+
+            // Run second group calculation for DualTriaxial
+            if (SelectedSensorType == SensorType.DualTriaxialFluxgate && _collectedDataSecondGroup.Count >= 3)
+            {
+                var rawData2 = ConvertToMatrix(_collectedDataSecondGroup);
+                var result2 = await Task.Run(() =>
+                    _orthogonalityService.Calculate(rawData2, ReferenceFieldStrength));
+
+                SecondCalculationResult = result2.Success ? result2 : null;
             }
         }
         catch (Exception ex)
@@ -441,6 +486,64 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
     public string OffsetY => CalculationResult?.Parameters?.Offset is { Length: >= 2 } o ? o[1].ToString("F4") : "—";
     public string OffsetZ => CalculationResult?.Parameters?.Offset is { Length: >= 3 } o ? o[2].ToString("F4") : "—";
 
+    // ========== Visualization Data ==========
+
+    public double[,]? VisualizationRawData { get; private set; }
+    public double[,]? VisualizationCorrectedData { get; private set; }
+
+    // ========== Second Group (DualTriaxial) ==========
+
+    [ObservableProperty]
+    private OrthogonalityResult? _secondCalculationResult;
+
+    partial void OnSecondCalculationResultChanged(OrthogonalityResult? value)
+    {
+        OnPropertyChanged(nameof(SecondQualityRating));
+        OnPropertyChanged(nameof(SecondMatrixM00));
+        OnPropertyChanged(nameof(SecondMatrixM01));
+        OnPropertyChanged(nameof(SecondMatrixM02));
+        OnPropertyChanged(nameof(SecondMatrixM10));
+        OnPropertyChanged(nameof(SecondMatrixM11));
+        OnPropertyChanged(nameof(SecondMatrixM12));
+        OnPropertyChanged(nameof(SecondMatrixM20));
+        OnPropertyChanged(nameof(SecondMatrixM21));
+        OnPropertyChanged(nameof(SecondMatrixM22));
+        OnPropertyChanged(nameof(SecondOffsetX));
+        OnPropertyChanged(nameof(SecondOffsetY));
+        OnPropertyChanged(nameof(SecondOffsetZ));
+        UpdateStepNavigation();
+    }
+
+    /// <summary>第二组质量评级</summary>
+    public string SecondQualityRating => SecondCalculationResult?.Quality switch
+    {
+        { ResidualStd: < 10 } => "优秀",
+        { ResidualStd: < 50 } => "良好",
+        { ResidualStd: < 200 } => "一般",
+        _ => "较差"
+    };
+
+    public string SecondMatrixM00 => FormatSecondMatrixValue(0);
+    public string SecondMatrixM01 => FormatSecondMatrixValue(1);
+    public string SecondMatrixM02 => FormatSecondMatrixValue(2);
+    public string SecondMatrixM10 => FormatSecondMatrixValue(3);
+    public string SecondMatrixM11 => FormatSecondMatrixValue(4);
+    public string SecondMatrixM12 => FormatSecondMatrixValue(5);
+    public string SecondMatrixM20 => FormatSecondMatrixValue(6);
+    public string SecondMatrixM21 => FormatSecondMatrixValue(7);
+    public string SecondMatrixM22 => FormatSecondMatrixValue(8);
+
+    private string FormatSecondMatrixValue(int index)
+    {
+        var m = SecondCalculationResult?.Parameters?.CompensationMatrix;
+        if (m == null || m.Length <= index) return "—";
+        return m[index].ToString("F6");
+    }
+
+    public string SecondOffsetX => SecondCalculationResult?.Parameters?.Offset is { Length: >= 1 } o ? o[0].ToString("F4") : "—";
+    public string SecondOffsetY => SecondCalculationResult?.Parameters?.Offset is { Length: >= 2 } o ? o[1].ToString("F4") : "—";
+    public string SecondOffsetZ => SecondCalculationResult?.Parameters?.Offset is { Length: >= 3 } o ? o[2].ToString("F4") : "—";
+
     // ========== Step 4 - 保存配置 ==========
 
     [ObservableProperty]
@@ -481,6 +584,21 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
             parameters.SampleCount = CalculationResult.Quality?.SampleCount;
 
             SavedProfile = parameters;
+
+            // Save second profile for DualTriaxial
+            if (SelectedSensorType == SensorType.DualTriaxialFluxgate && SecondCalculationResult?.Parameters != null)
+            {
+                var secondParameters = SecondCalculationResult.Parameters;
+                secondParameters.Name = $"{ProfileName}_第二组";
+                secondParameters.SensorSerial = SensorSerial;
+                secondParameters.Notes = ProfileNotes;
+                secondParameters.ResidualMean = SecondCalculationResult.Quality?.ResidualMean;
+                secondParameters.ResidualStd = SecondCalculationResult.Quality?.ResidualStd;
+                secondParameters.SampleCount = SecondCalculationResult.Quality?.SampleCount;
+
+                SavedSecondProfile = secondParameters;
+            }
+
             SaveStatus = "已保存并应用";
         }
         catch (Exception ex)
@@ -492,6 +610,9 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
     [ObservableProperty]
     private OrthogonalityParams? _savedProfile;
 
+    [ObservableProperty]
+    private OrthogonalityParams? _savedSecondProfile;
+
     public void Cleanup()
     {
         if (IsCollecting)
@@ -500,6 +621,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
             IsCollecting = false;
         }
         _collectedData.Clear();
+        _collectedDataSecondGroup.Clear();
         CollectedData.Clear();
     }
 }

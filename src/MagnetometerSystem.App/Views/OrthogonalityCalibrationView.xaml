@@ -3,6 +3,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:views="clr-namespace:MagnetometerSystem.App.Views"
              mc:Ignorable="d"
              d:DesignHeight="600" d:DesignWidth="900">
 
@@ -450,6 +451,126 @@
                                     <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding CalculationResult.Quality.SampleCount, Mode=OneWay}" Margin="0,2"/>
                                 </Grid>
                             </Border>
+
+                            <!-- 校正效果可视化 -->
+                            <TextBlock Text="校正效果可视化" FontWeight="SemiBold" FontSize="14" Margin="0,10,0,8"/>
+                            <views:CalibrationVisualizationControl
+                                RawData="{Binding VisualizationRawData}"
+                                CorrectedData="{Binding VisualizationCorrectedData}"
+                                Height="400"/>
+
+                            <!-- 第二组三轴校正结果（仅 DualTriaxial） -->
+                            <StackPanel>
+                                <StackPanel.Style>
+                                    <Style TargetType="StackPanel">
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding SelectedSensorType}" Value="DualTriaxialFluxgate">
+                                                <Setter Property="Visibility" Value="Visible"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </StackPanel.Style>
+
+                                <TextBlock Text="第二组三轴校正结果" FontSize="16" FontWeight="Bold" Margin="0,20,0,10"/>
+
+                                <!-- 第二组质量评级 -->
+                                <Border Background="#E8F5E9" CornerRadius="4" Padding="12" Margin="0,0,0,15">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="质量评级：" FontWeight="SemiBold" FontSize="14"/>
+                                        <TextBlock Text="{Binding SecondQualityRating}" FontSize="14" FontWeight="Bold" Foreground="#2E7D32"/>
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- 第二组补偿矩阵 3x3 -->
+                                <TextBlock Text="补偿矩阵 (3x3)" FontWeight="SemiBold" FontSize="14" Margin="0,0,0,8"/>
+                                <Border Background="#F5F5F5" CornerRadius="4" Padding="10" Margin="0,0,0,15">
+                                    <Grid>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                        </Grid.RowDefinitions>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+
+                                        <TextBlock Grid.Row="0" Grid.Column="0" Text="{Binding SecondMatrixM00}" HorizontalAlignment="Center" Margin="5,3" FontFamily="Consolas"/>
+                                        <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding SecondMatrixM01}" HorizontalAlignment="Center" Margin="5,3" FontFamily="Consolas"/>
+                                        <TextBlock Grid.Row="0" Grid.Column="2" Text="{Binding SecondMatrixM02}" HorizontalAlignment="Center" Margin="5,3" FontFamily="Consolas"/>
+
+                                        <TextBlock Grid.Row="1" Grid.Column="0" Text="{Binding SecondMatrixM10}" HorizontalAlignment="Center" Margin="5,3" FontFamily="Consolas"/>
+                                        <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding SecondMatrixM11}" HorizontalAlignment="Center" Margin="5,3" FontFamily="Consolas"/>
+                                        <TextBlock Grid.Row="1" Grid.Column="2" Text="{Binding SecondMatrixM12}" HorizontalAlignment="Center" Margin="5,3" FontFamily="Consolas"/>
+
+                                        <TextBlock Grid.Row="2" Grid.Column="0" Text="{Binding SecondMatrixM20}" HorizontalAlignment="Center" Margin="5,3" FontFamily="Consolas"/>
+                                        <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding SecondMatrixM21}" HorizontalAlignment="Center" Margin="5,3" FontFamily="Consolas"/>
+                                        <TextBlock Grid.Row="2" Grid.Column="2" Text="{Binding SecondMatrixM22}" HorizontalAlignment="Center" Margin="5,3" FontFamily="Consolas"/>
+                                    </Grid>
+                                </Border>
+
+                                <!-- 第二组偏移向量 -->
+                                <TextBlock Text="偏移向量" FontWeight="SemiBold" FontSize="14" Margin="0,0,0,8"/>
+                                <Border Background="#F5F5F5" CornerRadius="4" Padding="10" Margin="0,0,0,15">
+                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                        <TextBlock Margin="10,0" FontFamily="Consolas">
+                                            <Run Text="X: "/><Run Text="{Binding SecondOffsetX, Mode=OneWay}"/>
+                                        </TextBlock>
+                                        <TextBlock Margin="10,0" FontFamily="Consolas">
+                                            <Run Text="Y: "/><Run Text="{Binding SecondOffsetY, Mode=OneWay}"/>
+                                        </TextBlock>
+                                        <TextBlock Margin="10,0" FontFamily="Consolas">
+                                            <Run Text="Z: "/><Run Text="{Binding SecondOffsetZ, Mode=OneWay}"/>
+                                        </TextBlock>
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- 第二组残差统计 -->
+                                <TextBlock Text="残差统计" FontWeight="SemiBold" FontSize="14" Margin="0,0,0,8"/>
+                                <Border Background="#F5F5F5" CornerRadius="4" Padding="10" Margin="0,0,0,15">
+                                    <Grid>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                        </Grid.RowDefinitions>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="120"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+
+                                        <TextBlock Grid.Row="0" Grid.Column="0" Text="残差均值：" Margin="0,2"/>
+                                        <TextBlock Grid.Row="0" Grid.Column="1" Margin="0,2">
+                                            <Run Text="{Binding SecondCalculationResult.Quality.ResidualMean, Mode=OneWay, StringFormat={}{0:F4}}"/>
+                                            <Run Text=" nT"/>
+                                        </TextBlock>
+
+                                        <TextBlock Grid.Row="1" Grid.Column="0" Text="残差标准差：" Margin="0,2"/>
+                                        <TextBlock Grid.Row="1" Grid.Column="1" Margin="0,2">
+                                            <Run Text="{Binding SecondCalculationResult.Quality.ResidualStd, Mode=OneWay, StringFormat={}{0:F4}}"/>
+                                            <Run Text=" nT"/>
+                                        </TextBlock>
+
+                                        <TextBlock Grid.Row="2" Grid.Column="0" Text="最大残差：" Margin="0,2"/>
+                                        <TextBlock Grid.Row="2" Grid.Column="1" Margin="0,2">
+                                            <Run Text="{Binding SecondCalculationResult.Quality.MaxResidual, Mode=OneWay, StringFormat={}{0:F4}}"/>
+                                            <Run Text=" nT"/>
+                                        </TextBlock>
+
+                                        <TextBlock Grid.Row="3" Grid.Column="0" Text="球面覆盖度：" Margin="0,2"/>
+                                        <TextBlock Grid.Row="3" Grid.Column="1" Margin="0,2">
+                                            <Run Text="{Binding SecondCalculationResult.Quality.SphericityCoverage, Mode=OneWay, StringFormat={}{0:P1}}"/>
+                                        </TextBlock>
+
+                                        <TextBlock Grid.Row="4" Grid.Column="0" Text="样本数量：" Margin="0,2"/>
+                                        <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding SecondCalculationResult.Quality.SampleCount, Mode=OneWay}" Margin="0,2"/>
+                                    </Grid>
+                                </Border>
+                            </StackPanel>
                         </StackPanel>
                     </StackPanel>
                 </ScrollViewer>
