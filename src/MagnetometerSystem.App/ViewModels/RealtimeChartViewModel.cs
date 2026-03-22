@@ -79,6 +79,10 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private StatisticsConfig _statisticsConfig = new();
 
+    /// <summary>降采样目标点数（0 = 禁用降采样）</summary>
+    [ObservableProperty]
+    private int _downsampleTargetCount = 2000;
+
     // ---- 多图表模式 ----
     [ObservableProperty]
     private bool _isMultiPlotMode;
@@ -281,7 +285,8 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
                     windowValues[i] += config.DisplayOffset;
             }
 
-            var sig = plot.Add.ScatterLine(windowTimes, windowValues);
+            var (plotXs, plotYs) = ApplyDownsampling(windowTimes, windowValues);
+            var sig = plot.Add.ScatterLine(plotXs, plotYs);
 
             if (config != null)
             {
@@ -325,7 +330,8 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
                         windowValues[i] += config.DisplayOffset;
                 }
 
-                var sig = plot.Add.ScatterLine(windowTimes, windowValues);
+                var (plotXs, plotYs) = ApplyDownsampling(windowTimes, windowValues);
+                var sig = plot.Add.ScatterLine(plotXs, plotYs);
                 if (config != null)
                 {
                     var (a, r, g, b) = config.ParseColor();
@@ -372,12 +378,24 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
                     computedValues[i] += computed.DisplayOffset;
             }
 
-            var compSig = plot.Add.ScatterLine(windowTimes, computedValues);
+            var (plotXs, plotYs) = ApplyDownsampling(windowTimes, computedValues);
+            var compSig = plot.Add.ScatterLine(plotXs, plotYs);
             var (ca, cr, cg, cb) = new ChannelDisplayConfig { ColorHex = computed.ColorHex }.ParseColor();
             compSig.Color = new ScottPlot.Color(cr, cg, cb, ca);
             compSig.LineWidth = computed.LineWidth;
             compSig.LegendText = computed.Name;
         }
+    }
+
+    /// <summary>
+    /// 根据降采样策略处理窗口数据
+    /// </summary>
+    private (double[] xs, double[] ys) ApplyDownsampling(double[] windowTimes, double[] windowValues)
+    {
+        if (DownsampleTargetCount <= 0 || windowTimes.Length <= DownsampleTargetCount)
+            return (windowTimes, windowValues);
+
+        return LttbDownsampler.Downsample(windowTimes, windowValues, DownsampleTargetCount);
     }
 
     private void ConfigurePlotAxes(ScottPlot.Plot plot, double xMin, double xMax)

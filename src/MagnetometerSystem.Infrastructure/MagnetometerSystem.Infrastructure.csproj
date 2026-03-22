@@ -9,6 +9,10 @@
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.5" />
   </ItemGroup>
 
+  <ItemGroup>
+    <EmbeddedResource Include="Database\Migrations\*.sql" />
+  </ItemGroup>
+
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>

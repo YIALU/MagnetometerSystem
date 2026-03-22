@@ -16,6 +16,12 @@ public class DataBus
     /// <summary>采集停止</summary>
     public event Action? AcquisitionStopped;
 
+    /// <summary>会话开始时触发，参数为 sessionId</summary>
+    public event Action<string>? SessionStarted;
+
+    /// <summary>会话结束时触发，参数为 sessionId</summary>
+    public event Action<string>? SessionEnded;
+
     public void PublishReading(MagnetometerReading reading)
     {
         ReadingReceived?.Invoke(reading);
@@ -29,5 +35,15 @@ public class DataBus
     public void PublishAcquisitionStopped()
     {
         AcquisitionStopped?.Invoke();
+    }
+
+    public void PublishSessionStarted(string sessionId)
+    {
+        SessionStarted?.Invoke(sessionId);
+    }
+
+    public void PublishSessionEnded(string sessionId)
+    {
+        SessionEnded?.Invoke(sessionId);
     }
 }

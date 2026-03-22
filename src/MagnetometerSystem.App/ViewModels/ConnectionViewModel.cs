@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Windows;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using MagnetometerSystem.Core.Calibration;
 using MagnetometerSystem.Core.Communication;
 using MagnetometerSystem.Core.Models;
 using MagnetometerSystem.Core.Protocol;
@@ -20,6 +21,7 @@ public partial class ConnectionViewModel : ObservableObject
 {
     private readonly IConnectionFactory _connectionFactory;
     private readonly DataBus _dataBus;
+    private readonly OrthogonalityCorrector _orthogonalityCorrector;
     private IDeviceConnection? _connection;
     private IDataParser? _parser;
     private ISensorAdapter? _sensorAdapter;
@@ -119,15 +121,29 @@ public partial class ConnectionViewModel : ObservableObject
     [ObservableProperty]
     private bool _showHex;
 
+    // ---- 正交度校正 ----
+
+    [ObservableProperty]
+    private bool _isOrthogonalityCorrectionEnabled;
+
+    /// <summary>当前活动的正交度校正配置（第一组三轴）</summary>
+    [ObservableProperty]
+    private OrthogonalityParams? _activeOrthogonalityProfile;
+
+    /// <summary>第二组三轴的正交度校正配置（仅双三轴传感器使用）</summary>
+    [ObservableProperty]
+    private OrthogonalityParams? _secondOrthogonalityProfile;
+
     private const int MaxRawDataLines = 200;
 
     private static readonly string ProtocolConfigDir = Path.Combine(
         AppDomain.CurrentDomain.BaseDirectory, "Protocols");
 
-    public ConnectionViewModel(IConnectionFactory connectionFactory, DataBus dataBus)
+    public ConnectionViewModel(IConnectionFactory connectionFactory, DataBus dataBus, OrthogonalityCorrector orthogonalityCorrector)
     {
         _connectionFactory = connectionFactory;
         _dataBus = dataBus;
+        _orthogonalityCorrector = orthogonalityCorrector;
 
         // 监听段列表变化，订阅每个段的 PropertyChanged
         ProtocolSegments.CollectionChanged += (s, e) =>
@@ -281,6 +297,13 @@ public partial class ConnectionViewModel : ObservableObject
         while (_parser?.TryParse(out var reading) == true && reading != null)
         {
             var processed = _sensorAdapter?.Process(reading) ?? reading;
+
+            // 正交度校正（在发布之前应用）
+            if (IsOrthogonalityCorrectionEnabled && ActiveOrthogonalityProfile != null)
+            {
+                processed = _orthogonalityCorrector.ApplyToReading(
+                    ActiveOrthogonalityProfile, SecondOrthogonalityProfile, processed);
+            }
 
             // 发布到数据总线（供实时图表等消费者使用）
             _dataBus.PublishReading(processed);

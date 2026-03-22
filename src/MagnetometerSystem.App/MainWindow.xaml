@@ -60,8 +60,12 @@
                         Command="{Binding NavigateToConnectionCommand}"/>
                 <Button Content="实时采集" Margin="3" Padding="8,6" HorizontalContentAlignment="Left"
                         Command="{Binding NavigateToRealtimeChartCommand}"/>
-                <Button Content="历史回放" Margin="3" Padding="8,6" HorizontalContentAlignment="Left" IsEnabled="False"/>
-                <Button Content="正交度校正" Margin="3" Padding="8,6" HorizontalContentAlignment="Left" IsEnabled="False"/>
+                <Button Content="数据管理" Margin="3" Padding="8,6" HorizontalContentAlignment="Left"
+                        Command="{Binding NavigateToSessionListCommand}"/>
+                <Button Content="历史回放" Margin="3" Padding="8,6" HorizontalContentAlignment="Left"
+                        Command="{Binding NavigateToHistoryPlaybackCommand}"/>
+                <Button Content="正交度校正" Margin="3" Padding="8,6" HorizontalContentAlignment="Left"
+                        Command="{Binding NavigateToOrthogonalityCalibrationCommand}"/>
                 <Button Content="传感器校准" Margin="3" Padding="8,6" HorizontalContentAlignment="Left" IsEnabled="False"/>
                 <Button Content="系统设置" Margin="3" Padding="8,6" HorizontalContentAlignment="Left" IsEnabled="False"/>
             </StackPanel>
@@ -75,6 +79,15 @@
                 </DataTemplate>
                 <DataTemplate DataType="{x:Type vm:RealtimeChartViewModel}">
                     <views:RealtimeChartView/>
+                </DataTemplate>
+                <DataTemplate DataType="{x:Type vm:SessionListViewModel}">
+                    <views:SessionListView/>
+                </DataTemplate>
+                <DataTemplate DataType="{x:Type vm:HistoryPlaybackViewModel}">
+                    <views:HistoryPlaybackView/>
+                </DataTemplate>
+                <DataTemplate DataType="{x:Type vm:OrthogonalityCalibrationViewModel}">
+                    <views:OrthogonalityCalibrationView/>
                 </DataTemplate>
             </ContentControl.Resources>
         </ContentControl>

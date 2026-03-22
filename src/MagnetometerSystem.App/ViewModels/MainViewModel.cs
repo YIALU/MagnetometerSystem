@@ -25,11 +25,17 @@ public partial class MainViewModel : ObservableObject
 
     public ConnectionViewModel ConnectionVM { get; }
     public RealtimeChartViewModel RealtimeChartVM { get; }
+    public SessionListViewModel SessionListVM { get; }
+    public HistoryPlaybackViewModel HistoryPlaybackVM { get; }
+    public OrthogonalityCalibrationViewModel OrthoCalibVM { get; }
 
-    public MainViewModel(ConnectionViewModel connectionVm, RealtimeChartViewModel realtimeChartVm)
+    public MainViewModel(ConnectionViewModel connectionVm, RealtimeChartViewModel realtimeChartVm, SessionListViewModel sessionListVm, HistoryPlaybackViewModel historyPlaybackVm, OrthogonalityCalibrationViewModel orthoCalibVm)
     {
         ConnectionVM = connectionVm;
         RealtimeChartVM = realtimeChartVm;
+        SessionListVM = sessionListVm;
+        HistoryPlaybackVM = historyPlaybackVm;
+        OrthoCalibVM = orthoCalibVm;
         CurrentView = connectionVm;
 
         // 订阅连接状态变化
@@ -75,5 +81,23 @@ public partial class MainViewModel : ObservableObject
     private void NavigateToRealtimeChart()
     {
         CurrentView = RealtimeChartVM;
+    }
+
+    [RelayCommand]
+    private void NavigateToSessionList()
+    {
+        CurrentView = SessionListVM;
+    }
+
+    [RelayCommand]
+    private void NavigateToHistoryPlayback()
+    {
+        CurrentView = HistoryPlaybackVM;
+    }
+
+    [RelayCommand]
+    private void NavigateToOrthogonalityCalibration()
+    {
+        CurrentView = OrthoCalibVM;
     }
 }

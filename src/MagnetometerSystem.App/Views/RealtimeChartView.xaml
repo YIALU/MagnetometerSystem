@@ -405,6 +405,17 @@
                         </StackPanel>
                     </Expander>
 
+                    <!-- ======== 正交度校正 ======== -->
+                    <Expander Header="正交度校正" IsExpanded="False" Margin="0,0,0,6">
+                        <StackPanel Margin="0,4,0,0">
+                            <CheckBox Content="启用正交度校正" FontSize="11" Margin="0,2"
+                                      IsChecked="{Binding DataContext.ConnectionVM.IsOrthogonalityCorrectionEnabled,
+                                      RelativeSource={RelativeSource AncestorType=Window}}"/>
+                            <TextBlock Text="校正在数据源端进行，" FontSize="10" Foreground="Gray" Margin="0,4,0,0"/>
+                            <TextBlock Text="需先加载校正配置。" FontSize="10" Foreground="Gray" Margin="0,0,0,0"/>
+                        </StackPanel>
+                    </Expander>
+
                     <TextBlock Text="滚轮: 缩放时间轴" FontSize="10" Foreground="Gray" Margin="0,4,0,0"/>
                     <TextBlock Text="Ctrl+滚轮: 缩放Y轴" FontSize="10" Foreground="Gray" Margin="0,2,0,0"/>
                 </StackPanel>
