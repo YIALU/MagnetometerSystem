@@ -187,6 +187,93 @@ public class SqliteStorageService : IDataStorageService, IDisposable
             new { Id = sessionId });
     }
 
+    /// <inheritdoc />
+    public async Task UpdateSessionAsync(string sessionId, string name, string? notes)
+    {
+        using var conn = new SqliteConnection(_dbInit.ConnectionString);
+        await conn.OpenAsync();
+
+        const string sql = """
+            UPDATE sessions SET name = @Name, notes = @Notes WHERE id = @Id
+            """;
+
+        await conn.ExecuteAsync(sql, new { Id = sessionId, Name = name, Notes = notes });
+    }
+
+    #region 校正数据存储（独立于原始数据）
+
+    /// <inheritdoc />
+    public async Task SaveCorrectedReadingsAsync(IEnumerable<CorrectedReading> readings)
+    {
+        var readingsList = readings.ToList();
+        if (readingsList.Count == 0) return;
+
+        using var conn = new SqliteConnection(_dbInit.ConnectionString);
+        await conn.OpenAsync();
+        using var tx = conn.BeginTransaction();
+
+        const string sql = """
+            INSERT INTO corrected_readings
+                (original_reading_id, session_id, timestamp, correction_profile_id,
+                 ch0, ch1, ch2, ch3, ch4, ch5, extra_channels,
+                 corrected_total_field, is_ortho_corrected, corrected_at)
+            VALUES
+                (@OriginalReadingId, @SessionId, @Timestamp, @CorrectionProfileId,
+                 @Ch0, @Ch1, @Ch2, @Ch3, @Ch4, @Ch5, @ExtraChannels,
+                 @CorrectedTotalField, @IsOrthoCorrected, @CorrectedAt)
+            """;
+
+        foreach (var reading in readingsList)
+        {
+            var param = MapCorrectedReadingToParam(reading);
+            await conn.ExecuteAsync(sql, param, tx);
+        }
+
+        tx.Commit();
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<CorrectedReading>> GetCorrectedReadingsAsync(
+        string sessionId, string? correctionProfileId = null)
+    {
+        using var conn = new SqliteConnection(_dbInit.ConnectionString);
+        await conn.OpenAsync();
+
+        var sql = "SELECT * FROM corrected_readings WHERE session_id = @SessionId";
+        if (correctionProfileId != null)
+            sql += " AND correction_profile_id = @ProfileId";
+        sql += " ORDER BY timestamp ASC";
+
+        var rows = await conn.QueryAsync(sql, new { SessionId = sessionId, ProfileId = correctionProfileId });
+        return rows.Select(MapRowToCorrectedReading).ToList();
+    }
+
+    /// <inheritdoc />
+    public async Task DeleteCorrectedReadingsAsync(string sessionId, string? correctionProfileId = null)
+    {
+        using var conn = new SqliteConnection(_dbInit.ConnectionString);
+        await conn.OpenAsync();
+
+        var sql = "DELETE FROM corrected_readings WHERE session_id = @SessionId";
+        if (correctionProfileId != null)
+            sql += " AND correction_profile_id = @ProfileId";
+
+        await conn.ExecuteAsync(sql, new { SessionId = sessionId, ProfileId = correctionProfileId });
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> HasCorrectedReadingsAsync(string sessionId)
+    {
+        using var conn = new SqliteConnection(_dbInit.ConnectionString);
+        await conn.OpenAsync();
+        var count = await conn.ExecuteScalarAsync<int>(
+            "SELECT COUNT(*) FROM corrected_readings WHERE session_id = @SessionId LIMIT 1",
+            new { SessionId = sessionId });
+        return count > 0;
+    }
+
+    #endregion
+
     #region 后台写入队列
 
     private async Task ConsumeWriteQueueAsync()
@@ -256,10 +343,9 @@ public class SqliteStorageService : IDataStorageService, IDisposable
 
             tx.Commit();
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // 写入失败时记录日志，不抛出异常到调用方
-            // TODO: 集成 Serilog 后替换为正式日志
+            System.Diagnostics.Trace.TraceError($"SqliteStorageService.WriteBatchAsync failed ({batch.Count} readings): {ex.Message}");
         }
     }
 
@@ -344,6 +430,59 @@ public class SqliteStorageService : IDataStorageService, IDisposable
             ConnectionType = connectionType,
             Notes = row.notes as string,
             TotalReadings = (long)row.total_readings,
+        };
+    }
+
+    private static object MapCorrectedReadingToParam(CorrectedReading reading)
+    {
+        var values = reading.CorrectedValues;
+        return new
+        {
+            reading.OriginalReadingId,
+            reading.SessionId,
+            Timestamp = reading.Timestamp.ToString("O"),
+            reading.CorrectionProfileId,
+            Ch0 = values.Length > 0 ? values[0] : (double?)null,
+            Ch1 = values.Length > 1 ? values[1] : (double?)null,
+            Ch2 = values.Length > 2 ? values[2] : (double?)null,
+            Ch3 = values.Length > 3 ? values[3] : (double?)null,
+            Ch4 = values.Length > 4 ? values[4] : (double?)null,
+            Ch5 = values.Length > 5 ? values[5] : (double?)null,
+            ExtraChannels = values.Length > 6 ? JsonSerializer.Serialize(values[6..]) : null,
+            reading.CorrectedTotalField,
+            IsOrthoCorrected = reading.IsOrthogonalityCorrected ? 1 : 0,
+            CorrectedAt = reading.CorrectedAt.ToString("O")
+        };
+    }
+
+    private static CorrectedReading MapRowToCorrectedReading(dynamic row)
+    {
+        var values = new List<double>();
+        if (row.ch0 != null) values.Add((double)row.ch0);
+        if (row.ch1 != null) values.Add((double)row.ch1);
+        if (row.ch2 != null) values.Add((double)row.ch2);
+        if (row.ch3 != null) values.Add((double)row.ch3);
+        if (row.ch4 != null) values.Add((double)row.ch4);
+        if (row.ch5 != null) values.Add((double)row.ch5);
+
+        string? extraJson = row.extra_channels as string;
+        if (!string.IsNullOrEmpty(extraJson))
+        {
+            var extras = JsonSerializer.Deserialize<double[]>(extraJson);
+            if (extras != null) values.AddRange(extras);
+        }
+
+        return new CorrectedReading
+        {
+            Id = (long)row.id,
+            OriginalReadingId = (long)row.original_reading_id,
+            SessionId = (string)row.session_id,
+            Timestamp = DateTime.Parse((string)row.timestamp, null, DateTimeStyles.RoundtripKind),
+            CorrectionProfileId = (string)row.correction_profile_id,
+            CorrectedValues = values.ToArray(),
+            CorrectedTotalField = row.corrected_total_field as double?,
+            IsOrthogonalityCorrected = ((long)row.is_ortho_corrected) == 1,
+            CorrectedAt = DateTime.Parse((string)row.corrected_at, null, DateTimeStyles.RoundtripKind)
         };
     }
 

@@ -28,14 +28,18 @@ public partial class MainViewModel : ObservableObject
     public SessionListViewModel SessionListVM { get; }
     public HistoryPlaybackViewModel HistoryPlaybackVM { get; }
     public OrthogonalityCalibrationViewModel OrthoCalibVM { get; }
+    public SensorCalibrationViewModel SensorCalibVM { get; }
+    public SettingsViewModel SettingsVM { get; }
 
-    public MainViewModel(ConnectionViewModel connectionVm, RealtimeChartViewModel realtimeChartVm, SessionListViewModel sessionListVm, HistoryPlaybackViewModel historyPlaybackVm, OrthogonalityCalibrationViewModel orthoCalibVm)
+    public MainViewModel(ConnectionViewModel connectionVm, RealtimeChartViewModel realtimeChartVm, SessionListViewModel sessionListVm, HistoryPlaybackViewModel historyPlaybackVm, OrthogonalityCalibrationViewModel orthoCalibVm, SensorCalibrationViewModel sensorCalibVm, SettingsViewModel settingsVm)
     {
         ConnectionVM = connectionVm;
         RealtimeChartVM = realtimeChartVm;
         SessionListVM = sessionListVm;
         HistoryPlaybackVM = historyPlaybackVm;
         OrthoCalibVM = orthoCalibVm;
+        SensorCalibVM = sensorCalibVm;
+        SettingsVM = settingsVm;
         CurrentView = connectionVm;
 
         // 订阅连接状态变化
@@ -113,5 +117,17 @@ public partial class MainViewModel : ObservableObject
     private void NavigateToOrthogonalityCalibration()
     {
         CurrentView = OrthoCalibVM;
+    }
+
+    [RelayCommand]
+    private void NavigateToSensorCalibration()
+    {
+        CurrentView = SensorCalibVM;
+    }
+
+    [RelayCommand]
+    private void NavigateToSettings()
+    {
+        CurrentView = SettingsVM;
     }
 }

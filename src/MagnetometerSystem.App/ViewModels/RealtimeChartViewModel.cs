@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Text;
 using System.Windows;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -83,6 +84,26 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
     /// <summary>降采样目标点数（0 = 禁用降采样）</summary>
     [ObservableProperty]
     private int _downsampleTargetCount = 2000;
+
+    // ---- 区间分析 ----
+
+    [ObservableProperty]
+    private IntervalSelection? _currentInterval;
+
+    [ObservableProperty]
+    private IntervalStatisticsResult? _intervalStatistics;
+
+    [ObservableProperty]
+    private bool _isIntervalSelectionMode;
+
+    [ObservableProperty]
+    private string _intervalStartInput = "";
+
+    [ObservableProperty]
+    private string _intervalEndInput = "";
+
+    [ObservableProperty]
+    private string _intervalStatisticsText = "";
 
     // ---- 滤波设置 ----
 
@@ -420,6 +441,9 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
                 for (int i = 0; i < computedValues.Length; i++)
                     computedValues[i] += computed.DisplayOffset;
             }
+
+            // 应用滤波
+            computedValues = ApplyFilter(computedValues);
 
             var (plotXs, plotYs) = ApplyDownsampling(windowTimes, computedValues);
             var compSig = plot.Add.ScatterLine(plotXs, plotYs);
@@ -817,6 +841,127 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
         {
             def.DisplayOffset = -(sum / validCount);
         }
+    }
+
+    // ---- 区间分析操作 ----
+
+    [RelayCommand]
+    private void ApplyIntervalSelection()
+    {
+        if (!double.TryParse(IntervalStartInput, out double start) ||
+            !double.TryParse(IntervalEndInput, out double end))
+        {
+            return;
+        }
+
+        var interval = new IntervalSelection(start, end);
+        if (!interval.IsValid) return;
+
+        CurrentInterval = interval;
+        ComputeIntervalStatistics();
+    }
+
+    [RelayCommand]
+    private void ClearIntervalSelection()
+    {
+        CurrentInterval = null;
+        IntervalStatistics = null;
+        IntervalStartInput = "";
+        IntervalEndInput = "";
+        IntervalStatisticsText = "";
+    }
+
+    [RelayCommand]
+    private async Task ExportIntervalAsync()
+    {
+        if (CurrentInterval == null || IntervalStatistics == null) return;
+
+        var dialog = new Microsoft.Win32.SaveFileDialog
+        {
+            Title = "导出区间数据",
+            Filter = "CSV 文件 (*.csv)|*.csv",
+            FileName = $"interval_{CurrentInterval.StartTime:F1}s_{CurrentInterval.EndTime:F1}s.csv",
+            DefaultExt = ".csv"
+        };
+
+        if (dialog.ShowDialog() != true) return;
+
+        await ExportIntervalFromBuffersAsync(dialog.FileName);
+    }
+
+    private void ComputeIntervalStatistics()
+    {
+        if (CurrentInterval == null) return;
+
+        double[] times;
+        double[][] channels;
+        string[] names;
+
+        lock (_dataLock)
+        {
+            times = _timeBuffer.ToArray();
+            channels = new double[_channelBuffers.Length][];
+            for (int i = 0; i < _channelBuffers.Length; i++)
+                channels[i] = _channelBuffers[i].ToArray();
+            names = _channelNames ?? Array.Empty<string>();
+        }
+
+        IntervalStatistics = IntervalStatisticsResult.Compute(
+            CurrentInterval, times, channels, names);
+
+        if (IntervalStatistics == null || IntervalStatistics.SampleCount == 0)
+        {
+            IntervalStatisticsText = "区间内无数据";
+            return;
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"区间: {CurrentInterval.StartTime:F2}s - {CurrentInterval.EndTime:F2}s | 采样点: {IntervalStatistics.SampleCount} | 时长: {CurrentInterval.Duration:F2}s");
+        foreach (var stat in IntervalStatistics.ChannelStats)
+        {
+            sb.AppendLine($"  {stat.ChannelName}: 均值={stat.Mean:F3} 标准差={stat.StdDev:F3} 最小={stat.Min:F3} 最大={stat.Max:F3} 峰峰值={stat.PeakToPeak:F3}");
+        }
+        IntervalStatisticsText = sb.ToString().TrimEnd();
+    }
+
+    private async Task ExportIntervalFromBuffersAsync(string filePath)
+    {
+        if (CurrentInterval == null) return;
+
+        double[] times;
+        double[][] channels;
+        string[] names;
+
+        lock (_dataLock)
+        {
+            times = _timeBuffer.ToArray();
+            channels = new double[_channelBuffers.Length][];
+            for (int i = 0; i < _channelBuffers.Length; i++)
+                channels[i] = _channelBuffers[i].ToArray();
+            names = _channelNames ?? Array.Empty<string>();
+        }
+
+        var (startIdx, count) = CurrentInterval.GetIndices(times);
+        if (count == 0) return;
+
+        await Task.Run(() =>
+        {
+            using var writer = new System.IO.StreamWriter(filePath, false, new System.Text.UTF8Encoding(true));
+            // Header
+            writer.Write("ElapsedSeconds");
+            for (int ch = 0; ch < names.Length; ch++)
+                writer.Write($",{names[ch]}");
+            writer.WriteLine();
+
+            // Data
+            for (int i = startIdx; i < startIdx + count; i++)
+            {
+                writer.Write(times[i].ToString("R"));
+                for (int ch = 0; ch < channels.Length; ch++)
+                    writer.Write($",{channels[ch][i]:R}");
+                writer.WriteLine();
+            }
+        });
     }
 
     public void Dispose()

@@ -50,6 +50,10 @@ public partial class App : Application
         // ---- Stream E: 配置持久化 (TASK-F3) ----
         services.AddSingleton<IAppConfigService, AppConfigService>();
 
+        // ---- 新增页面 ----
+        services.AddTransient<SensorCalibrationViewModel>();
+        services.AddTransient<SettingsViewModel>();
+
         Services = services.BuildServiceProvider();
 
         // 初始化数据库
@@ -65,7 +69,7 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Debug.WriteLine($"加载配置失败，使用默认值: {ex.Message}");
+            System.Diagnostics.Trace.TraceWarning($"加载配置失败，使用默认值: {ex.Message}");
         }
 
         var mainVm = Services.GetRequiredService<MainViewModel>();
@@ -76,6 +80,24 @@ public partial class App : Application
             if (loadedSettings.ChartRefreshRate > 0)
             {
                 mainVm.RealtimeChartVM.RefreshRate = loadedSettings.ChartRefreshRate;
+            }
+
+            // 恢复连接配置
+            if (!string.IsNullOrEmpty(loadedSettings.DefaultPortName))
+            {
+                mainVm.ConnectionVM.SelectedPort = loadedSettings.DefaultPortName;
+            }
+            if (loadedSettings.DefaultBaudRate > 0)
+            {
+                mainVm.ConnectionVM.BaudRate = loadedSettings.DefaultBaudRate;
+            }
+            if (!string.IsNullOrEmpty(loadedSettings.DefaultIpAddress))
+            {
+                mainVm.ConnectionVM.IpAddress = loadedSettings.DefaultIpAddress;
+            }
+            if (loadedSettings.DefaultPort > 0)
+            {
+                mainVm.ConnectionVM.Port = loadedSettings.DefaultPort;
             }
         }
 
@@ -99,6 +121,10 @@ public partial class App : Application
                 var settings = new AppSettings
                 {
                     ChartRefreshRate = mainVm.RealtimeChartVM.RefreshRate,
+                    DefaultPortName = mainVm.ConnectionVM.SelectedPort,
+                    DefaultBaudRate = mainVm.ConnectionVM.BaudRate,
+                    DefaultIpAddress = mainVm.ConnectionVM.IpAddress,
+                    DefaultPort = mainVm.ConnectionVM.Port,
                 };
 
                 configService.SaveSettingsAsync(settings).GetAwaiter().GetResult();
@@ -106,7 +132,7 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Debug.WriteLine($"保存配置失败: {ex.Message}");
+            System.Diagnostics.Trace.TraceError($"保存配置失败: {ex.Message}");
         }
 
         GlobalErrorHandler.Shutdown();

@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using MagnetometerSystem.Core.Calibration;
 using MagnetometerSystem.Core.Models;
 using MagnetometerSystem.Core.Services;
 using MagnetometerSystem.Core.Storage;
@@ -28,6 +29,8 @@ public partial class HistoryPlaybackViewModel : ObservableObject
 {
     private readonly IDataStorageService _storageService;
     private readonly DataBus _dataBus;
+    private readonly OrthogonalityCorrector _orthogonalityCorrector;
+    private readonly ICalibrationRepository _calibrationRepository;
 
     // ---- 内部数据 ----
     private MagnetometerReading[] _readings = [];
@@ -78,13 +81,47 @@ public partial class HistoryPlaybackViewModel : ObservableObject
 
     public double[] AvailableSpeeds { get; } = [0.5, 1.0, 2.0, 5.0, 10.0];
 
-    public HistoryPlaybackViewModel(IDataStorageService storageService, DataBus dataBus)
+    // ---- 正交度校正 ----
+
+    [ObservableProperty]
+    private bool _isOrthogonalityCorrectionEnabled;
+
+    [ObservableProperty]
+    private ObservableCollection<OrthogonalityParams> _availableProfiles = new();
+
+    [ObservableProperty]
+    private OrthogonalityParams? _selectedOrthogonalityProfile;
+
+    [ObservableProperty]
+    private OrthogonalityParams? _selectedSecondProfile;
+
+    public HistoryPlaybackViewModel(IDataStorageService storageService, DataBus dataBus,
+        OrthogonalityCorrector orthogonalityCorrector, ICalibrationRepository calibrationRepository)
     {
         _storageService = storageService;
         _dataBus = dataBus;
+        _orthogonalityCorrector = orthogonalityCorrector;
+        _calibrationRepository = calibrationRepository;
 
         // 初始加载会话列表
         _ = LoadAvailableSessionsAsync();
+        _ = LoadOrthogonalityProfilesAsync();
+    }
+
+    [RelayCommand]
+    private async Task LoadOrthogonalityProfilesAsync()
+    {
+        try
+        {
+            var profiles = await _calibrationRepository.GetOrthogonalityProfilesAsync();
+            AvailableProfiles.Clear();
+            foreach (var p in profiles)
+                AvailableProfiles.Add(p);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Trace.TraceError($"加载校正配置列表失败: {ex.Message}");
+        }
     }
 
     // ---- 加载可用会话 ----
@@ -110,7 +147,7 @@ public partial class HistoryPlaybackViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Debug.WriteLine($"加载会话列表失败: {ex.Message}");
+            System.Diagnostics.Trace.TraceError($"加载会话列表失败: {ex.Message}");
         }
     }
 
@@ -163,7 +200,7 @@ public partial class HistoryPlaybackViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Debug.WriteLine($"加载会话数据失败: {ex.Message}");
+            System.Diagnostics.Trace.TraceError($"加载会话数据失败: {ex.Message}");
             State = PlaybackState.Ready;
         }
         finally
@@ -313,7 +350,16 @@ public partial class HistoryPlaybackViewModel : ObservableObject
 
         for (var i = 0; i < count && CurrentIndex < _readings.Length; i++)
         {
-            _dataBus.PublishReading(_readings[CurrentIndex]);
+            var reading = _readings[CurrentIndex];
+
+            // 应用正交度校正
+            if (IsOrthogonalityCorrectionEnabled && SelectedOrthogonalityProfile != null)
+            {
+                reading = _orthogonalityCorrector.ApplyToReading(
+                    SelectedOrthogonalityProfile, SelectedSecondProfile, reading);
+            }
+
+            _dataBus.PublishReading(reading);
             CurrentIndex++;
         }
 

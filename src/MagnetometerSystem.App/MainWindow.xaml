@@ -66,8 +66,10 @@
                         Command="{Binding NavigateToHistoryPlaybackCommand}"/>
                 <Button Content="正交度校正" Margin="3" Padding="8,6" HorizontalContentAlignment="Left"
                         Command="{Binding NavigateToOrthogonalityCalibrationCommand}"/>
-                <Button Content="传感器校准" Margin="3" Padding="8,6" HorizontalContentAlignment="Left" IsEnabled="False"/>
-                <Button Content="系统设置" Margin="3" Padding="8,6" HorizontalContentAlignment="Left" IsEnabled="False"/>
+                <Button Content="传感器校准" Margin="3" Padding="8,6" HorizontalContentAlignment="Left"
+                        Command="{Binding NavigateToSensorCalibrationCommand}"/>
+                <Button Content="系统设置" Margin="3" Padding="8,6" HorizontalContentAlignment="Left"
+                        Command="{Binding NavigateToSettingsCommand}"/>
             </StackPanel>
         </Border>
 
@@ -88,6 +90,12 @@
                 </DataTemplate>
                 <DataTemplate DataType="{x:Type vm:OrthogonalityCalibrationViewModel}">
                     <views:OrthogonalityCalibrationView/>
+                </DataTemplate>
+                <DataTemplate DataType="{x:Type vm:SensorCalibrationViewModel}">
+                    <views:SensorCalibrationView/>
+                </DataTemplate>
+                <DataTemplate DataType="{x:Type vm:SettingsViewModel}">
+                    <views:SettingsView/>
                 </DataTemplate>
             </ContentControl.Resources>
         </ContentControl>

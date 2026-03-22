@@ -17,19 +17,72 @@ namespace MagnetometerSystem.App.ViewModels;
 public partial class OrthogonalityCalibrationViewModel : ObservableObject
 {
     private readonly IOrthogonalityService _orthogonalityService;
+    private readonly ICalibrationRepository _calibrationRepository;
     private readonly DataBus _dataBus;
     private readonly List<double[]> _collectedData = new();
     private readonly List<double[]> _collectedDataSecondGroup = new();
 
     public OrthogonalityCalibrationViewModel(
         IOrthogonalityService orthogonalityService,
+        ICalibrationRepository calibrationRepository,
         DataBus dataBus)
     {
         _orthogonalityService = orthogonalityService;
+        _calibrationRepository = calibrationRepository;
         _dataBus = dataBus;
 
         ProfileName = $"正交度校正_{DateTime.Now:yyyyMMdd_HHmmss}";
         UpdateStepNavigation();
+
+        // 加载已保存的配置列表
+        _ = LoadSavedProfilesAsync();
+    }
+
+    // ========== 已保存配置管理 ==========
+
+    [ObservableProperty]
+    private ObservableCollection<OrthogonalityParams> _savedProfiles = new();
+
+    [ObservableProperty]
+    private OrthogonalityParams? _selectedSavedProfile;
+
+    [RelayCommand]
+    private async Task LoadSavedProfilesAsync()
+    {
+        try
+        {
+            var profiles = await _calibrationRepository.GetOrthogonalityProfilesAsync();
+            SavedProfiles.Clear();
+            foreach (var p in profiles)
+                SavedProfiles.Add(p);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Trace.TraceError($"加载校正配置列表失败: {ex.Message}");
+        }
+    }
+
+    [RelayCommand]
+    private void LoadSelectedProfile()
+    {
+        if (SelectedSavedProfile == null) return;
+        SavedProfile = SelectedSavedProfile;
+        SaveStatus = $"已加载配置: {SelectedSavedProfile.Name}";
+    }
+
+    [RelayCommand]
+    private async Task DeleteSavedProfileAsync(OrthogonalityParams? profile)
+    {
+        if (profile == null) return;
+        try
+        {
+            await _calibrationRepository.DeleteOrthogonalityProfileAsync(profile.Id);
+            SavedProfiles.Remove(profile);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Trace.TraceError($"删除配置失败: {ex.Message}");
+        }
     }
 
     // ========== 步骤控制 (共 4 步) ==========
@@ -559,7 +612,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
     private string _saveStatus = string.Empty;
 
     [RelayCommand]
-    private void SaveProfile()
+    private async Task SaveProfileAsync()
     {
         if (CalculationResult?.Parameters == null)
         {
@@ -575,31 +628,52 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
 
         try
         {
-            var parameters = CalculationResult.Parameters;
-            parameters.Name = ProfileName;
-            parameters.SensorSerial = SensorSerial;
-            parameters.Notes = ProfileNotes;
-            parameters.ResidualMean = CalculationResult.Quality?.ResidualMean;
-            parameters.ResidualStd = CalculationResult.Quality?.ResidualStd;
-            parameters.SampleCount = CalculationResult.Quality?.SampleCount;
+            // 防御性拷贝，避免直接修改 CalculationResult.Parameters 引用
+            var src = CalculationResult.Parameters;
+            var parameters = new OrthogonalityParams
+            {
+                Id = src.Id,
+                Name = ProfileName,
+                SensorSerial = SensorSerial,
+                CreatedAt = src.CreatedAt,
+                Offset = (double[])src.Offset.Clone(),
+                CompensationMatrix = (double[])src.CompensationMatrix.Clone(),
+                Notes = ProfileNotes,
+                ResidualMean = CalculationResult.Quality?.ResidualMean,
+                ResidualStd = CalculationResult.Quality?.ResidualStd,
+                SampleCount = CalculationResult.Quality?.SampleCount,
+            };
 
+            // 持久化到数据库
+            await _calibrationRepository.SaveOrthogonalityProfileAsync(parameters);
             SavedProfile = parameters;
 
             // Save second profile for DualTriaxial
             if (SelectedSensorType == SensorType.DualTriaxialFluxgate && SecondCalculationResult?.Parameters != null)
             {
-                var secondParameters = SecondCalculationResult.Parameters;
-                secondParameters.Name = $"{ProfileName}_第二组";
-                secondParameters.SensorSerial = SensorSerial;
-                secondParameters.Notes = ProfileNotes;
-                secondParameters.ResidualMean = SecondCalculationResult.Quality?.ResidualMean;
-                secondParameters.ResidualStd = SecondCalculationResult.Quality?.ResidualStd;
-                secondParameters.SampleCount = SecondCalculationResult.Quality?.SampleCount;
+                var src2 = SecondCalculationResult.Parameters;
+                var secondParameters = new OrthogonalityParams
+                {
+                    Id = src2.Id,
+                    Name = $"{ProfileName}_第二组",
+                    SensorSerial = SensorSerial,
+                    CreatedAt = src2.CreatedAt,
+                    Offset = (double[])src2.Offset.Clone(),
+                    CompensationMatrix = (double[])src2.CompensationMatrix.Clone(),
+                    Notes = ProfileNotes,
+                    ResidualMean = SecondCalculationResult.Quality?.ResidualMean,
+                    ResidualStd = SecondCalculationResult.Quality?.ResidualStd,
+                    SampleCount = SecondCalculationResult.Quality?.SampleCount,
+                };
 
+                await _calibrationRepository.SaveOrthogonalityProfileAsync(secondParameters);
                 SavedSecondProfile = secondParameters;
             }
 
-            SaveStatus = "已保存并应用";
+            // 刷新已保存配置列表
+            await LoadSavedProfilesAsync();
+
+            SaveStatus = "已保存到数据库并应用";
         }
         catch (Exception ex)
         {

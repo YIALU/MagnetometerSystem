@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Data;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using MagnetometerSystem.Core.Calibration;
 using MagnetometerSystem.Core.Models;
 using MagnetometerSystem.Core.Services;
 using MagnetometerSystem.Core.Storage;
@@ -19,6 +20,8 @@ public partial class SessionListViewModel : ObservableObject
     private readonly IDataStorageService _storageService;
     private readonly IDataExporter _dataExporter;
     private readonly DataBus _dataBus;
+    private readonly OrthogonalityCorrector _orthogonalityCorrector;
+    private readonly ICalibrationRepository _calibrationRepository;
 
     // ---- 读数缓冲 ----
     private readonly List<MagnetometerReading> _readingBuffer = new(500);
@@ -58,6 +61,19 @@ public partial class SessionListViewModel : ObservableObject
     [ObservableProperty]
     private bool _isRecording;
 
+    // ---- 批量校正 ----
+    [ObservableProperty]
+    private ObservableCollection<OrthogonalityParams> _availableProfiles = new();
+
+    [ObservableProperty]
+    private OrthogonalityParams? _selectedCorrectionProfile;
+
+    [ObservableProperty]
+    private bool _isCorrecting;
+
+    [ObservableProperty]
+    private double _correctionProgress;
+
     // ---- 传感器类型列表（供 ComboBox 绑定） ----
     public SensorType[] SensorTypes { get; } = Enum.GetValues<SensorType>();
 
@@ -66,11 +82,15 @@ public partial class SessionListViewModel : ObservableObject
     /// </summary>
     public event Action<string>? PlaybackRequested;
 
-    public SessionListViewModel(IDataStorageService storageService, IDataExporter dataExporter, DataBus dataBus)
+    public SessionListViewModel(
+        IDataStorageService storageService, IDataExporter dataExporter, DataBus dataBus,
+        OrthogonalityCorrector orthogonalityCorrector, ICalibrationRepository calibrationRepository)
     {
         _storageService = storageService;
         _dataExporter = dataExporter;
         _dataBus = dataBus;
+        _orthogonalityCorrector = orthogonalityCorrector;
+        _calibrationRepository = calibrationRepository;
 
         Sessions = new ObservableCollection<SessionInfo>();
         SessionsView = CollectionViewSource.GetDefaultView(Sessions);
@@ -113,7 +133,7 @@ public partial class SessionListViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Debug.WriteLine($"创建会话失败: {ex.Message}");
+            System.Diagnostics.Trace.TraceError($"创建会话失败: {ex.Message}");
         }
     }
 
@@ -132,7 +152,7 @@ public partial class SessionListViewModel : ObservableObject
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"结束会话失败: {ex.Message}");
+                System.Diagnostics.Trace.TraceError($"结束会话失败: {ex.Message}");
             }
 
             Application.Current?.Dispatcher.Invoke(() =>
@@ -205,7 +225,7 @@ public partial class SessionListViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Debug.WriteLine($"加载会话列表失败: {ex.Message}");
+            System.Diagnostics.Trace.TraceError($"加载会话列表失败: {ex.Message}");
         }
     }
 
@@ -218,16 +238,15 @@ public partial class SessionListViewModel : ObservableObject
         var newName = PromptInput("重命名会话", "请输入新的会话名称:", session.Name);
         if (string.IsNullOrWhiteSpace(newName) || newName == session.Name) return;
 
-        session.Name = newName;
         try
         {
-            // 通过删除后重新获取列表来刷新（IDataStorageService 无 Update 方法，
-            // 此处仅更新本地显示；持久化重命名需要扩展接口）
+            await _storageService.UpdateSessionAsync(session.Id, newName, session.Notes);
+            session.Name = newName;
             SessionsView.Refresh();
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Debug.WriteLine($"重命名失败: {ex.Message}");
+            System.Diagnostics.Trace.TraceError($"重命名失败: {ex.Message}");
         }
     }
 
@@ -239,14 +258,15 @@ public partial class SessionListViewModel : ObservableObject
         var newNotes = PromptInput("编辑备注", "请输入备注内容:", session.Notes ?? "");
         if (newNotes == null) return;
 
-        session.Notes = newNotes;
         try
         {
+            await _storageService.UpdateSessionAsync(session.Id, session.Name, newNotes);
+            session.Notes = newNotes;
             SessionsView.Refresh();
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Debug.WriteLine($"编辑备注失败: {ex.Message}");
+            System.Diagnostics.Trace.TraceError($"编辑备注失败: {ex.Message}");
         }
     }
 
@@ -312,6 +332,95 @@ public partial class SessionListViewModel : ObservableObject
     {
         if (session == null) return;
         PlaybackRequested?.Invoke(session.Id);
+    }
+
+    // ---- 批量校正命令 ----
+
+    [RelayCommand]
+    private async Task LoadCorrectionProfilesAsync()
+    {
+        try
+        {
+            var profiles = await _calibrationRepository.GetOrthogonalityProfilesAsync();
+            Application.Current?.Dispatcher.Invoke(() =>
+            {
+                AvailableProfiles.Clear();
+                foreach (var p in profiles)
+                    AvailableProfiles.Add(p);
+            });
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Trace.TraceError($"加载校正配置失败: {ex.Message}");
+        }
+    }
+
+    [RelayCommand]
+    private async Task ApplyBatchCorrectionAsync(SessionInfo? session)
+    {
+        if (session == null || SelectedCorrectionProfile == null) return;
+
+        var result = MessageBox.Show(
+            $"将对会话 '{session.Name}' 应用正交度校正 '{SelectedCorrectionProfile.Name}'。\n原始数据将保留不变，校正结果单独存储。\n继续？",
+            "批量校正",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Question);
+
+        if (result != MessageBoxResult.Yes) return;
+
+        IsCorrecting = true;
+        CorrectionProgress = 0;
+
+        try
+        {
+            // 1. 加载原始读数
+            var readings = await _storageService.GetReadingsAsync(session.Id);
+            if (readings.Count == 0)
+            {
+                MessageBox.Show("会话中没有数据。", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            // 2. 删除此配置的旧校正结果
+            await _storageService.DeleteCorrectedReadingsAsync(session.Id, SelectedCorrectionProfile.Id);
+
+            // 3. 批量应用校正
+            var progress = new Progress<int>(processed =>
+            {
+                CorrectionProgress = processed;
+            });
+
+            var batchResult = await _orthogonalityCorrector.ApplyBatchAsync(
+                SelectedCorrectionProfile, readings, progress);
+
+            // 4. 映射为 CorrectedReading 并保存（保留原始数据）
+            var correctedReadings = new List<CorrectedReading>();
+            for (int i = 0; i < readings.Count; i++)
+            {
+                var cr = CorrectedReading.FromOriginal(
+                    readings[i],
+                    batchResult.CorrectedReadings[i].ChannelValues,
+                    SelectedCorrectionProfile.Id);
+                correctedReadings.Add(cr);
+            }
+
+            await _storageService.SaveCorrectedReadingsAsync(correctedReadings);
+
+            CorrectionProgress = 100;
+            MessageBox.Show(
+                $"校正完成！\n处理 {batchResult.ProcessedCount} 条数据。\n原始数据已保留，校正结果已单独保存。",
+                "成功",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"批量校正失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            IsCorrecting = false;
+        }
     }
 
     // ---- 筛选 ----

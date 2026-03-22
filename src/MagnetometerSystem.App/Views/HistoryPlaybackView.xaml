@@ -104,6 +104,19 @@
                     <Run Text="{Binding TotalReadings, Mode=OneWay, StringFormat=N0}"/>
                 </TextBlock>
             </StackPanel>
+
+            <!-- 正交度校正开关 -->
+            <Border Background="#F5F5F5" CornerRadius="3" Padding="8,4" Margin="0,5,0,0">
+                <StackPanel Orientation="Horizontal">
+                    <CheckBox Content="启用正交度校正" IsChecked="{Binding IsOrthogonalityCorrectionEnabled}"
+                              VerticalAlignment="Center" Margin="0,0,15,0"/>
+                    <TextBlock Text="配置:" VerticalAlignment="Center" Margin="0,0,5,0"/>
+                    <ComboBox ItemsSource="{Binding AvailableProfiles}"
+                              SelectedItem="{Binding SelectedOrthogonalityProfile}"
+                              DisplayMemberPath="Name" Width="180" Margin="0,0,10,0"/>
+                    <Button Content="刷新" Command="{Binding LoadOrthogonalityProfilesCommand}" Padding="8,2"/>
+                </StackPanel>
+            </Border>
         </StackPanel>
 
         <!-- 中央: 提示区域（图表由 DataBus 驱动 RealtimeChartView 自动响应） -->

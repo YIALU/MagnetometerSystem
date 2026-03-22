@@ -58,6 +58,9 @@ public class DatabaseInitializer
 
         var v2Sql = LoadMigrationSql("V2_CalibrationTables.sql");
         await connection.ExecuteAsync(v2Sql);
+
+        var v3Sql = LoadMigrationSql("V3_CorrectedReadings.sql");
+        await connection.ExecuteAsync(v3Sql);
     }
 
     private static string LoadMigrationSql(string fileName)

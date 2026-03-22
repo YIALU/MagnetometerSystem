@@ -25,6 +25,24 @@ public interface IDataStorageService
 
     /// <summary>删除会话及其数据</summary>
     Task DeleteSessionAsync(string sessionId);
+
+    /// <summary>更新会话名称和备注</summary>
+    Task UpdateSessionAsync(string sessionId, string name, string? notes);
+
+    // === 校正数据（独立存储，不覆盖原始数据） ===
+
+    /// <summary>批量保存校正后的读数</summary>
+    Task SaveCorrectedReadingsAsync(IEnumerable<CorrectedReading> readings);
+
+    /// <summary>获取指定会话的校正读数，可按校正配置 ID 筛选</summary>
+    Task<IReadOnlyList<CorrectedReading>> GetCorrectedReadingsAsync(
+        string sessionId, string? correctionProfileId = null);
+
+    /// <summary>删除指定会话的校正读数，可按校正配置 ID 筛选</summary>
+    Task DeleteCorrectedReadingsAsync(string sessionId, string? correctionProfileId = null);
+
+    /// <summary>检查指定会话是否存在校正数据</summary>
+    Task<bool> HasCorrectedReadingsAsync(string sessionId);
 }
 
 /// <summary>

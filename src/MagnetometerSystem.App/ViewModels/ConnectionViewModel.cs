@@ -601,7 +601,7 @@ public partial class ConnectionViewModel : ObservableObject
                 }
                 catch (Exception ex)
                 {
-                    System.Diagnostics.Debug.WriteLine($"跳过损坏的协议配置文件 {file}: {ex.Message}");
+                    System.Diagnostics.Trace.TraceWarning($"跳过损坏的协议配置文件 {file}: {ex.Message}");
                 }
             }
         }

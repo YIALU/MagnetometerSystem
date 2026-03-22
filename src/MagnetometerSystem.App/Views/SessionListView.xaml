@@ -43,7 +43,14 @@
         </Border>
 
         <!-- 主体: DataGrid -->
-        <DataGrid ItemsSource="{Binding SessionsView}"
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <DataGrid Grid.Row="0"
+                  ItemsSource="{Binding SessionsView}"
                   SelectedItem="{Binding SelectedSession}"
                   AutoGenerateColumns="False"
                   IsReadOnly="True"
@@ -86,5 +93,24 @@
                 </ContextMenu>
             </DataGrid.ContextMenu>
         </DataGrid>
+
+            <!-- 批量校正面板 -->
+            <GroupBox Grid.Row="1" Header="批量校正" Margin="0,10,0,0" Padding="8">
+                <StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                        <TextBlock Text="校正配置:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <ComboBox ItemsSource="{Binding AvailableProfiles}"
+                                  SelectedItem="{Binding SelectedCorrectionProfile}"
+                                  DisplayMemberPath="Name" Width="200" Margin="0,0,8,0"/>
+                        <Button Content="刷新配置" Command="{Binding LoadCorrectionProfilesCommand}" Padding="8,4" Margin="0,0,8,0"/>
+                        <Button Content="应用校正" Command="{Binding ApplyBatchCorrectionCommand}"
+                                CommandParameter="{Binding SelectedSession}"
+                                Padding="10,4"/>
+                    </StackPanel>
+                    <ProgressBar Value="{Binding CorrectionProgress}" Height="6" Margin="0,4,0,0"
+                                 Visibility="{Binding IsCorrecting, Converter={StaticResource BoolToVis}}"/>
+                </StackPanel>
+            </GroupBox>
+        </Grid>
     </DockPanel>
 </UserControl>
