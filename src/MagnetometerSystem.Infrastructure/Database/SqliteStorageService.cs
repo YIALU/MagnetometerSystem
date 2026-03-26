@@ -141,7 +141,7 @@ public class SqliteStorageService : IDataStorageService, IDisposable
 
         var sql = """
             SELECT id, session_id, timestamp, ch0, ch1, ch2, ch3, ch4, ch5,
-                   extra_channels, total_field, is_calibrated, is_ortho_corrected
+                   extra_channels, total_field, is_calibrated, is_ortho_corrected, original_channel_values
             FROM readings
             WHERE session_id = @SessionId
             """;
@@ -330,9 +330,9 @@ public class SqliteStorageService : IDataStorageService, IDisposable
 
             const string sql = """
                 INSERT INTO readings (session_id, timestamp, ch0, ch1, ch2, ch3, ch4, ch5,
-                    extra_channels, total_field, is_calibrated, is_ortho_corrected)
+                    extra_channels, total_field, is_calibrated, is_ortho_corrected, original_channel_values)
                 VALUES (@SessionId, @Timestamp, @Ch0, @Ch1, @Ch2, @Ch3, @Ch4, @Ch5,
-                    @ExtraChannels, @TotalField, @IsCalibrated, @IsOrthoCorrected)
+                    @ExtraChannels, @TotalField, @IsCalibrated, @IsOrthoCorrected, @OriginalChannelValues)
                 """;
 
             foreach (var r in batch)
@@ -372,6 +372,9 @@ public class SqliteStorageService : IDataStorageService, IDisposable
             r.TotalField,
             IsCalibrated = r.IsCalibrated ? 1 : 0,
             IsOrthoCorrected = r.IsOrthogonalityCorrected ? 1 : 0,
+            OriginalChannelValues = r.OriginalChannelValues != null
+                ? JsonSerializer.Serialize(r.OriginalChannelValues)
+                : null,
         };
     }
 
@@ -391,12 +394,19 @@ public class SqliteStorageService : IDataStorageService, IDisposable
             if (extra != null) values.AddRange(extra);
         }
 
+        double[]? originalValues = null;
+        if (row.original_channel_values is string origJson && !string.IsNullOrEmpty(origJson))
+        {
+            originalValues = JsonSerializer.Deserialize<double[]>(origJson);
+        }
+
         return new MagnetometerReading
         {
             Id = (long)row.id,
             SessionId = (string)row.session_id,
             Timestamp = DateTime.Parse((string)row.timestamp, null, DateTimeStyles.RoundtripKind),
             ChannelValues = values.ToArray(),
+            OriginalChannelValues = originalValues,
             TotalField = row.total_field as double?,
             IsCalibrated = (long)row.is_calibrated == 1,
             IsOrthogonalityCorrected = (long)row.is_ortho_corrected == 1,

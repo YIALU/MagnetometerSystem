@@ -137,6 +137,9 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private bool _isMultiPlotMode;
 
+    [ObservableProperty]
+    private int _multiPlotColumnCount = 1;
+
     // 多图表控件引用（由 View 的 code-behind 设置）
     public List<ScottPlot.WPF.WpfPlot> MultiPlotControls { get; set; } = new();
 
@@ -566,6 +569,12 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
     private void ToggleMultiPlotMode()
     {
         IsMultiPlotMode = !IsMultiPlotMode;
+    }
+
+    [RelayCommand]
+    private void ToggleColumnCount()
+    {
+        MultiPlotColumnCount = MultiPlotColumnCount == 1 ? 2 : 1;
     }
 
     [RelayCommand]

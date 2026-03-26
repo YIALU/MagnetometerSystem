@@ -26,6 +26,9 @@ public class MagnetometerReading
     /// </summary>
     public double[] ChannelValues { get; set; } = [];
 
+    /// <summary>原始通道值（校正前），仅在应用校正时保存</summary>
+    public double[]? OriginalChannelValues { get; set; }
+
     /// <summary>总场强度 (nT)，对三轴传感器为 sqrt(X²+Y²+Z²)</summary>
     public double? TotalField { get; set; }
 

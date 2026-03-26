@@ -673,6 +673,9 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
             // 刷新已保存配置列表
             await LoadSavedProfilesAsync();
 
+            // 保存校准记录到历史
+            await SaveCalibrationRecordAsync(parameters);
+
             SaveStatus = "已保存到数据库并应用";
         }
         catch (Exception ex)
@@ -686,6 +689,28 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
 
     [ObservableProperty]
     private OrthogonalityParams? _savedSecondProfile;
+
+    private async Task SaveCalibrationRecordAsync(OrthogonalityParams parameters)
+    {
+        try
+        {
+            var matrixJson = System.Text.Json.JsonSerializer.Serialize(parameters.CompensationMatrix);
+            var record = new OrthogonalityCalibrationRecord
+            {
+                DeviceId = SensorSerial,
+                SessionId = $"calibration_{DateTime.Now:yyyyMMddHHmmss}",
+                MatrixJson = matrixJson,
+                CreatedAt = DateTime.Now,
+                Operator = Environment.UserName,
+                Notes = ProfileNotes
+            };
+            await _calibrationRepository.SaveOrthogonalityCalibrationAsync(record);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Trace.TraceError($"保存校准记录失败: {ex.Message}");
+        }
+    }
 
     public void Cleanup()
     {

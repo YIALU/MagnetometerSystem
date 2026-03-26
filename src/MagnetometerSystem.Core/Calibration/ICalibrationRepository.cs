@@ -33,4 +33,12 @@ public interface ICalibrationRepository
 
     /// <summary>按 Id 删除校准配置</summary>
     Task DeleteCalibrationProfileAsync(string id);
+
+    // === 正交度校准记录 ===
+
+    /// <summary>保存正交度校准记录</summary>
+    Task<int> SaveOrthogonalityCalibrationAsync(OrthogonalityCalibrationRecord record);
+
+    /// <summary>查询设备的正交度校准历史</summary>
+    Task<List<OrthogonalityCalibrationRecord>> GetOrthogonalityHistoryAsync(string deviceId);
 }

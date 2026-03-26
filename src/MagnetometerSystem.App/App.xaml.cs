@@ -18,8 +18,10 @@ public partial class App : Application
 
     private void OnStartup(object sender, StartupEventArgs e)
     {
-        // 全局错误处理与日志初始化
-        GlobalErrorHandler.Initialize(this);
+        try
+        {
+            // 全局错误处理与日志初始化
+            GlobalErrorHandler.Initialize(this);
 
         var services = new ServiceCollection();
 
@@ -106,6 +108,12 @@ public partial class App : Application
             DataContext = mainVm
         };
         mainWindow.Show();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"启动失败: {ex.Message}\n\n{ex.StackTrace}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
+            Shutdown();
+        }
     }
 
     private void OnExit(object sender, ExitEventArgs e)

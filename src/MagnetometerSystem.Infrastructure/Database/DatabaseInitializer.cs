@@ -61,6 +61,29 @@ public class DatabaseInitializer
 
         var v3Sql = LoadMigrationSql("V3_CorrectedReadings.sql");
         await connection.ExecuteAsync(v3Sql);
+
+        try
+        {
+            var v4Sql = LoadMigrationSql("V4_AddGpsCoordinates.sql");
+            await connection.ExecuteAsync(v4Sql);
+        }
+        catch (SqliteException ex) when (ex.Message.Contains("duplicate column"))
+        {
+            // 列已存在，忽略错误
+        }
+
+        var v5Sql = LoadMigrationSql("V5_AddOrthogonalityTables.sql");
+        await connection.ExecuteAsync(v5Sql);
+
+        try
+        {
+            var v6Sql = LoadMigrationSql("V6_AddOriginalChannelValues.sql");
+            await connection.ExecuteAsync(v6Sql);
+        }
+        catch (SqliteException ex) when (ex.Message.Contains("duplicate column"))
+        {
+            // 列已存在，忽略错误
+        }
     }
 
     private static string LoadMigrationSql(string fileName)

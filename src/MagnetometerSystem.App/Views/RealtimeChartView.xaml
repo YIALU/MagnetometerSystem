@@ -104,15 +104,23 @@
                     </Button.Style>
                 </Button>
 
-                <Separator Style="{StaticResource {x:Static ToolBar.SeparatorStyleKey}}" Margin="0,2,15,2"/>
+                <Button Padding="10,5" Margin="0,0,8,0" Command="{Binding ToggleColumnCountCommand}">
+                    <Button.Style>
+                        <Style TargetType="Button">
+                            <Setter Property="Content" Value="双列"/>
+                            <Setter Property="IsEnabled" Value="False"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsMultiPlotMode}" Value="True">
+                                    <Setter Property="IsEnabled" Value="True"/>
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding MultiPlotColumnCount}" Value="2">
+                                    <Setter Property="Content" Value="单列"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Button.Style>
+                </Button>
 
-                <TextBlock Text="刷新率:" VerticalAlignment="Center" Margin="0,0,5,0"/>
-                <Slider Width="80" Minimum="5" Maximum="60" Value="{Binding RefreshRate}"
-                        VerticalAlignment="Center" IsSnapToTickEnabled="True" TickFrequency="5"/>
-                <TextBlock VerticalAlignment="Center" Margin="5,0,0,0">
-                    <Run Text="{Binding RefreshRate, Mode=OneWay}"/>
-                    <Run Text="fps"/>
-                </TextBlock>
             </WrapPanel>
 
             <!-- ScottPlot 图表区 -->
@@ -461,8 +469,23 @@
                             <CheckBox Content="启用正交度校正" FontSize="11" Margin="0,2"
                                       IsChecked="{Binding DataContext.ConnectionVM.IsOrthogonalityCorrectionEnabled,
                                       RelativeSource={RelativeSource AncestorType=Window}}"/>
-                            <TextBlock Text="校正在数据源端进行，" FontSize="10" Foreground="Gray" Margin="0,4,0,0"/>
-                            <TextBlock Text="需先加载校正配置。" FontSize="10" Foreground="Gray" Margin="0,0,0,0"/>
+
+                            <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                                <TextBlock Text="配置:" VerticalAlignment="Center" FontSize="11" Margin="0,0,5,0"/>
+                                <ComboBox Width="140" FontSize="11"
+                                          ItemsSource="{Binding DataContext.ConnectionVM.AvailableOrthogonalityProfiles,
+                                          RelativeSource={RelativeSource AncestorType=Window}}"
+                                          SelectedItem="{Binding DataContext.ConnectionVM.ActiveOrthogonalityProfile,
+                                          RelativeSource={RelativeSource AncestorType=Window}}"
+                                          DisplayMemberPath="Name"/>
+                            </StackPanel>
+
+                            <Button Content="刷新配置" FontSize="11" Padding="6,2" Margin="0,4,0,0"
+                                    HorizontalAlignment="Left"
+                                    Command="{Binding DataContext.ConnectionVM.LoadOrthogonalityProfilesCommand,
+                                    RelativeSource={RelativeSource AncestorType=Window}}"/>
+
+                            <TextBlock Text="校正在数据源端进行" FontSize="10" Foreground="Gray" Margin="0,4,0,0"/>
                         </StackPanel>
                     </Expander>
 

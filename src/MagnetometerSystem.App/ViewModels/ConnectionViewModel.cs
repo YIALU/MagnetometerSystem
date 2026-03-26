@@ -22,6 +22,7 @@ public partial class ConnectionViewModel : ObservableObject
     private readonly IConnectionFactory _connectionFactory;
     private readonly DataBus _dataBus;
     private readonly OrthogonalityCorrector _orthogonalityCorrector;
+    private readonly ICalibrationRepository _calibrationRepository;
     private IDeviceConnection? _connection;
     private IDataParser? _parser;
     private ISensorAdapter? _sensorAdapter;
@@ -126,6 +127,9 @@ public partial class ConnectionViewModel : ObservableObject
     [ObservableProperty]
     private bool _isOrthogonalityCorrectionEnabled;
 
+    [ObservableProperty]
+    private ObservableCollection<OrthogonalityParams> _availableOrthogonalityProfiles = new();
+
     /// <summary>当前活动的正交度校正配置（第一组三轴）</summary>
     [ObservableProperty]
     private OrthogonalityParams? _activeOrthogonalityProfile;
@@ -139,11 +143,13 @@ public partial class ConnectionViewModel : ObservableObject
     private static readonly string ProtocolConfigDir = Path.Combine(
         AppDomain.CurrentDomain.BaseDirectory, "Protocols");
 
-    public ConnectionViewModel(IConnectionFactory connectionFactory, DataBus dataBus, OrthogonalityCorrector orthogonalityCorrector)
+    public ConnectionViewModel(IConnectionFactory connectionFactory, DataBus dataBus,
+        OrthogonalityCorrector orthogonalityCorrector, ICalibrationRepository calibrationRepository)
     {
         _connectionFactory = connectionFactory;
         _dataBus = dataBus;
         _orthogonalityCorrector = orthogonalityCorrector;
+        _calibrationRepository = calibrationRepository;
 
         // 监听段列表变化，订阅每个段的 PropertyChanged
         ProtocolSegments.CollectionChanged += (s, e) =>
@@ -158,6 +164,7 @@ public partial class ConnectionViewModel : ObservableObject
 
         RefreshPorts();
         LoadSavedProtocols();
+        _ = LoadOrthogonalityProfilesAsync();
     }
 
     [RelayCommand]
@@ -301,6 +308,8 @@ public partial class ConnectionViewModel : ObservableObject
             // 正交度校正（在发布之前应用）
             if (IsOrthogonalityCorrectionEnabled && ActiveOrthogonalityProfile != null)
             {
+                // 保存原始值
+                processed.OriginalChannelValues = processed.ChannelValues.ToArray();
                 processed = _orthogonalityCorrector.ApplyToReading(
                     ActiveOrthogonalityProfile, SecondOrthogonalityProfile, processed);
             }
@@ -575,6 +584,24 @@ public partial class ConnectionViewModel : ObservableObject
         catch (Exception ex)
         {
             StatusMessage = $"导入失败: {ex.Message}";
+        }
+    }
+
+    [RelayCommand]
+    private async Task LoadOrthogonalityProfilesAsync()
+    {
+        try
+        {
+            var profiles = await _calibrationRepository.GetOrthogonalityProfilesAsync();
+            AvailableOrthogonalityProfiles.Clear();
+            foreach (var profile in profiles)
+            {
+                AvailableOrthogonalityProfiles.Add(profile);
+            }
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"加载正交度配置失败: {ex.Message}";
         }
     }
 

@@ -193,4 +193,58 @@ public class SqliteCalibrationRepository : ICalibrationRepository
             Notes = row.notes as string
         };
     }
+
+    // === 正交度校准记录 ===
+
+    public async Task<int> SaveOrthogonalityCalibrationAsync(OrthogonalityCalibrationRecord record)
+    {
+        const string sql = """
+            INSERT INTO orthogonality_calibrations
+            (device_id, session_id, matrix_json, created_at, operator, notes)
+            VALUES (@DeviceId, @SessionId, @MatrixJson, @CreatedAt, @Operator, @Notes);
+            SELECT last_insert_rowid();
+            """;
+
+        using var conn = new SqliteConnection(_dbInit.ConnectionString);
+        await conn.OpenAsync();
+
+        return await conn.ExecuteScalarAsync<int>(sql, new
+        {
+            record.DeviceId,
+            record.SessionId,
+            record.MatrixJson,
+            CreatedAt = record.CreatedAt.ToString("O"),
+            record.Operator,
+            record.Notes
+        });
+    }
+
+    public async Task<List<OrthogonalityCalibrationRecord>> GetOrthogonalityHistoryAsync(string deviceId)
+    {
+        const string sql = """
+            SELECT * FROM orthogonality_calibrations
+            WHERE device_id = @DeviceId
+            ORDER BY created_at DESC
+            """;
+
+        using var conn = new SqliteConnection(_dbInit.ConnectionString);
+        await conn.OpenAsync();
+
+        var rows = await conn.QueryAsync(sql, new { DeviceId = deviceId });
+        return rows.Select(MapToOrthogonalityRecord).ToList();
+    }
+
+    private static OrthogonalityCalibrationRecord MapToOrthogonalityRecord(dynamic row)
+    {
+        return new OrthogonalityCalibrationRecord
+        {
+            Id = (int)(long)row.id,
+            DeviceId = (string)row.device_id,
+            SessionId = (string)row.session_id,
+            MatrixJson = (string)row.matrix_json,
+            CreatedAt = DateTime.Parse((string)row.created_at, null, DateTimeStyles.RoundtripKind),
+            Operator = row.@operator as string,
+            Notes = row.notes as string
+        };
+    }
 }

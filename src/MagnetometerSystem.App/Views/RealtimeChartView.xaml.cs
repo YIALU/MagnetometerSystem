@@ -23,7 +23,8 @@ public partial class RealtimeChartView : UserControl
 
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName is nameof(RealtimeChartViewModel.IsMultiPlotMode))
+        if (e.PropertyName is nameof(RealtimeChartViewModel.IsMultiPlotMode) or
+            nameof(RealtimeChartViewModel.MultiPlotColumnCount))
         {
             RebuildMultiPlotControls();
         }
@@ -38,28 +39,59 @@ public partial class RealtimeChartView : UserControl
 
         if (!vm.IsMultiPlotMode) return;
 
-        // 为每个可见通道创建独立图表
-        int visibleCount = 0;
-        foreach (var config in vm.ChannelConfigs)
+        // 统计可见通道数
+        int visibleCount = vm.ChannelConfigs.Count(c => c.Visible);
+        if (visibleCount == 0) return;
+
+        int columnCount = vm.MultiPlotColumnCount;
+        int rowCount = (int)Math.Ceiling((double)visibleCount / columnCount);
+        double plotHeight = Math.Max(120, 400.0 / Math.Max(rowCount, 1));
+
+        // 创建网格布局
+        var grid = new System.Windows.Controls.Grid();
+
+        // 定义列
+        for (int i = 0; i < columnCount; i++)
         {
-            if (config.Visible) visibleCount++;
+            grid.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition
+            {
+                Width = new System.Windows.GridLength(1, System.Windows.GridUnitType.Star)
+            });
         }
 
-        double plotHeight = Math.Max(120, 400.0 / Math.Max(visibleCount, 1));
+        // 定义行
+        for (int i = 0; i < rowCount; i++)
+        {
+            grid.RowDefinitions.Add(new System.Windows.Controls.RowDefinition
+            {
+                Height = new System.Windows.GridLength(plotHeight)
+            });
+        }
 
+        int plotIndex = 0;
         foreach (var config in vm.ChannelConfigs)
         {
             if (!config.Visible) continue;
 
+            int row = plotIndex / columnCount;
+            int col = plotIndex % columnCount;
+
             var wpfPlot = new ScottPlot.WPF.WpfPlot
             {
-                Height = plotHeight,
-                Margin = new System.Windows.Thickness(0, 0, 0, 2),
+                Margin = new System.Windows.Thickness(2),
             };
             wpfPlot.MouseWheel += OnPlotMouseWheel;
-            MultiPlotPanel.Children.Add(wpfPlot);
+
+            System.Windows.Controls.Grid.SetRow(wpfPlot, row);
+            System.Windows.Controls.Grid.SetColumn(wpfPlot, col);
+
+            grid.Children.Add(wpfPlot);
             vm.MultiPlotControls.Add(wpfPlot);
+
+            plotIndex++;
         }
+
+        MultiPlotPanel.Children.Add(grid);
     }
 
     private void OnPlotMouseWheel(object sender, MouseWheelEventArgs e)

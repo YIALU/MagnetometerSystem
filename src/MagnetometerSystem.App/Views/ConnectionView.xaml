@@ -19,8 +19,9 @@
             </ObjectDataProvider.MethodParameters>
         </ObjectDataProvider>
     </UserControl.Resources>
-    <Grid Margin="15">
-        <Grid.RowDefinitions>
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <Grid Margin="15">
+            <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
@@ -505,5 +506,6 @@
                 </ListBox.ItemTemplate>
             </ListBox>
         </GroupBox>
-    </Grid>
+        </Grid>
+    </ScrollViewer>
 </UserControl>
