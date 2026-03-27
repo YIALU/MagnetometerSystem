@@ -5,6 +5,8 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:scottplot="clr-namespace:ScottPlot.WPF;assembly=ScottPlot.WPF"
              xmlns:sys="clr-namespace:System;assembly=System.Runtime"
+             xmlns:i="http://schemas.microsoft.com/xaml/behaviors"
+             xmlns:behaviors="clr-namespace:MagnetometerSystem.App.Behaviors"
              mc:Ignorable="d"
              d:DesignHeight="600" d:DesignWidth="1100"
              Loaded="OnLoaded">
@@ -151,7 +153,11 @@
                         </Style>
                     </Border.Style>
                     <ScrollViewer VerticalScrollBarVisibility="Auto">
-                        <StackPanel x:Name="MultiPlotPanel"/>
+                        <StackPanel x:Name="MultiPlotPanel" AllowDrop="True">
+                            <i:Interaction.Behaviors>
+                                <behaviors:DragDropBehavior/>
+                            </i:Interaction.Behaviors>
+                        </StackPanel>
                     </ScrollViewer>
                 </Border>
             </Grid>

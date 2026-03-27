@@ -10,7 +10,7 @@ public class ChannelDisplayConfig : INotifyPropertyChanged
     public event PropertyChangedEventHandler? PropertyChanged;
 
     /// <summary>通道名称</summary>
-    public string Name { get; set; } = "CH0";
+    public string Name { get; set; } = "Channel";
 
     /// <summary>通道索引</summary>
     public int ChannelIndex { get; set; }

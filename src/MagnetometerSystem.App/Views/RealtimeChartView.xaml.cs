@@ -18,6 +18,21 @@ public partial class RealtimeChartView : UserControl
         {
             vm.PlotControl = WpfPlot1;
             vm.PropertyChanged += OnViewModelPropertyChanged;
+            vm.ChannelConfigs.CollectionChanged += OnChannelConfigsChanged;
+
+            // 恢复多图表视图（如果之前是多图表模式）
+            if (vm.IsMultiPlotMode)
+            {
+                RebuildMultiPlotControls();
+            }
+        }
+    }
+
+    private void OnChannelConfigsChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+    {
+        if (DataContext is RealtimeChartViewModel vm && vm.IsMultiPlotMode)
+        {
+            RebuildMultiPlotControls();
         }
     }
 

@@ -84,6 +84,9 @@ public class DatabaseInitializer
         {
             // 列已存在，忽略错误
         }
+
+        var v7Sql = LoadMigrationSql("V7_AddUserPreferences.sql");
+        await connection.ExecuteAsync(v7Sql);
     }
 
     private static string LoadMigrationSql(string fileName)

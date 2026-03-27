@@ -13,12 +13,22 @@ using ScottPlot;
 namespace MagnetometerSystem.App.ViewModels;
 
 /// <summary>
+/// 视图模式枚举
+/// </summary>
+public enum ViewMode
+{
+    Single,
+    Multi
+}
+
+/// <summary>
 /// 实时曲线绘制 ViewModel
 /// </summary>
 public partial class RealtimeChartViewModel : ObservableObject, IDisposable
 {
     private readonly DataBus _dataBus;
     private readonly DispatcherTimer _renderTimer;
+    private readonly IUserPreferencesService? _preferencesService;
 
     // 每个通道的数据缓冲（时间戳 + 值）
     private readonly CircularBuffer<double> _timeBuffer = new(100000);
@@ -27,7 +37,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
     private const int MaxChannels = 16;
 
     private int _channelCount;
-    private string[] _channelNames = ["CH0"];
+    private string[] _channelNames = [];
     private DateTime _startTime;
     private bool _isAcquiring;
     private bool _disposed;
@@ -140,6 +150,9 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private int _multiPlotColumnCount = 1;
 
+    [ObservableProperty]
+    private ViewMode _currentViewMode = ViewMode.Single;
+
     // 多图表控件引用（由 View 的 code-behind 设置）
     public List<ScottPlot.WPF.WpfPlot> MultiPlotControls { get; set; } = new();
 
@@ -179,9 +192,10 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
         set => SetProperty(ref _gradientBaselineDistance, value);
     }
 
-    public RealtimeChartViewModel(DataBus dataBus)
+    public RealtimeChartViewModel(DataBus dataBus, IUserPreferencesService? preferencesService = null)
     {
         _dataBus = dataBus;
+        _preferencesService = preferencesService;
 
         // 预创建通道缓冲
         _channelBuffers = new CircularBuffer<double>[MaxChannels];
@@ -242,6 +256,9 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
 
             SetupPlot();
             _renderTimer.Start();
+
+            // 恢复图表顺序
+            LoadChartOrderAsync().ConfigureAwait(false);
         });
     }
 
@@ -413,6 +430,53 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
             plotCtrl.Refresh();
             plotIdx++;
         }
+
+        // 绘制计算通道
+        foreach (var computed in ComputedChannels)
+        {
+            if (!computed.Enabled || string.IsNullOrWhiteSpace(computed.Formula))
+                continue;
+
+            if (plotIdx >= MultiPlotControls.Count) break;
+
+            var evaluator = GetOrCreateEvaluator(computed.Formula);
+            if (evaluator == null) continue;
+
+            var plotCtrl = MultiPlotControls[plotIdx];
+            var plot = plotCtrl.Plot;
+            plot.Clear();
+
+            var computedValues = new double[count];
+            for (int i = 0; i < count; i++)
+            {
+                var chVals = new double[_channelCount];
+                for (int ch = 0; ch < _channelCount; ch++)
+                {
+                    if (channelData[ch].Length > startIdx + i)
+                        chVals[ch] = channelData[ch][startIdx + i];
+                }
+                computedValues[i] = evaluator.Evaluate(chVals);
+            }
+
+            if (computed.DisplayOffset != 0)
+            {
+                for (int i = 0; i < computedValues.Length; i++)
+                    computedValues[i] += computed.DisplayOffset;
+            }
+
+            computedValues = ApplyFilter(computedValues);
+
+            var (plotXs, plotYs) = ApplyDownsampling(windowTimes, computedValues);
+            var compSig = plot.Add.ScatterLine(plotXs, plotYs);
+            var (ca, cr, cg, cb) = new ChannelDisplayConfig { ColorHex = computed.ColorHex }.ParseColor();
+            compSig.Color = new ScottPlot.Color(cr, cg, cb, ca);
+            compSig.LineWidth = computed.LineWidth;
+
+            plot.Axes.Left.Label.Text = computed.Name;
+            ConfigurePlotAxes(plot, xMin, xMax);
+            plotCtrl.Refresh();
+            plotIdx++;
+        }
     }
 
     private void RenderComputedChannels(ScottPlot.Plot plot, double[] windowTimes,
@@ -569,6 +633,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
     private void ToggleMultiPlotMode()
     {
         IsMultiPlotMode = !IsMultiPlotMode;
+        CurrentViewMode = IsMultiPlotMode ? ViewMode.Multi : ViewMode.Single;
     }
 
     [RelayCommand]
@@ -625,10 +690,11 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private void AddComputedChannel()
     {
+        string defaultFormula = _channelNames.Length > 0 ? _channelNames[0] : "CH0";
         ComputedChannels.Add(new ComputedChannelDefinition
         {
             Name = $"Calc{ComputedChannels.Count}",
-            Formula = "CH0",
+            Formula = defaultFormula,
             ChannelType = ComputedChannelType.Custom,
             ColorHex = "#FF000000",
         });
@@ -971,6 +1037,50 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
                 writer.WriteLine();
             }
         });
+    }
+
+    // ---- 拖拽排序 ----
+
+    public void ReorderChannels(int sourceIndex, int targetIndex)
+    {
+        if (sourceIndex < 0 || targetIndex < 0 || sourceIndex >= ChannelConfigs.Count || targetIndex >= ChannelConfigs.Count)
+            return;
+
+        var item = ChannelConfigs[sourceIndex];
+        ChannelConfigs.RemoveAt(sourceIndex);
+        ChannelConfigs.Insert(targetIndex, item);
+
+        SaveChartOrderAsync().ConfigureAwait(false);
+    }
+
+    private async Task SaveChartOrderAsync()
+    {
+        if (_preferencesService == null) return;
+
+        var order = ChannelConfigs.Select(c => c.ChannelIndex).ToArray();
+        await _preferencesService.SetPreferenceAsync("ChartOrder", order);
+    }
+
+    public async Task LoadChartOrderAsync()
+    {
+        if (_preferencesService == null) return;
+
+        var order = await _preferencesService.GetPreferenceAsync<int[]>("ChartOrder");
+        if (order == null || order.Length != ChannelConfigs.Count) return;
+
+        var reordered = new List<ChannelDisplayConfig>();
+        foreach (var index in order)
+        {
+            var config = ChannelConfigs.FirstOrDefault(c => c.ChannelIndex == index);
+            if (config != null) reordered.Add(config);
+        }
+
+        if (reordered.Count == ChannelConfigs.Count)
+        {
+            ChannelConfigs.Clear();
+            foreach (var config in reordered)
+                ChannelConfigs.Add(config);
+        }
     }
 
     public void Dispose()

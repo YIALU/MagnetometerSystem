@@ -7,6 +7,7 @@ using MagnetometerSystem.Core.Storage;
 using MagnetometerSystem.Infrastructure.Configuration;
 using MagnetometerSystem.Infrastructure.Database;
 using MagnetometerSystem.Infrastructure.Export;
+using MagnetometerSystem.Infrastructure.Services;
 using MagnetometerSystem.App.Services;
 using MagnetometerSystem.App.ViewModels;
 
@@ -51,6 +52,7 @@ public partial class App : Application
 
         // ---- Stream E: 配置持久化 (TASK-F3) ----
         services.AddSingleton<IAppConfigService, AppConfigService>();
+        services.AddSingleton<Infrastructure.Services.IUserPreferencesService, Infrastructure.Services.UserPreferencesService>();
 
         // ---- 新增页面 ----
         services.AddTransient<SensorCalibrationViewModel>();
