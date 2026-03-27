@@ -611,6 +611,7 @@ public partial class ConnectionViewModel : ObservableObject
 
         // 添加内置预设
         SavedProtocols.Add(ProtocolConfig.CreateDefaultAsciiTriaxial());
+        SavedProtocols.Add(ProtocolConfig.CreateDefaultAsciiDualTriaxial());
         SavedProtocols.Add(ProtocolConfig.CreateDefaultBinaryTriaxial());
         SavedProtocols.Add(ProtocolConfig.CreateDefaultBinaryTriaxialSegments());
 

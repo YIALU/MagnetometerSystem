@@ -291,6 +291,28 @@ public class ProtocolConfig
     }
 
     /// <summary>
+    /// 创建双三轴 ASCII 协议的默认配置（6通道）
+    /// </summary>
+    public static ProtocolConfig CreateDefaultAsciiDualTriaxial()
+    {
+        return new ProtocolConfig
+        {
+            Name = "双三轴 ASCII (逗号分隔)",
+            Category = ProtocolCategory.Ascii,
+            AsciiDelimiter = ",",
+            FieldMappings =
+            [
+                new() { Name = "X1", ChannelIndex = 0, ByteOffset = 0 },
+                new() { Name = "Y1", ChannelIndex = 1, ByteOffset = 1 },
+                new() { Name = "Z1", ChannelIndex = 2, ByteOffset = 2 },
+                new() { Name = "X2", ChannelIndex = 3, ByteOffset = 3 },
+                new() { Name = "Y2", ChannelIndex = 4, ByteOffset = 4 },
+                new() { Name = "Z2", ChannelIndex = 5, ByteOffset = 5 },
+            ]
+        };
+    }
+
+    /// <summary>
     /// 遍历 Segments 累加 ByteCount，设置每段的 ComputedOffset
     /// </summary>
     public void ComputeSegmentOffsets()
