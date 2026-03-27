@@ -88,10 +88,10 @@ public class DragDropBehavior : Behavior<Panel>
 
     private UIElement? FindChartElement(DependencyObject? source)
     {
-        while (source != null && source != AssociatedObject)
+        while (source != null)
         {
-            if (source is Grid grid && grid.Parent is Panel panel && panel == AssociatedObject)
-                return grid;
+            if (source is ScottPlot.WPF.WpfPlot wpfPlot)
+                return wpfPlot;
             source = VisualTreeHelper.GetParent(source);
         }
         return null;
@@ -101,7 +101,8 @@ public class DragDropBehavior : Behavior<Panel>
     {
         if (AssociatedObject.Children.Count == 0) return -1;
         var grid = AssociatedObject.Children[0] as Grid;
-        return grid?.Children.IndexOf(element) ?? -1;
+        if (grid == null) return -1;
+        return grid.Children.IndexOf(element);
     }
 
     private RealtimeChartViewModel? GetViewModel()

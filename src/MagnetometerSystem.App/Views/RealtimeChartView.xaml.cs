@@ -19,6 +19,7 @@ public partial class RealtimeChartView : UserControl
             vm.PlotControl = WpfPlot1;
             vm.PropertyChanged += OnViewModelPropertyChanged;
             vm.ChannelConfigs.CollectionChanged += OnChannelConfigsChanged;
+            vm.ComputedChannels.CollectionChanged += OnComputedChannelsChanged;
 
             // 恢复多图表视图（如果之前是多图表模式）
             if (vm.IsMultiPlotMode)
@@ -29,6 +30,14 @@ public partial class RealtimeChartView : UserControl
     }
 
     private void OnChannelConfigsChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+    {
+        if (DataContext is RealtimeChartViewModel vm && vm.IsMultiPlotMode)
+        {
+            RebuildMultiPlotControls();
+        }
+    }
+
+    private void OnComputedChannelsChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
     {
         if (DataContext is RealtimeChartViewModel vm && vm.IsMultiPlotMode)
         {
@@ -54,12 +63,15 @@ public partial class RealtimeChartView : UserControl
 
         if (!vm.IsMultiPlotMode) return;
 
-        // 统计可见通道数
-        int visibleCount = vm.ChannelConfigs.Count(c => c.Visible);
-        if (visibleCount == 0) return;
+        // 统计可见通道数和启用的计算通道数
+        int visibleChannelCount = vm.ChannelConfigs.Count(c => c.Visible);
+        int enabledComputedCount = vm.ComputedChannels.Count(c => c.Enabled);
+        int totalPlotCount = visibleChannelCount + enabledComputedCount;
+
+        if (totalPlotCount == 0) return;
 
         int columnCount = vm.MultiPlotColumnCount;
-        int rowCount = (int)Math.Ceiling((double)visibleCount / columnCount);
+        int rowCount = (int)Math.Ceiling((double)totalPlotCount / columnCount);
         double plotHeight = Math.Max(120, 400.0 / Math.Max(rowCount, 1));
 
         // 创建网格布局
@@ -87,6 +99,29 @@ public partial class RealtimeChartView : UserControl
         foreach (var config in vm.ChannelConfigs)
         {
             if (!config.Visible) continue;
+
+            int row = plotIndex / columnCount;
+            int col = plotIndex % columnCount;
+
+            var wpfPlot = new ScottPlot.WPF.WpfPlot
+            {
+                Margin = new System.Windows.Thickness(2),
+            };
+            wpfPlot.MouseWheel += OnPlotMouseWheel;
+
+            System.Windows.Controls.Grid.SetRow(wpfPlot, row);
+            System.Windows.Controls.Grid.SetColumn(wpfPlot, col);
+
+            grid.Children.Add(wpfPlot);
+            vm.MultiPlotControls.Add(wpfPlot);
+
+            plotIndex++;
+        }
+
+        // 为计算通道创建图表
+        foreach (var computed in vm.ComputedChannels)
+        {
+            if (!computed.Enabled) continue;
 
             int row = plotIndex / columnCount;
             int col = plotIndex % columnCount;
