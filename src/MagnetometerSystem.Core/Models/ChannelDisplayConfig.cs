@@ -31,7 +31,19 @@ public class ChannelDisplayConfig : INotifyPropertyChanged
     }
 
     /// <summary>是否在图表中显示</summary>
-    public bool Visible { get; set; } = true;
+    private bool _visible = true;
+    public bool Visible
+    {
+        get => _visible;
+        set
+        {
+            if (_visible != value)
+            {
+                _visible = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Visible)));
+            }
+        }
+    }
 
     /// <summary>曲线颜色（ARGB hex 字符串，如 "#FF0000FF"）</summary>
     public string ColorHex { get; set; } = "#FF0000FF";

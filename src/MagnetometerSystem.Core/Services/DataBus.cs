@@ -1,3 +1,4 @@
+using MagnetometerSystem.Core.Communication;
 using MagnetometerSystem.Core.Models;
 
 namespace MagnetometerSystem.Core.Services;
@@ -22,6 +23,15 @@ public class DataBus
     /// <summary>会话结束时触发，参数为 sessionId</summary>
     public event Action<string>? SessionEnded;
 
+    /// <summary>连接变化事件</summary>
+    public event Action<IDeviceConnection?>? ConnectionChanged;
+
+    /// <summary>当前活跃连接</summary>
+    public IDeviceConnection? CurrentConnection { get; private set; }
+
+    /// <summary>是否处于回放模式（回放时不写入数据库）</summary>
+    public bool IsPlaybackMode { get; set; }
+
     public void PublishReading(MagnetometerReading reading)
     {
         ReadingReceived?.Invoke(reading);
@@ -45,5 +55,11 @@ public class DataBus
     public void PublishSessionEnded(string sessionId)
     {
         SessionEnded?.Invoke(sessionId);
+    }
+
+    public void PublishConnectionChanged(IDeviceConnection? connection)
+    {
+        CurrentConnection = connection;
+        ConnectionChanged?.Invoke(connection);
     }
 }

@@ -23,6 +23,13 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty]
     private long _dataCount;
 
+    /// <summary>
+    /// 后台初始化（数据库迁移 + 配置加载）是否已完成。
+    /// 初始为 false，完成后置为 true，用于驱动加载遮���的可见性。
+    /// </summary>
+    [ObservableProperty]
+    private bool _isInitialized = false;
+
     public ConnectionViewModel ConnectionVM { get; }
     public RealtimeChartViewModel RealtimeChartVM { get; }
     public SessionListViewModel SessionListVM { get; }
@@ -30,8 +37,9 @@ public partial class MainViewModel : ObservableObject
     public OrthogonalityCalibrationViewModel OrthoCalibVM { get; }
     public SensorCalibrationViewModel SensorCalibVM { get; }
     public SettingsViewModel SettingsVM { get; }
+    public DeviceCommandViewModel DeviceCommandVM { get; }
 
-    public MainViewModel(ConnectionViewModel connectionVm, RealtimeChartViewModel realtimeChartVm, SessionListViewModel sessionListVm, HistoryPlaybackViewModel historyPlaybackVm, OrthogonalityCalibrationViewModel orthoCalibVm, SensorCalibrationViewModel sensorCalibVm, SettingsViewModel settingsVm)
+    public MainViewModel(ConnectionViewModel connectionVm, RealtimeChartViewModel realtimeChartVm, SessionListViewModel sessionListVm, HistoryPlaybackViewModel historyPlaybackVm, OrthogonalityCalibrationViewModel orthoCalibVm, SensorCalibrationViewModel sensorCalibVm, SettingsViewModel settingsVm, DeviceCommandViewModel deviceCommandVm)
     {
         ConnectionVM = connectionVm;
         RealtimeChartVM = realtimeChartVm;
@@ -40,6 +48,7 @@ public partial class MainViewModel : ObservableObject
         OrthoCalibVM = orthoCalibVm;
         SensorCalibVM = sensorCalibVm;
         SettingsVM = settingsVm;
+        DeviceCommandVM = deviceCommandVm;
         CurrentView = connectionVm;
 
         // 订阅连接状态变化
@@ -93,6 +102,7 @@ public partial class MainViewModel : ObservableObject
     private void NavigateToConnection()
     {
         CurrentView = ConnectionVM;
+        _ = ConnectionVM.EnsureLoadedAsync();
     }
 
     [RelayCommand]
@@ -105,29 +115,40 @@ public partial class MainViewModel : ObservableObject
     private void NavigateToSessionList()
     {
         CurrentView = SessionListVM;
+        _ = SessionListVM.EnsureLoadedAsync();
     }
 
     [RelayCommand]
     private void NavigateToHistoryPlayback()
     {
         CurrentView = HistoryPlaybackVM;
+        _ = HistoryPlaybackVM.EnsureLoadedAsync();
     }
 
     [RelayCommand]
     private void NavigateToOrthogonalityCalibration()
     {
         CurrentView = OrthoCalibVM;
+        _ = OrthoCalibVM.EnsureLoadedAsync();
     }
 
     [RelayCommand]
     private void NavigateToSensorCalibration()
     {
         CurrentView = SensorCalibVM;
+        _ = SensorCalibVM.EnsureLoadedAsync();
     }
 
     [RelayCommand]
     private void NavigateToSettings()
     {
         CurrentView = SettingsVM;
+        _ = SettingsVM.EnsureLoadedAsync();
+    }
+
+    [RelayCommand]
+    private void NavigateToDeviceCommand()
+    {
+        CurrentView = DeviceCommandVM;
     }
 }

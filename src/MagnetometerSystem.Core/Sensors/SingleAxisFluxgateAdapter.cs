@@ -18,10 +18,6 @@ public class SingleAxisFluxgateAdapter : ISensorAdapter
     public MagnetometerReading Process(MagnetometerReading rawReading)
     {
         rawReading.SensorType = SensorType;
-        if (rawReading.ChannelValues.Length >= 1)
-        {
-            rawReading.TotalField = Math.Abs(rawReading.ChannelValues[0]);
-        }
         return rawReading;
     }
 

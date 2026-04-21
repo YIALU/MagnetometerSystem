@@ -60,7 +60,6 @@ public class SqliteStorageServiceTests : IAsyncLifetime
         Timestamp = timestamp,
         SensorType = SensorType.TriaxialFluxgate,
         ChannelValues = values,
-        TotalField = Math.Sqrt(values.Sum(v => v * v)),
         IsCalibrated = false,
         IsOrthogonalityCorrected = false
     };
@@ -244,7 +243,6 @@ public class SqliteStorageServiceTests : IAsyncLifetime
                 Timestamp = baseTime,
                 SensorType = SensorType.DualTriaxialFluxgate,
                 ChannelValues = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
-                TotalField = Math.Sqrt(1 + 4 + 9),
                 IsCalibrated = true,
                 IsOrthogonalityCorrected = true
             }

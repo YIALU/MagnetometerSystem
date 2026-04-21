@@ -21,15 +21,6 @@ public class DualTriaxialFluxgateAdapter : ISensorAdapter
     public MagnetometerReading Process(MagnetometerReading rawReading)
     {
         rawReading.SensorType = SensorType;
-        if (rawReading.ChannelValues.Length >= 6)
-        {
-            double x1 = rawReading.ChannelValues[0];
-            double y1 = rawReading.ChannelValues[1];
-            double z1 = rawReading.ChannelValues[2];
-
-            // 第一组传感器总场
-            rawReading.TotalField = Math.Sqrt(x1 * x1 + y1 * y1 + z1 * z1);
-        }
         return rawReading;
     }
 

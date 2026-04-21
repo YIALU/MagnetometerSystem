@@ -103,9 +103,16 @@ public partial class HistoryPlaybackViewModel : ObservableObject
         _orthogonalityCorrector = orthogonalityCorrector;
         _calibrationRepository = calibrationRepository;
 
-        // 初始加载会话列表
-        _ = LoadAvailableSessionsAsync();
-        _ = LoadOrthogonalityProfilesAsync();
+        // 延迟加载：用户首次切换到回放页面时才加载
+    }
+
+    private bool _isLoaded;
+    public async Task EnsureLoadedAsync()
+    {
+        if (_isLoaded) return;
+        _isLoaded = true;
+        await LoadAvailableSessionsAsync();
+        await LoadOrthogonalityProfilesAsync();
     }
 
     [RelayCommand]
@@ -214,6 +221,8 @@ public partial class HistoryPlaybackViewModel : ObservableObject
     {
         if (_readings.Length == 0) return Task.CompletedTask;
 
+        _dataBus.IsPlaybackMode = true;
+
         if (State == PlaybackState.Ready || State == PlaybackState.Completed)
         {
             // 从头开始或从完成状态重新开始：发布 AcquisitionStarted
@@ -257,6 +266,7 @@ public partial class HistoryPlaybackViewModel : ObservableObject
         _playbackTimer?.Stop();
         _playbackTimer = null;
 
+        _dataBus.IsPlaybackMode = false;
         _dataBus.PublishAcquisitionStopped();
 
         CurrentIndex = 0;
@@ -339,6 +349,7 @@ public partial class HistoryPlaybackViewModel : ObservableObject
             // 回放完成
             _playbackTimer?.Stop();
             _playbackTimer = null;
+            _dataBus.IsPlaybackMode = false;
             State = PlaybackState.Completed;
             IsPlaying = false;
             IsPaused = false;

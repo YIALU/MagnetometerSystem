@@ -64,7 +64,6 @@ public class CsvExporterTests : IAsyncLifetime
                 Timestamp = bt.AddSeconds(i),
                 SensorType = SensorType.TriaxialFluxgate,
                 ChannelValues = [i * 1.0, i * 2.0, i * 3.0],
-                TotalField = Math.Sqrt(i * i * 1.0 + i * i * 4.0 + i * i * 9.0),
                 IsCalibrated = false,
                 IsOrthogonalityCorrected = false
             }).ToArray();
@@ -98,7 +97,6 @@ public class CsvExporterTests : IAsyncLifetime
         Assert.Contains("X", lines[0]);
         Assert.Contains("Y", lines[0]);
         Assert.Contains("Z", lines[0]);
-        Assert.Contains("TotalField", lines[0]);
     }
 
     [Fact]
@@ -119,12 +117,11 @@ public class CsvExporterTests : IAsyncLifetime
         var lines = await File.ReadAllLinesAsync(_csvPath);
         var header = lines[0];
         var headerParts = header.Split(',');
-        // Timestamp, X, Z, TotalField = 4 columns
-        Assert.Equal(4, headerParts.Length);
+        // Timestamp, X, Z = 3 columns
+        Assert.Equal(3, headerParts.Length);
         Assert.Equal("Timestamp", headerParts[0]);
         Assert.Equal("X", headerParts[1]);
         Assert.Equal("Z", headerParts[2]);
-        Assert.Equal("TotalField", headerParts[3]);
     }
 
     [Fact]
@@ -203,7 +200,6 @@ public class CsvExporterTests : IAsyncLifetime
                 Timestamp = baseTime.AddMilliseconds(i),
                 SensorType = SensorType.TriaxialFluxgate,
                 ChannelValues = [i * 1.0, i * 2.0, i * 3.0],
-                TotalField = Math.Sqrt(i * i * 14.0),
                 IsCalibrated = false,
                 IsOrthogonalityCorrected = false
             }).ToArray();

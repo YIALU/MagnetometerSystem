@@ -124,8 +124,6 @@ public class CsvExporter : IDataExporter
             parts.Add(idx < channelNames.Length ? channelNames[idx] : $"CH{idx}");
         }
 
-        parts.Add("TotalField");
-
         if (options.IncludeCalibratedData)
         {
             parts.Add("IsCalibrated");
@@ -152,13 +150,6 @@ public class CsvExporter : IDataExporter
                 sb.Append(reading.ChannelValues[idx].ToString("R")); // Round-trip 全精度
             }
             // 超出范围则输出空
-        }
-
-        // TotalField
-        sb.Append(',');
-        if (reading.TotalField.HasValue)
-        {
-            sb.Append(reading.TotalField.Value.ToString("R"));
         }
 
         // 校准状态列

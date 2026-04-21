@@ -103,14 +103,22 @@ public partial class SessionListViewModel : ObservableObject
         _dataBus.AcquisitionStopped += OnAcquisitionStopped;
         _dataBus.ReadingReceived += OnReadingReceived;
 
-        // 初始加载会话列表
-        _ = RefreshSessionsAsync();
+        // 会话列表延迟加载：等用户首次导航到此页面时再加载
+    }
+
+    private bool _isLoaded;
+    public async Task EnsureLoadedAsync()
+    {
+        if (_isLoaded) return;
+        _isLoaded = true;
+        await RefreshSessionsAsync();
     }
 
     // ---- 采集生命周期管理 ----
 
     private async void OnAcquisitionStarted(SensorConfig config)
     {
+        if (_dataBus.IsPlaybackMode) return;
         _currentSensorConfig = config;
 
         var name = $"采集_{DateTime.Now:yyyy-MM-dd_HH:mm:ss}";
@@ -169,7 +177,7 @@ public partial class SessionListViewModel : ObservableObject
 
     private void OnReadingReceived(MagnetometerReading reading)
     {
-        if (ActiveSessionId == null) return;
+        if (ActiveSessionId == null || _dataBus.IsPlaybackMode) return;
 
         // 设置会话 ID
         reading.SessionId = ActiveSessionId;
@@ -299,11 +307,20 @@ public partial class SessionListViewModel : ObservableObject
     {
         if (session == null) return;
 
+        var suffix = session.ChannelCount switch
+        {
+            3 => "_3C",
+            6 => "_3CG",
+            _ => "_Custom"
+        };
+        var timestamp = session.StartedAt.ToString("yyyy-MM-dd_HH-mm-ss");
+        var fileName = $"{timestamp}{suffix}.csv";
+
         var dialog = new Microsoft.Win32.SaveFileDialog
         {
             Title = "导出会话数据",
             Filter = "CSV 文件 (*.csv)|*.csv",
-            FileName = $"{session.Name}.csv",
+            FileName = fileName,
             DefaultExt = ".csv"
         };
 

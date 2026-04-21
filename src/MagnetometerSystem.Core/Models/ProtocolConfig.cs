@@ -153,6 +153,20 @@ public class ProtocolConfig
     /// <summary>创建时间</summary>
     public DateTime CreatedAt { get; set; } = DateTime.Now;
 
+    // ==== 派生属性 ====
+
+    /// <summary>从协议配置派生的通道数量</summary>
+    [JsonIgnore]
+    public int DerivedChannelCount => UsesSegments
+        ? Segments.Count(s => s.Type == SegmentType.DataField)
+        : FieldMappings.Count;
+
+    /// <summary>从协议配置派生的通道名称列表</summary>
+    [JsonIgnore]
+    public List<string> DerivedChannelNames => UsesSegments
+        ? Segments.Where(s => s.Type == SegmentType.DataField).Select(s => s.Name).ToList()
+        : FieldMappings.Select(f => f.Name).ToList();
+
     // ==== 辅助方法 ====
 
     /// <summary>将十六进制字符串转为字节数组</summary>

@@ -29,42 +29,9 @@ public class MagnetometerReading
     /// <summary>原始通道值（校正前），仅在应用校正时保存</summary>
     public double[]? OriginalChannelValues { get; set; }
 
-    /// <summary>总场强度 (nT)，对三轴传感器为 sqrt(X²+Y²+Z²)</summary>
-    public double? TotalField { get; set; }
-
     /// <summary>是否已做传感器校准（偏移+增益）</summary>
     public bool IsCalibrated { get; set; }
 
     /// <summary>是否已做正交度校正</summary>
     public bool IsOrthogonalityCorrected { get; set; }
-
-    /// <summary>
-    /// 根据通道值计算总场（适用于三轴传感器）
-    /// </summary>
-    public void ComputeTotalField()
-    {
-        if (SensorType == SensorType.TriaxialFluxgate && ChannelValues.Length >= 3)
-        {
-            TotalField = Math.Sqrt(
-                ChannelValues[0] * ChannelValues[0] +
-                ChannelValues[1] * ChannelValues[1] +
-                ChannelValues[2] * ChannelValues[2]);
-        }
-        else if (SensorType == SensorType.DualTriaxialFluxgate && ChannelValues.Length >= 6)
-        {
-            // 第一组三轴的总场
-            TotalField = Math.Sqrt(
-                ChannelValues[0] * ChannelValues[0] +
-                ChannelValues[1] * ChannelValues[1] +
-                ChannelValues[2] * ChannelValues[2]);
-        }
-        else if (SensorType == SensorType.SingleAxisFluxgate && ChannelValues.Length >= 1)
-        {
-            TotalField = Math.Abs(ChannelValues[0]);
-        }
-        else if (SensorType == SensorType.ProtonMagnetometer && ChannelValues.Length >= 1)
-        {
-            TotalField = ChannelValues[0];
-        }
-    }
 }

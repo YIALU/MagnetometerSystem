@@ -153,6 +153,12 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private ViewMode _currentViewMode = ViewMode.Single;
 
+    [ObservableProperty]
+    private double _singlePlotHeight = 400;
+
+    [ObservableProperty]
+    private double _multiPlotHeight = 200;
+
     // 多图表控件引用（由 View 的 code-behind 设置）
     public List<ScottPlot.WPF.WpfPlot> MultiPlotControls { get; set; } = new();
 

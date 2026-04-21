@@ -21,6 +21,10 @@ public partial class RealtimeChartView : UserControl
             vm.ChannelConfigs.CollectionChanged += OnChannelConfigsChanged;
             vm.ComputedChannels.CollectionChanged += OnComputedChannelsChanged;
 
+            // 订阅已存在的通道配置的属性变化
+            foreach (var config in vm.ChannelConfigs)
+                config.PropertyChanged += OnChannelConfigPropertyChanged;
+
             // 恢复多图表视图（如果之前是多图表模式）
             if (vm.IsMultiPlotMode)
             {
@@ -31,10 +35,21 @@ public partial class RealtimeChartView : UserControl
 
     private void OnChannelConfigsChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
     {
+        if (e.OldItems != null)
+            foreach (Core.Models.ChannelDisplayConfig config in e.OldItems)
+                config.PropertyChanged -= OnChannelConfigPropertyChanged;
+        if (e.NewItems != null)
+            foreach (Core.Models.ChannelDisplayConfig config in e.NewItems)
+                config.PropertyChanged += OnChannelConfigPropertyChanged;
+
         if (DataContext is RealtimeChartViewModel vm && vm.IsMultiPlotMode)
-        {
             RebuildMultiPlotControls();
-        }
+    }
+
+    private void OnChannelConfigPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(Core.Models.ChannelDisplayConfig.Visible))
+            RebuildMultiPlotControls();
     }
 
     private void OnComputedChannelsChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
@@ -48,7 +63,8 @@ public partial class RealtimeChartView : UserControl
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName is nameof(RealtimeChartViewModel.IsMultiPlotMode) or
-            nameof(RealtimeChartViewModel.MultiPlotColumnCount))
+            nameof(RealtimeChartViewModel.MultiPlotColumnCount) or
+            nameof(RealtimeChartViewModel.MultiPlotHeight))
         {
             RebuildMultiPlotControls();
         }
@@ -70,9 +86,10 @@ public partial class RealtimeChartView : UserControl
 
         if (totalPlotCount == 0) return;
 
-        int columnCount = vm.MultiPlotColumnCount;
+        // 统一布局：完全由 MultiPlotColumnCount 决定列数，不对通道数特判
+        int columnCount = Math.Max(1, vm.MultiPlotColumnCount);
         int rowCount = (int)Math.Ceiling((double)totalPlotCount / columnCount);
-        double plotHeight = Math.Max(120, 400.0 / Math.Max(rowCount, 1));
+        double plotHeight = vm.MultiPlotHeight;
 
         // 创建网格布局
         var grid = new System.Windows.Controls.Grid();
@@ -95,13 +112,13 @@ public partial class RealtimeChartView : UserControl
             });
         }
 
-        int plotIndex = 0;
+        int channelIndex = 0;
         foreach (var config in vm.ChannelConfigs)
         {
             if (!config.Visible) continue;
 
-            int row = plotIndex / columnCount;
-            int col = plotIndex % columnCount;
+            int row = channelIndex / columnCount;
+            int col = channelIndex % columnCount;
 
             var wpfPlot = new ScottPlot.WPF.WpfPlot
             {
@@ -115,16 +132,16 @@ public partial class RealtimeChartView : UserControl
             grid.Children.Add(wpfPlot);
             vm.MultiPlotControls.Add(wpfPlot);
 
-            plotIndex++;
+            channelIndex++;
         }
 
-        // 为计算通道创建图表
+        // 为计算通道创建图表（与 raw 通道使用同一套行列公式，避免覆盖）
         foreach (var computed in vm.ComputedChannels)
         {
             if (!computed.Enabled) continue;
 
-            int row = plotIndex / columnCount;
-            int col = plotIndex % columnCount;
+            int row = channelIndex / columnCount;
+            int col = channelIndex % columnCount;
 
             var wpfPlot = new ScottPlot.WPF.WpfPlot
             {
@@ -138,7 +155,7 @@ public partial class RealtimeChartView : UserControl
             grid.Children.Add(wpfPlot);
             vm.MultiPlotControls.Add(wpfPlot);
 
-            plotIndex++;
+            channelIndex++;
         }
 
         MultiPlotPanel.Children.Add(grid);

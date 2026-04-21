@@ -163,8 +163,16 @@ public partial class ConnectionViewModel : ObservableObject
         };
 
         RefreshPorts();
+        // 协议配置和正交度配置延迟加载（构造函数只做最小化初始化）
+    }
+
+    private bool _isLoaded;
+    public async Task EnsureLoadedAsync()
+    {
+        if (_isLoaded) return;
+        _isLoaded = true;
         LoadSavedProtocols();
-        _ = LoadOrthogonalityProfilesAsync();
+        await LoadOrthogonalityProfilesAsync();
     }
 
     [RelayCommand]
@@ -199,17 +207,10 @@ public partial class ConnectionViewModel : ObservableObject
             };
 
             // 从协议配置中提取通道信息，覆盖传感器类型的默认值
-            if (ProtocolConfig.UsesSegments)
+            if (ProtocolConfig.DerivedChannelCount > 0)
             {
-                var dataFields = ProtocolConfig.Segments
-                    .Where(s => s.Type == SegmentType.DataField)
-                    .OrderBy(s => s.ComputedOffset)
-                    .ToList();
-                if (dataFields.Count > 0)
-                {
-                    sensorConfig.ChannelCountOverride = dataFields.Count;
-                    sensorConfig.ChannelNamesOverride = dataFields.Select(f => f.Name).ToArray();
-                }
+                sensorConfig.ChannelCountOverride = ProtocolConfig.DerivedChannelCount;
+                sensorConfig.ChannelNamesOverride = ProtocolConfig.DerivedChannelNames.ToArray();
             }
 
             if (!sensorConfig.ValidateSampleRate())
@@ -245,6 +246,7 @@ public partial class ConnectionViewModel : ObservableObject
             StatusMessage = "正在连接...";
             await _connection.ConnectAsync();
             StatusMessage = "已连接";
+            _dataBus.PublishConnectionChanged(_connection);
 
             // 通知数据总线采集开始
             _dataBus.PublishAcquisitionStarted(sensorConfig);
@@ -259,6 +261,7 @@ public partial class ConnectionViewModel : ObservableObject
                 _connection.ConnectionStateChanged -= OnConnectionStateChanged;
                 try { await _connection.DisposeAsync(); } catch { }
                 _connection = null;
+                _dataBus.PublishConnectionChanged(null);
             }
             _parser = null;
             _sensorAdapter = null;
@@ -276,6 +279,7 @@ public partial class ConnectionViewModel : ObservableObject
             await _connection.DisconnectAsync();
             await _connection.DisposeAsync();
             _connection = null;
+            _dataBus.PublishConnectionChanged(null);
         }
         _parser?.Reset();
         _parser = null;
@@ -321,8 +325,6 @@ public partial class ConnectionViewModel : ObservableObject
             {
                 var line = $"[{processed.Timestamp:HH:mm:ss.fff}] " +
                            string.Join(", ", processed.ChannelValues.Select(v => v.ToString("F2")));
-                if (processed.TotalField.HasValue)
-                    line += $" | Total: {processed.TotalField:F2}";
 
                 RawDataLines.Add(line);
                 while (RawDataLines.Count > MaxRawDataLines)

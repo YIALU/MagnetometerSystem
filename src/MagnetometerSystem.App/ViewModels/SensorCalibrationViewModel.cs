@@ -16,7 +16,14 @@ public partial class SensorCalibrationViewModel : ObservableObject
     public SensorCalibrationViewModel(ICalibrationRepository calibrationRepository)
     {
         _calibrationRepository = calibrationRepository;
-        _ = LoadProfilesAsync();
+    }
+
+    private bool _isLoaded;
+    public async Task EnsureLoadedAsync()
+    {
+        if (_isLoaded) return;
+        _isLoaded = true;
+        await LoadProfilesAsync();
     }
 
     // ---- 配置列表 ----

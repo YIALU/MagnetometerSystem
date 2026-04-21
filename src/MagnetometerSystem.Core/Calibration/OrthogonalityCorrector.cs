@@ -58,12 +58,6 @@ public class OrthogonalityCorrector
             values[5] = c2[2];
         }
 
-        // 重新计算总场（基于第一组三轴）
-        double totalField = Math.Sqrt(
-            values[0] * values[0] +
-            values[1] * values[1] +
-            values[2] * values[2]);
-
         // 创建新的不可变实例，不修改原始 reading
         return new MagnetometerReading
         {
@@ -72,7 +66,6 @@ public class OrthogonalityCorrector
             SessionId = reading.SessionId,
             SensorType = reading.SensorType,
             ChannelValues = values,
-            TotalField = totalField,
             IsCalibrated = reading.IsCalibrated,
             IsOrthogonalityCorrected = true
         };

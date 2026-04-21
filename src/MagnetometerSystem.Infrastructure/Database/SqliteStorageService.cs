@@ -11,7 +11,9 @@ namespace MagnetometerSystem.Infrastructure.Database;
 
 /// <summary>
 /// 基于 SQLite + Dapper 的数据存储服务实现。
-/// 使用 Channel&lt;MagnetometerReading&gt; 实现异步批量写入队列。
+/// readings / corrected_readings 的通道数据以 JSON 形式存入 data 列：
+///   { "values": {"X":1.0,...}, "original": {...}, "isCalibrated": 0|1, "isOrthoCorrected": 0|1 }
+/// 通道名来自会话的 channel_names，读取时按名字顺序还原为 double[]。
 /// </summary>
 public class SqliteStorageService : IDataStorageService, IDisposable
 {
@@ -22,6 +24,10 @@ public class SqliteStorageService : IDataStorageService, IDisposable
     private readonly CancellationTokenSource _cts = new();
     private bool _disposed;
 
+    // 缓存 session_id -> 通道名（一个会话不会变）
+    private readonly Dictionary<string, string[]> _channelNamesCache = new();
+    private readonly object _channelNamesLock = new();
+
     private const int BatchSize = 500;
 
     public SqliteStorageService(DatabaseInitializer dbInit, DataBus dataBus)
@@ -29,11 +35,9 @@ public class SqliteStorageService : IDataStorageService, IDisposable
         _dbInit = dbInit;
         _dataBus = dataBus;
 
-        // 无界 Channel，SingleReader 优化性能
         _writeChannel = Channel.CreateUnbounded<MagnetometerReading>(
             new UnboundedChannelOptions { SingleReader = true });
 
-        // 启动后台消费者
         _consumerTask = Task.Run(ConsumeWriteQueueAsync);
     }
 
@@ -41,6 +45,7 @@ public class SqliteStorageService : IDataStorageService, IDisposable
     public async Task<string> StartSessionAsync(string name, SensorConfig sensorConfig, ConnectionConfig connectionConfig)
     {
         var sessionId = Guid.NewGuid().ToString();
+        var channelNames = sensorConfig.ChannelNames;
 
         using var conn = new SqliteConnection(_dbInit.ConnectionString);
         await conn.OpenAsync();
@@ -60,10 +65,15 @@ public class SqliteStorageService : IDataStorageService, IDisposable
             SensorType = sensorConfig.Type.ToString(),
             SampleRate = sensorConfig.SampleRate,
             ChannelCount = sensorConfig.ChannelCount,
-            ChannelNames = JsonSerializer.Serialize(sensorConfig.ChannelNames),
+            ChannelNames = JsonSerializer.Serialize(channelNames),
             DeviceInfo = sensorConfig.SerialNumber,
             ConnectionType = connectionConfig.Type.ToString(),
         });
+
+        lock (_channelNamesLock)
+        {
+            _channelNamesCache[sessionId] = channelNames;
+        }
 
         _dataBus.PublishSessionStarted(sessionId);
         return sessionId;
@@ -75,7 +85,6 @@ public class SqliteStorageService : IDataStorageService, IDisposable
         using var conn = new SqliteConnection(_dbInit.ConnectionString);
         await conn.OpenAsync();
 
-        // 统计该会话的读数总数
         var count = await conn.ExecuteScalarAsync<long>(
             "SELECT COUNT(*) FROM readings WHERE session_id = @SessionId",
             new { SessionId = sessionId });
@@ -99,7 +108,6 @@ public class SqliteStorageService : IDataStorageService, IDisposable
     /// <inheritdoc />
     public Task SaveReadingsAsync(IEnumerable<MagnetometerReading> readings)
     {
-        // 入队后立即返回，不阻塞调用方
         foreach (var reading in readings)
         {
             _writeChannel.Writer.TryWrite(reading);
@@ -119,6 +127,7 @@ public class SqliteStorageService : IDataStorageService, IDisposable
                    notes, total_readings
             FROM sessions
             ORDER BY started_at DESC
+            LIMIT 100
             """;
 
         var rows = await conn.QueryAsync(sql);
@@ -139,12 +148,9 @@ public class SqliteStorageService : IDataStorageService, IDisposable
         using var conn = new SqliteConnection(_dbInit.ConnectionString);
         await conn.OpenAsync();
 
-        var sql = """
-            SELECT id, session_id, timestamp, ch0, ch1, ch2, ch3, ch4, ch5,
-                   extra_channels, total_field, is_calibrated, is_ortho_corrected, original_channel_values
-            FROM readings
-            WHERE session_id = @SessionId
-            """;
+        var channelNames = await GetChannelNamesAsync(conn, sessionId);
+
+        var sql = "SELECT id, session_id, timestamp, data FROM readings WHERE session_id = @SessionId";
 
         var parameters = new DynamicParameters();
         parameters.Add("SessionId", sessionId);
@@ -168,7 +174,7 @@ public class SqliteStorageService : IDataStorageService, IDisposable
 
         foreach (var row in rows)
         {
-            readings.Add(MapRowToReading(row));
+            readings.Add(MapRowToReading(row, channelNames));
         }
 
         return readings;
@@ -181,10 +187,14 @@ public class SqliteStorageService : IDataStorageService, IDisposable
         await conn.OpenAsync();
         await conn.ExecuteAsync("PRAGMA foreign_keys=ON;");
 
-        // 外键级联删除会自动清除关联的 readings 记录
         await conn.ExecuteAsync(
             "DELETE FROM sessions WHERE id = @Id",
             new { Id = sessionId });
+
+        lock (_channelNamesLock)
+        {
+            _channelNamesCache.Remove(sessionId);
+        }
     }
 
     /// <inheritdoc />
@@ -200,7 +210,7 @@ public class SqliteStorageService : IDataStorageService, IDisposable
         await conn.ExecuteAsync(sql, new { Id = sessionId, Name = name, Notes = notes });
     }
 
-    #region 校正数据存储（独立于原始数据）
+    #region 校正数据存储
 
     /// <inheritdoc />
     public async Task SaveCorrectedReadingsAsync(IEnumerable<CorrectedReading> readings)
@@ -210,22 +220,24 @@ public class SqliteStorageService : IDataStorageService, IDisposable
 
         using var conn = new SqliteConnection(_dbInit.ConnectionString);
         await conn.OpenAsync();
+
+        var sessionId = readingsList[0].SessionId;
+        var channelNames = await GetChannelNamesAsync(conn, sessionId);
+
         using var tx = conn.BeginTransaction();
 
         const string sql = """
             INSERT INTO corrected_readings
                 (original_reading_id, session_id, timestamp, correction_profile_id,
-                 ch0, ch1, ch2, ch3, ch4, ch5, extra_channels,
-                 corrected_total_field, is_ortho_corrected, corrected_at)
+                 data, corrected_at)
             VALUES
                 (@OriginalReadingId, @SessionId, @Timestamp, @CorrectionProfileId,
-                 @Ch0, @Ch1, @Ch2, @Ch3, @Ch4, @Ch5, @ExtraChannels,
-                 @CorrectedTotalField, @IsOrthoCorrected, @CorrectedAt)
+                 @Data, @CorrectedAt)
             """;
 
         foreach (var reading in readingsList)
         {
-            var param = MapCorrectedReadingToParam(reading);
+            var param = MapCorrectedReadingToParam(reading, channelNames);
             await conn.ExecuteAsync(sql, param, tx);
         }
 
@@ -239,13 +251,24 @@ public class SqliteStorageService : IDataStorageService, IDisposable
         using var conn = new SqliteConnection(_dbInit.ConnectionString);
         await conn.OpenAsync();
 
-        var sql = "SELECT * FROM corrected_readings WHERE session_id = @SessionId";
+        var channelNames = await GetChannelNamesAsync(conn, sessionId);
+
+        var sql = """
+            SELECT id, original_reading_id, session_id, timestamp, correction_profile_id,
+                   data, corrected_at
+            FROM corrected_readings WHERE session_id = @SessionId
+            """;
         if (correctionProfileId != null)
             sql += " AND correction_profile_id = @ProfileId";
         sql += " ORDER BY timestamp ASC";
 
         var rows = await conn.QueryAsync(sql, new { SessionId = sessionId, ProfileId = correctionProfileId });
-        return rows.Select(MapRowToCorrectedReading).ToList();
+        var result = new List<CorrectedReading>();
+        foreach (var row in rows)
+        {
+            result.Add(MapRowToCorrectedReading(row, channelNames));
+        }
+        return result;
     }
 
     /// <inheritdoc />
@@ -299,10 +322,8 @@ public class SqliteStorageService : IDataStorageService, IDisposable
         }
         catch (OperationCanceledException)
         {
-            // 正常取消，写入剩余数据
         }
 
-        // 消费残余数据
         batch.Clear();
         while (reader.TryRead(out var remaining))
         {
@@ -326,18 +347,26 @@ public class SqliteStorageService : IDataStorageService, IDisposable
         {
             using var conn = new SqliteConnection(_dbInit.ConnectionString);
             await conn.OpenAsync();
+
+            var sessionToNames = new Dictionary<string, string[]>();
+            foreach (var r in batch)
+            {
+                if (!sessionToNames.ContainsKey(r.SessionId))
+                {
+                    sessionToNames[r.SessionId] = await GetChannelNamesAsync(conn, r.SessionId);
+                }
+            }
+
             using var tx = conn.BeginTransaction();
 
             const string sql = """
-                INSERT INTO readings (session_id, timestamp, ch0, ch1, ch2, ch3, ch4, ch5,
-                    extra_channels, total_field, is_calibrated, is_ortho_corrected, original_channel_values)
-                VALUES (@SessionId, @Timestamp, @Ch0, @Ch1, @Ch2, @Ch3, @Ch4, @Ch5,
-                    @ExtraChannels, @TotalField, @IsCalibrated, @IsOrthoCorrected, @OriginalChannelValues)
+                INSERT INTO readings (session_id, timestamp, data)
+                VALUES (@SessionId, @Timestamp, @Data)
                 """;
 
             foreach (var r in batch)
             {
-                var param = MapReadingToParam(r);
+                var param = MapReadingToParam(r, sessionToNames[r.SessionId]);
                 await conn.ExecuteAsync(sql, param, tx);
             }
 
@@ -353,63 +382,140 @@ public class SqliteStorageService : IDataStorageService, IDisposable
 
     #region 映射方法
 
-    private static object MapReadingToParam(MagnetometerReading r)
+    private async Task<string[]> GetChannelNamesAsync(SqliteConnection conn, string sessionId)
     {
-        var cv = r.ChannelValues;
+        lock (_channelNamesLock)
+        {
+            if (_channelNamesCache.TryGetValue(sessionId, out var cached))
+                return cached;
+        }
+
+        var json = await conn.ExecuteScalarAsync<string?>(
+            "SELECT channel_names FROM sessions WHERE id = @Id",
+            new { Id = sessionId });
+
+        string[] names;
+        if (!string.IsNullOrEmpty(json))
+        {
+            names = JsonSerializer.Deserialize<string[]>(json) ?? [];
+        }
+        else
+        {
+            names = [];
+        }
+
+        lock (_channelNamesLock)
+        {
+            _channelNamesCache[sessionId] = names;
+        }
+        return names;
+    }
+
+    private static string[] EffectiveNames(string[] names, int count)
+    {
+        if (names.Length >= count) return names;
+        var result = new string[count];
+        for (int i = 0; i < count; i++)
+        {
+            result[i] = i < names.Length ? names[i] : $"CH{i}";
+        }
+        return result;
+    }
+
+    private static string BuildDataJson(double[] values, double[]? original, string[] channelNames, bool isCalibrated, bool isOrthoCorrected)
+    {
+        var names = EffectiveNames(channelNames, values.Length);
+
+        var valuesDict = new Dictionary<string, double>(values.Length);
+        for (int i = 0; i < values.Length; i++)
+        {
+            valuesDict[names[i]] = values[i];
+        }
+
+        Dictionary<string, double>? originalDict = null;
+        if (original != null && original.Length > 0)
+        {
+            var origNames = EffectiveNames(channelNames, original.Length);
+            originalDict = new Dictionary<string, double>(original.Length);
+            for (int i = 0; i < original.Length; i++)
+            {
+                originalDict[origNames[i]] = original[i];
+            }
+        }
+
+        var payload = new Dictionary<string, object?>
+        {
+            ["values"] = valuesDict,
+            ["original"] = originalDict,
+            ["isCalibrated"] = isCalibrated ? 1 : 0,
+            ["isOrthoCorrected"] = isOrthoCorrected ? 1 : 0,
+        };
+
+        return JsonSerializer.Serialize(payload);
+    }
+
+    private sealed class ReadingDataDto
+    {
+        public Dictionary<string, double>? values { get; set; }
+        public Dictionary<string, double>? original { get; set; }
+        public int isCalibrated { get; set; }
+        public int isOrthoCorrected { get; set; }
+    }
+
+    private static (double[] values, double[]? original, bool isCalibrated, bool isOrthoCorrected) ParseDataJson(string json, string[] channelNames)
+    {
+        var dto = JsonSerializer.Deserialize<ReadingDataDto>(json) ?? new ReadingDataDto();
+        var values = ExtractOrdered(dto.values, channelNames);
+        var original = dto.original != null && dto.original.Count > 0
+            ? ExtractOrdered(dto.original, channelNames)
+            : null;
+        return (values, original, dto.isCalibrated == 1, dto.isOrthoCorrected == 1);
+    }
+
+    private static double[] ExtractOrdered(Dictionary<string, double>? dict, string[] channelNames)
+    {
+        if (dict == null || dict.Count == 0) return [];
+
+        if (channelNames.Length > 0)
+        {
+            var result = new List<double>(channelNames.Length);
+            foreach (var name in channelNames)
+            {
+                if (dict.TryGetValue(name, out var v))
+                    result.Add(v);
+            }
+            // 若协议定义的通道名在 JSON 中完全没命中，退回到原字典顺序
+            if (result.Count > 0) return result.ToArray();
+        }
+
+        // Fallback: 按 CH0/CH1/... 或字典本身顺序
+        return dict.Values.ToArray();
+    }
+
+    private static object MapReadingToParam(MagnetometerReading r, string[] channelNames)
+    {
         return new
         {
             r.SessionId,
             Timestamp = r.Timestamp.ToString("O"),
-            Ch0 = cv.Length > 0 ? cv[0] : (double?)null,
-            Ch1 = cv.Length > 1 ? cv[1] : (double?)null,
-            Ch2 = cv.Length > 2 ? cv[2] : (double?)null,
-            Ch3 = cv.Length > 3 ? cv[3] : (double?)null,
-            Ch4 = cv.Length > 4 ? cv[4] : (double?)null,
-            Ch5 = cv.Length > 5 ? cv[5] : (double?)null,
-            ExtraChannels = cv.Length > 6
-                ? JsonSerializer.Serialize(cv[6..])
-                : null,
-            r.TotalField,
-            IsCalibrated = r.IsCalibrated ? 1 : 0,
-            IsOrthoCorrected = r.IsOrthogonalityCorrected ? 1 : 0,
-            OriginalChannelValues = r.OriginalChannelValues != null
-                ? JsonSerializer.Serialize(r.OriginalChannelValues)
-                : null,
+            Data = BuildDataJson(r.ChannelValues, r.OriginalChannelValues, channelNames, r.IsCalibrated, r.IsOrthogonalityCorrected),
         };
     }
 
-    private static MagnetometerReading MapRowToReading(dynamic row)
+    private static MagnetometerReading MapRowToReading(dynamic row, string[] channelNames)
     {
-        var values = new List<double>();
-        if (row.ch0 != null) values.Add((double)row.ch0);
-        if (row.ch1 != null) values.Add((double)row.ch1);
-        if (row.ch2 != null) values.Add((double)row.ch2);
-        if (row.ch3 != null) values.Add((double)row.ch3);
-        if (row.ch4 != null) values.Add((double)row.ch4);
-        if (row.ch5 != null) values.Add((double)row.ch5);
-
-        if (row.extra_channels is string json && !string.IsNullOrEmpty(json))
-        {
-            var extra = JsonSerializer.Deserialize<double[]>(json);
-            if (extra != null) values.AddRange(extra);
-        }
-
-        double[]? originalValues = null;
-        if (row.original_channel_values is string origJson && !string.IsNullOrEmpty(origJson))
-        {
-            originalValues = JsonSerializer.Deserialize<double[]>(origJson);
-        }
+        var dataJson = (string)row.data;
+        var (values, original, isCal, isOrtho) = ParseDataJson(dataJson, channelNames);
 
         return new MagnetometerReading
         {
             Id = (long)row.id,
             SessionId = (string)row.session_id,
             Timestamp = DateTime.Parse((string)row.timestamp, null, DateTimeStyles.RoundtripKind),
-            ChannelValues = values.ToArray(),
-            OriginalChannelValues = originalValues,
-            TotalField = row.total_field as double?,
-            IsCalibrated = (long)row.is_calibrated == 1,
-            IsOrthogonalityCorrected = (long)row.is_ortho_corrected == 1,
+            ChannelValues = values,
+            OriginalChannelValues = original,
+            IsCalibrated = isCal,
+            IsOrthogonalityCorrected = isOrtho,
         };
     }
 
@@ -443,43 +549,28 @@ public class SqliteStorageService : IDataStorageService, IDisposable
         };
     }
 
-    private static object MapCorrectedReadingToParam(CorrectedReading reading)
+    private static object MapCorrectedReadingToParam(CorrectedReading reading, string[] channelNames)
     {
-        var values = reading.CorrectedValues;
         return new
         {
             reading.OriginalReadingId,
             reading.SessionId,
             Timestamp = reading.Timestamp.ToString("O"),
             reading.CorrectionProfileId,
-            Ch0 = values.Length > 0 ? values[0] : (double?)null,
-            Ch1 = values.Length > 1 ? values[1] : (double?)null,
-            Ch2 = values.Length > 2 ? values[2] : (double?)null,
-            Ch3 = values.Length > 3 ? values[3] : (double?)null,
-            Ch4 = values.Length > 4 ? values[4] : (double?)null,
-            Ch5 = values.Length > 5 ? values[5] : (double?)null,
-            ExtraChannels = values.Length > 6 ? JsonSerializer.Serialize(values[6..]) : null,
-            reading.CorrectedTotalField,
-            IsOrthoCorrected = reading.IsOrthogonalityCorrected ? 1 : 0,
-            CorrectedAt = reading.CorrectedAt.ToString("O")
+            Data = BuildDataJson(reading.CorrectedValues, null, channelNames, false, reading.IsOrthogonalityCorrected),
+            CorrectedAt = reading.CorrectedAt.ToString("O"),
         };
     }
 
-    private static CorrectedReading MapRowToCorrectedReading(dynamic row)
+    private static CorrectedReading MapRowToCorrectedReading(dynamic row, string[] channelNames)
     {
-        var values = new List<double>();
-        if (row.ch0 != null) values.Add((double)row.ch0);
-        if (row.ch1 != null) values.Add((double)row.ch1);
-        if (row.ch2 != null) values.Add((double)row.ch2);
-        if (row.ch3 != null) values.Add((double)row.ch3);
-        if (row.ch4 != null) values.Add((double)row.ch4);
-        if (row.ch5 != null) values.Add((double)row.ch5);
+        var dataJson = (string)row.data;
+        var (values, _, _, isOrtho) = ParseDataJson(dataJson, channelNames);
 
-        string? extraJson = row.extra_channels as string;
-        if (!string.IsNullOrEmpty(extraJson))
+        double? totalField = null;
+        if (values.Length >= 3)
         {
-            var extras = JsonSerializer.Deserialize<double[]>(extraJson);
-            if (extras != null) values.AddRange(extras);
+            totalField = Math.Sqrt(values[0] * values[0] + values[1] * values[1] + values[2] * values[2]);
         }
 
         return new CorrectedReading
@@ -489,9 +580,9 @@ public class SqliteStorageService : IDataStorageService, IDisposable
             SessionId = (string)row.session_id,
             Timestamp = DateTime.Parse((string)row.timestamp, null, DateTimeStyles.RoundtripKind),
             CorrectionProfileId = (string)row.correction_profile_id,
-            CorrectedValues = values.ToArray(),
-            CorrectedTotalField = row.corrected_total_field as double?,
-            IsOrthogonalityCorrected = ((long)row.is_ortho_corrected) == 1,
+            CorrectedValues = values,
+            CorrectedTotalField = totalField,
+            IsOrthogonalityCorrected = isOrtho,
             CorrectedAt = DateTime.Parse((string)row.corrected_at, null, DateTimeStyles.RoundtripKind)
         };
     }
@@ -505,10 +596,8 @@ public class SqliteStorageService : IDataStorageService, IDisposable
         if (_disposed) return;
         _disposed = true;
 
-        // 通知消费者不再有新数据
         _writeChannel.Writer.Complete();
 
-        // 取消等待并等待消费者完成（最多等待 5 秒）
         _cts.Cancel();
         _consumerTask.Wait(TimeSpan.FromSeconds(5));
 

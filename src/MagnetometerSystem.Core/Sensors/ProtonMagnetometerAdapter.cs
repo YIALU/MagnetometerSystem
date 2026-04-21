@@ -18,11 +18,6 @@ public class ProtonMagnetometerAdapter : ISensorAdapter
     public MagnetometerReading Process(MagnetometerReading rawReading)
     {
         rawReading.SensorType = SensorType;
-        if (rawReading.ChannelValues.Length >= 1)
-        {
-            // 质子磁力仪直接输出总场
-            rawReading.TotalField = rawReading.ChannelValues[0];
-        }
         return rawReading;
     }
 

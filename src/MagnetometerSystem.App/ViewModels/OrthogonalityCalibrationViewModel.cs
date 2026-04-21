@@ -34,8 +34,15 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         ProfileName = $"正交度校正_{DateTime.Now:yyyyMMdd_HHmmss}";
         UpdateStepNavigation();
 
-        // 加载已保存的配置列表
-        _ = LoadSavedProfilesAsync();
+        // 已保存配置延迟加载
+    }
+
+    private bool _isLoaded;
+    public async Task EnsureLoadedAsync()
+    {
+        if (_isLoaded) return;
+        _isLoaded = true;
+        await LoadSavedProfilesAsync();
     }
 
     // ========== 已保存配置管理 ==========

@@ -14,7 +14,14 @@ public partial class SettingsViewModel : ObservableObject
     public SettingsViewModel(IAppConfigService configService)
     {
         _configService = configService;
-        _ = LoadSettingsAsync();
+    }
+
+    private bool _isLoaded;
+    public async Task EnsureLoadedAsync()
+    {
+        if (_isLoaded) return;
+        _isLoaded = true;
+        await LoadSettingsAsync();
     }
 
     // ---- 连接设置 ----

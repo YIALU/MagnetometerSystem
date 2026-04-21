@@ -53,29 +53,52 @@ public class AppConfigService : IAppConfigService
     {
         var settings = new AppSettings();
 
-        settings.DefaultPortName = await GetAsync<string>("connection.defaultPortName");
+        // 一次性查询所有配置键，避免 8 次独立连接
+        using var conn = new SqliteConnection(_dbInit.ConnectionString);
+        await conn.OpenAsync();
 
-        var baudRate = await GetAsync<int?>("connection.defaultBaudRate");
-        if (baudRate is > 0)
-            settings.DefaultBaudRate = baudRate.Value;
+        var rows = await conn.QueryAsync<(string Key, string Value)>(
+            "SELECT key, value FROM settings WHERE key IN @Keys",
+            new { Keys = new[]
+            {
+                "connection.defaultPortName",
+                "connection.defaultBaudRate",
+                "connection.defaultIpAddress",
+                "connection.defaultPort",
+                "storage.dataPath",
+                "storage.autoSave",
+                "chart.refreshRate",
+                "ui.theme",
+            }});
 
-        settings.DefaultIpAddress = await GetAsync<string>("connection.defaultIpAddress");
+        var map = rows.ToDictionary(r => r.Key, r => r.Value);
 
-        var port = await GetAsync<int?>("connection.defaultPort");
-        if (port is > 0)
-            settings.DefaultPort = port.Value;
+        T? Get<T>(string k)
+        {
+            if (!map.TryGetValue(k, out var json) || json is null) return default;
+            try { return JsonSerializer.Deserialize<T>(json); }
+            catch { return default; }
+        }
 
-        settings.DataStoragePath = await GetAsync<string>("storage.dataPath") ?? "";
+        settings.DefaultPortName = Get<string>("connection.defaultPortName");
 
-        var autoSave = await GetAsync<bool?>("storage.autoSave");
-        if (autoSave.HasValue)
-            settings.AutoSaveEnabled = autoSave.Value;
+        var baudRate = Get<int?>("connection.defaultBaudRate");
+        if (baudRate is > 0) settings.DefaultBaudRate = baudRate.Value;
 
-        var refreshRate = await GetAsync<int?>("chart.refreshRate");
-        if (refreshRate is > 0)
-            settings.ChartRefreshRate = refreshRate.Value;
+        settings.DefaultIpAddress = Get<string>("connection.defaultIpAddress");
 
-        settings.ThemeName = await GetAsync<string>("ui.theme") ?? "Default";
+        var port = Get<int?>("connection.defaultPort");
+        if (port is > 0) settings.DefaultPort = port.Value;
+
+        settings.DataStoragePath = Get<string>("storage.dataPath") ?? "";
+
+        var autoSave = Get<bool?>("storage.autoSave");
+        if (autoSave.HasValue) settings.AutoSaveEnabled = autoSave.Value;
+
+        var refreshRate = Get<int?>("chart.refreshRate");
+        if (refreshRate is > 0) settings.ChartRefreshRate = refreshRate.Value;
+
+        settings.ThemeName = Get<string>("ui.theme") ?? "Default";
 
         return settings;
     }

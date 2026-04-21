@@ -6,9 +6,14 @@
         xmlns:local="clr-namespace:MagnetometerSystem.App"
         xmlns:views="clr-namespace:MagnetometerSystem.App.Views"
         xmlns:vm="clr-namespace:MagnetometerSystem.App.ViewModels"
+        xmlns:converters="clr-namespace:MagnetometerSystem.App.Converters"
         mc:Ignorable="d"
         Title="磁力仪数据采集与分析系统" Height="750" Width="1200"
         WindowStartupLocation="CenterScreen">
+    <Window.Resources>
+        <converters:InverseBoolToVisibilityConverter x:Key="InverseBoolToVisibilityConverter"/>
+    </Window.Resources>
+    <Grid>
     <DockPanel>
         <!-- 底部状态栏 -->
         <StatusBar DockPanel.Dock="Bottom" Height="28">
@@ -70,6 +75,8 @@
                         Command="{Binding NavigateToSensorCalibrationCommand}"/>
                 <Button Content="系统设置" Margin="3" Padding="8,6" HorizontalContentAlignment="Left"
                         Command="{Binding NavigateToSettingsCommand}"/>
+                <Button Content="设备命令" Margin="3" Padding="8,6" HorizontalContentAlignment="Left"
+                        Command="{Binding NavigateToDeviceCommandCommand}"/>
             </StackPanel>
         </Border>
 
@@ -97,7 +104,19 @@
                 <DataTemplate DataType="{x:Type vm:SettingsViewModel}">
                     <views:SettingsView/>
                 </DataTemplate>
+                <DataTemplate DataType="{x:Type vm:DeviceCommandViewModel}">
+                    <views:DeviceCommandView/>
+                </DataTemplate>
             </ContentControl.Resources>
         </ContentControl>
     </DockPanel>
+
+    <!-- 初始化加载遮罩 -->
+    <Grid Visibility="{Binding IsInitialized, Converter={StaticResource InverseBoolToVisibilityConverter}}"
+          Background="#88000000" Panel.ZIndex="100">
+        <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+            <TextBlock Text="正在初始化..." Foreground="White" FontSize="16" HorizontalAlignment="Center"/>
+        </StackPanel>
+    </Grid>
+    </Grid>
 </Window>
