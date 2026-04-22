@@ -36,7 +36,7 @@ public static class CalibrationDataValidator
     // 建议最小球面覆盖度
     private const double RecommendedMinCoverage = 0.3;  // 30%
 
-    /// <summary>
+    /// <summary>   
     /// 验证采集数据的合理性。
     /// 所有检查项均为警告，不阻止用户继续操作。
     /// 用户可能只需要部分旋转时段的数据，或从外部导入已筛选的数据。

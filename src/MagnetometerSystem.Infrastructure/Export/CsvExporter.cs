@@ -139,7 +139,8 @@ public class CsvExporter : IDataExporter
         var sb = new StringBuilder();
 
         // 时间戳 - ISO 8601 round-trip format
-        sb.Append(reading.Timestamp.ToString("O"));
+        // 简洁格式：年-月-日 时:分:秒.毫秒（本地时间，DB 已统一在读取时转为本地）
+        sb.Append(reading.Timestamp.ToString("yyyy-MM-dd HH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture));
 
         // 通道值
         foreach (var idx in channelIndices)

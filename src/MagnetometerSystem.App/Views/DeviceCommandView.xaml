@@ -173,9 +173,15 @@
                         </Grid.ColumnDefinitions>
                         <TextBlock Text="预览:" FontWeight="SemiBold" VerticalAlignment="Center"/>
                         <Border Grid.Column="1" Background="#F4F6F8" Padding="6" CornerRadius="3">
-                            <TextBlock FontFamily="Consolas" Foreground="#222"
-                                       Text="{Binding PreviewText}"
-                                       TextWrapping="Wrap"/>
+                            <TextBox FontFamily="Consolas" Foreground="#222"
+                                     Text="{Binding PreviewText, Mode=OneWay}"
+                                     TextWrapping="Wrap"
+                                     IsReadOnly="True"
+                                     BorderThickness="0"
+                                     Background="Transparent"
+                                     AcceptsReturn="True"
+                                     VerticalScrollBarVisibility="Auto"
+                                     MinHeight="60"/>
                         </Border>
                     </Grid>
 

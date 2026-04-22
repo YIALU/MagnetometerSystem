@@ -1,71 +1,89 @@
 namespace MagnetometerSystem.Core.Models;
 
+public enum CommandEncoding
+{
+    /// <summary>ASCII 模板模式：模板中 {key} 替换后 UTF-8 编码发送</summary>
+    AsciiTemplate,
+
+    /// <summary>二进制帧模式：[帧头?] + [按参数编码的数据帧] + [校验?] + [帧尾?]</summary>
+    BinaryFrame,
+}
+
+public enum ChecksumKind
+{
+    None,
+    Sum8,    // 8 位累加和
+    Xor8,    // 8 位异或
+    Crc16,   // CRC-16/MODBUS
+}
+
+public enum Endianness
+{
+    LittleEndian,
+    BigEndian,
+}
+
 public enum CommandParameterType
 {
+    // ASCII 模板用
     String,
     Int,
     Double,
     Enum,
+
+    // BinaryFrame 用（二进制编码）
+    U8,
+    U16,
+    U32,
+    I8,
+    I16,
+    I32,
+    Float32,
+    Float64,
+    /// <summary>任意字节串（用户输入 hex 字符串，可指定 ByteLength 做长度校验）</summary>
+    HexBytes,
 }
 
-/// <summary>
-/// 设备命令参数定义
-/// </summary>
+/// <summary>设备命令参数定义</summary>
 public class CommandParameter
 {
-    /// <summary>参数显示名（如"采样率"）</summary>
     public string Name { get; set; } = "";
-
-    /// <summary>模板占位符 key（如"rate"，对应 {rate}）</summary>
     public string Key { get; set; } = "";
-
     public CommandParameterType Type { get; set; } = CommandParameterType.String;
-
-    /// <summary>默认值（字符串形式）</summary>
     public string DefaultValue { get; set; } = "";
-
-    /// <summary>单位显示（如"Hz"，可选）</summary>
     public string? Unit { get; set; }
-
-    /// <summary>数值范围最小（仅 Int/Double 生效）</summary>
     public double? Min { get; set; }
-
-    /// <summary>数值范围最大（仅 Int/Double 生效）</summary>
     public double? Max { get; set; }
-
-    /// <summary>枚举候选项（仅 Enum 生效）</summary>
     public List<string> EnumOptions { get; set; } = new();
+
+    /// <summary>字节序（仅 U16/U32/I16/I32/Float32/Float64 生效）</summary>
+    public Endianness Endian { get; set; } = Endianness.LittleEndian;
+
+    /// <summary>字节长度（仅 HexBytes 生效，null 表示不校验长度）</summary>
+    public int? ByteLength { get; set; }
 }
 
-/// <summary>
-/// 设备命令定义
-/// </summary>
+/// <summary>设备命令定义</summary>
 public class DeviceCommand
 {
     public string Id { get; set; } = Guid.NewGuid().ToString();
-
-    /// <summary>命令名称（UI 显示）</summary>
     public string Name { get; set; } = "";
-
-    /// <summary>命令描述（UI 详情面板显示）</summary>
     public string Description { get; set; } = "";
 
-    /// <summary>是否为 Hex 模式（模板渲染后按十六进制解析）</summary>
-    public bool IsHex { get; set; }
+    public CommandEncoding Encoding { get; set; } = CommandEncoding.AsciiTemplate;
 
-    /// <summary>ASCII 模式下是否追加 \r\n</summary>
+    // ASCII 模板用
+    public string Template { get; set; } = "";
     public bool AppendNewline { get; set; } = true;
 
-    /// <summary>模板：ASCII 示例 "SET_RATE {rate}"；Hex 示例 "AA 55 {id} 55 AA"</summary>
-    public string Template { get; set; } = "";
+    // BinaryFrame 用（全部可选）
+    public string FrameHeader { get; set; } = "";  // hex, e.g. "AA 55"
+    public string FrameTail { get; set; } = "";    // hex, e.g. "55 AA"
+    public ChecksumKind Checksum { get; set; } = ChecksumKind.None;
 
-    /// <summary>命令参数列表（个数可自定义）</summary>
     public List<CommandParameter> Parameters { get; set; } = new();
 }
 
-/// <summary>
-/// 命令组 — 用户可按功能分组命令
-/// </summary>
 public class CommandGroup
 {
     public string Id { get; set; } = Guid.NewGuid().ToString();
@@ -73,9 +91,6 @@ public class CommandGroup
     public List<DeviceCommand> Commands { get; set; } = new();
 }
 
-/// <summary>
-/// 命令目录：顶层容器，包含多个命令组，可整体导入/导出 JSON
-/// </summary>
 public class CommandCatalog
 {
     public List<CommandGroup> Groups { get; set; } = new();
@@ -105,17 +120,35 @@ public class CommandCatalog
                         new() { Name = "停止采集", Description = "停止数据采集", Template = "STOP" },
                         new()
                         {
-                            Name = "设置采样率",
-                            Description = "设置设备采样率 (Hz)",
+                            Name = "设置采样率 (ASCII)",
+                            Description = "ASCII 方式：SET_RATE {rate}",
+                            Encoding = CommandEncoding.AsciiTemplate,
                             Template = "SET_RATE {rate}",
-                            Parameters = new List<CommandParameter>
+                            Parameters = new()
                             {
-                                new()
-                                {
+                                new() {
                                     Name = "采样率", Key = "rate",
                                     Type = CommandParameterType.Double,
                                     DefaultValue = "100", Unit = "Hz",
                                     Min = 0.1, Max = 500,
+                                }
+                            }
+                        },
+                        new()
+                        {
+                            Name = "设置采样率 (二进制)",
+                            Description = "二进制帧示例：AA55 + float32 + CRC16 + 55AA",
+                            Encoding = CommandEncoding.BinaryFrame,
+                            FrameHeader = "AA 55",
+                            FrameTail = "55 AA",
+                            Checksum = ChecksumKind.Crc16,
+                            Parameters = new()
+                            {
+                                new() {
+                                    Name = "采样率", Key = "rate",
+                                    Type = CommandParameterType.Float32,
+                                    DefaultValue = "100.0", Unit = "Hz",
+                                    Endian = Endianness.LittleEndian,
                                 }
                             }
                         },

@@ -511,7 +511,7 @@ public class SqliteStorageService : IDataStorageService, IDisposable
         {
             Id = (long)row.id,
             SessionId = (string)row.session_id,
-            Timestamp = DateTime.Parse((string)row.timestamp, null, DateTimeStyles.RoundtripKind),
+            Timestamp = ParseUtcAsLocal((string)row.timestamp),
             ChannelValues = values,
             OriginalChannelValues = original,
             IsCalibrated = isCal,
@@ -534,9 +534,9 @@ public class SqliteStorageService : IDataStorageService, IDisposable
         {
             Id = (string)row.id,
             Name = (string)row.name,
-            StartedAt = DateTime.Parse((string)row.started_at, null, DateTimeStyles.RoundtripKind),
+            StartedAt = ParseUtcAsLocal((string)row.started_at),
             EndedAt = row.ended_at is string endedAt && !string.IsNullOrEmpty(endedAt)
-                ? DateTime.Parse(endedAt, null, DateTimeStyles.RoundtripKind)
+                ? ParseUtcAsLocal(endedAt)
                 : null,
             SensorType = sensorType,
             SampleRate = (double)row.sample_rate,
@@ -578,13 +578,25 @@ public class SqliteStorageService : IDataStorageService, IDisposable
             Id = (long)row.id,
             OriginalReadingId = (long)row.original_reading_id,
             SessionId = (string)row.session_id,
-            Timestamp = DateTime.Parse((string)row.timestamp, null, DateTimeStyles.RoundtripKind),
+            Timestamp = ParseUtcAsLocal((string)row.timestamp),
             CorrectionProfileId = (string)row.correction_profile_id,
             CorrectedValues = values,
             CorrectedTotalField = totalField,
             IsOrthogonalityCorrected = isOrtho,
-            CorrectedAt = DateTime.Parse((string)row.corrected_at, null, DateTimeStyles.RoundtripKind)
+            CorrectedAt = ParseUtcAsLocal((string)row.corrected_at)
         };
+    }
+
+    /// <summary>
+    /// 将 DB 里存储的 UTC ISO-8601 时间字符串解析为本地时间（Kind=Local）。
+    /// DB 仍统一保持 UTC 存储；仅显示/读取时转本地，避免时区歧义。
+    /// </summary>
+    private static DateTime ParseUtcAsLocal(string iso)
+    {
+        var dt = DateTime.Parse(iso, null, DateTimeStyles.RoundtripKind);
+        if (dt.Kind == DateTimeKind.Unspecified)
+            dt = DateTime.SpecifyKind(dt, DateTimeKind.Utc);
+        return dt.ToLocalTime();
     }
 
     #endregion

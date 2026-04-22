@@ -5,7 +5,8 @@ using MagnetometerSystem.Core.Models;
 namespace MagnetometerSystem.App.Views.Dialogs;
 
 /// <summary>
-/// 命令编辑对话框 — 编辑命令名/描述/模板，可动态添加/删除参数
+/// 命令编辑对话框 — 编辑命令名/描述/编码模式（ASCII 模板 / 二进制帧），
+/// 二进制帧支持帧头/帧尾/校验���参数支持任意类型与字节序。
 /// </summary>
 public partial class CommandEditDialog : Window
 {
@@ -13,7 +14,9 @@ public partial class CommandEditDialog : Window
 
     public ObservableCollection<CommandParameter> Parameters { get; }
 
-    public CommandParameterType[] ParameterTypes { get; } = Enum.GetValues<CommandParameterType>();
+    public CommandParameterType[] ParameterTypes { get; } = System.Enum.GetValues<CommandParameterType>();
+    public Endianness[] Endians { get; } = System.Enum.GetValues<Endianness>();
+    public ChecksumKind[] ChecksumKinds { get; } = System.Enum.GetValues<ChecksumKind>();
 
     public CommandEditDialog(DeviceCommand command, string title)
     {
@@ -26,9 +29,20 @@ public partial class CommandEditDialog : Window
 
         NameBox.Text = command.Name;
         DescriptionBox.Text = command.Description;
+
+        if (command.Encoding == CommandEncoding.AsciiTemplate)
+            AsciiRadio.IsChecked = true;
+        else
+            BinaryRadio.IsChecked = true;
+
         TemplateBox.Text = command.Template;
-        IsHexCheckBox.IsChecked = command.IsHex;
         AppendNewlineCheckBox.IsChecked = command.AppendNewline;
+
+        FrameHeaderBox.Text = command.FrameHeader;
+        FrameTailBox.Text = command.FrameTail;
+        ChecksumBox.SelectedItem = command.Checksum;
+
+        UpdateModeVisibility();
     }
 
     private static CommandParameter Clone(CommandParameter p) => new()
@@ -41,7 +55,19 @@ public partial class CommandEditDialog : Window
         Min = p.Min,
         Max = p.Max,
         EnumOptions = new List<string>(p.EnumOptions),
+        Endian = p.Endian,
+        ByteLength = p.ByteLength,
     };
+
+    private void Mode_Checked(object sender, RoutedEventArgs e) => UpdateModeVisibility();
+
+    private void UpdateModeVisibility()
+    {
+        if (AsciiPanel == null || BinaryPanel == null) return;
+        bool isAscii = AsciiRadio.IsChecked == true;
+        AsciiPanel.Visibility = isAscii ? Visibility.Visible : Visibility.Collapsed;
+        BinaryPanel.Visibility = isAscii ? Visibility.Collapsed : Visibility.Visible;
+    }
 
     private void AddParameter_Click(object sender, RoutedEventArgs e)
     {
@@ -49,7 +75,7 @@ public partial class CommandEditDialog : Window
         {
             Name = "参数" + (Parameters.Count + 1),
             Key = "p" + (Parameters.Count + 1),
-            Type = CommandParameterType.String,
+            Type = (BinaryRadio.IsChecked == true) ? CommandParameterType.U8 : CommandParameterType.String,
         });
     }
 
@@ -69,7 +95,6 @@ public partial class CommandEditDialog : Window
             return;
         }
 
-        // 校验参数 Key 唯一且非空
         var keys = new HashSet<string>();
         foreach (var p in Parameters)
         {
@@ -87,9 +112,14 @@ public partial class CommandEditDialog : Window
 
         _command.Name = NameBox.Text.Trim();
         _command.Description = DescriptionBox.Text ?? "";
+        _command.Encoding = (AsciiRadio.IsChecked == true)
+            ? CommandEncoding.AsciiTemplate
+            : CommandEncoding.BinaryFrame;
         _command.Template = TemplateBox.Text ?? "";
-        _command.IsHex = IsHexCheckBox.IsChecked ?? false;
         _command.AppendNewline = AppendNewlineCheckBox.IsChecked ?? true;
+        _command.FrameHeader = FrameHeaderBox.Text ?? "";
+        _command.FrameTail = FrameTailBox.Text ?? "";
+        _command.Checksum = (ChecksumKind)(ChecksumBox.SelectedItem ?? ChecksumKind.None);
         _command.Parameters = Parameters.ToList();
 
         DialogResult = true;

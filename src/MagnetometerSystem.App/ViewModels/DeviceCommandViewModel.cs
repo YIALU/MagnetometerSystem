@@ -4,6 +4,7 @@ using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Windows;
+using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using MagnetometerSystem.Core.Communication;
@@ -81,6 +82,11 @@ public partial class DeviceCommandViewModel : ObservableObject
     [ObservableProperty]
     private bool _pauseAutoScroll;
 
+    // ---- 日志缓冲（高吞吐下按 100ms 节拍批量 flush，避免每帧都触发 UI 重绘）----
+    private readonly StringBuilder _logBuffer = new();
+    private readonly object _logBufferLock = new();
+    private readonly DispatcherTimer _logFlushTimer;
+
     public DeviceCommandViewModel(DataBus dataBus, IAppConfigService configService)
     {
         _dataBus = dataBus;
@@ -91,6 +97,13 @@ public partial class DeviceCommandViewModel : ObservableObject
             _connection.DataReceived += OnDataReceived;
 
         _dataBus.ConnectionChanged += OnConnectionChanged;
+
+        _logFlushTimer = new DispatcherTimer(DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromMilliseconds(100)
+        };
+        _logFlushTimer.Tick += (_, _) => FlushLogBuffer();
+        _logFlushTimer.Start();
 
         _ = LoadCatalogAsync();
     }
@@ -166,18 +179,43 @@ public partial class DeviceCommandViewModel : ObservableObject
             PreviewText = "";
             return;
         }
-        PreviewText = RenderTemplate(SelectedCommand, CurrentParameters);
+
+        var values = BuildParamDict();
+        try
+        {
+            if (SelectedCommand.Encoding == CommandEncoding.AsciiTemplate)
+            {
+                var rendered = CommandFrameBuilder.RenderAsciiTemplate(SelectedCommand, values);
+                PreviewText = SelectedCommand.AppendNewline ? rendered + "\\r\\n" : rendered;
+            }
+            else
+            {
+                var preview = CommandFrameBuilder.BuildBinaryFrame(SelectedCommand, values);
+                var sb = new StringBuilder();
+                if (preview.HeaderBytes.Length > 0)
+                    sb.AppendLine($"帧头 : {CommandFrameBuilder.ToHexString(preview.HeaderBytes)}");
+                sb.AppendLine($"数据 : {CommandFrameBuilder.ToHexString(preview.DataBytes)}");
+                if (preview.ChecksumBytes.Length > 0)
+                    sb.AppendLine($"校验 : {CommandFrameBuilder.ToHexString(preview.ChecksumBytes)}");
+                if (preview.TailBytes.Length > 0)
+                    sb.AppendLine($"帧尾 : {CommandFrameBuilder.ToHexString(preview.TailBytes)}");
+                var full = preview.FullBytes;
+                sb.Append($"完整 : {CommandFrameBuilder.ToHexString(full)}  ({full.Length} 字节)");
+                PreviewText = sb.ToString();
+            }
+        }
+        catch (Exception ex)
+        {
+            PreviewText = $"[预览错误] {ex.Message}";
+        }
     }
 
-    private static string RenderTemplate(DeviceCommand cmd, IEnumerable<CommandParameterBinding> parameters)
+    private Dictionary<string, string> BuildParamDict()
     {
-        var result = cmd.Template ?? "";
-        foreach (var p in parameters)
-        {
-            var placeholder = "{" + p.Definition.Key + "}";
-            result = result.Replace(placeholder, p.Value ?? "");
-        }
-        return result;
+        var dict = new Dictionary<string, string>();
+        foreach (var p in CurrentParameters)
+            dict[p.Definition.Key] = p.Value ?? "";
+        return dict;
     }
 
     // ---- 发送 ----
@@ -194,8 +232,24 @@ public partial class DeviceCommandViewModel : ObservableObject
 
         try
         {
-            var rendered = RenderTemplate(SelectedCommand, CurrentParameters);
-            await SendRawAsync(rendered, SelectedCommand.IsHex, SelectedCommand.AppendNewline);
+            var values = BuildParamDict();
+            byte[] data;
+            string display;
+
+            if (SelectedCommand.Encoding == CommandEncoding.AsciiTemplate)
+            {
+                data = CommandFrameBuilder.BuildAsciiBytes(SelectedCommand, values);
+                var rendered = CommandFrameBuilder.RenderAsciiTemplate(SelectedCommand, values);
+                display = rendered + (SelectedCommand.AppendNewline ? "\\r\\n" : "");
+            }
+            else
+            {
+                data = CommandFrameBuilder.BuildBinaryFrame(SelectedCommand, values).FullBytes;
+                display = CommandFrameBuilder.ToHexString(data);
+            }
+
+            await _connection.SendAsync(data);
+            AppendToLog($"[TX {DateTime.Now:HH:mm:ss}] {display}\n");
         }
         catch (Exception ex)
         {
@@ -454,15 +508,43 @@ public partial class DeviceCommandViewModel : ObservableObject
             ? Encoding.UTF8.GetString(data).Replace("\r\n", "\\r\\n").Replace("\r", "\\r").Replace("\n", "\\n")
             : BitConverter.ToString(data).Replace("-", " ");
 
-        Application.Current?.Dispatcher.BeginInvoke(() => AppendToLog($"[RX {timestamp}] {display}\n"));
+        // 直接进缓冲区（线程安全），UI 由 _logFlushTimer 节拍刷新
+        EnqueueLog($"[RX {timestamp}] {display}\n");
+    }
+
+    private void EnqueueLog(string line)
+    {
+        lock (_logBufferLock)
+        {
+            _logBuffer.Append(line);
+        }
+    }
+
+    /// <summary>UI 线程：把缓冲合并进 CommunicationLog 并按上限裁剪。100ms/次。</summary>
+    private void FlushLogBuffer()
+    {
+        string pending;
+        lock (_logBufferLock)
+        {
+            if (_logBuffer.Length == 0) return;
+            pending = _logBuffer.ToString();
+            _logBuffer.Clear();
+        }
+
+        var current = CommunicationLog;
+        // 估算合并后长度，超出 MaxLogLength 时只保留尾部
+        int total = current.Length + pending.Length;
+        string updated = total <= MaxLogLength
+            ? current + pending
+            : (current + pending)[^MaxLogLength..];
+
+        CommunicationLog = updated;
     }
 
     private void AppendToLog(string line)
     {
-        var updated = CommunicationLog + line;
-        if (updated.Length > MaxLogLength)
-            updated = updated[^MaxLogLength..];
-        CommunicationLog = updated;
+        // 同步 UI 线程调用（错误/状态信息），仍走缓冲以避免与 RX 流竞争抖动
+        EnqueueLog(line);
     }
 
     // ---- 辅助 ----
