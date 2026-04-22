@@ -55,6 +55,17 @@
                     <Run Text="{Binding DataCount, Mode=OneWay}"/>
                 </TextBlock>
             </StatusBarItem>
+            <StatusBarItem HorizontalAlignment="Right">
+                <Button x:Name="AboutButton" Click="ShowAbout_Click"
+                        BorderThickness="0" Background="Transparent" Padding="8,0"
+                        Cursor="Hand"
+                        ToolTip="点击查看详细版本信息">
+                    <TextBlock>
+                        <Run Text="版本 "/>
+                        <Run Text="{x:Static local:AppVersion.Display}" Foreground="#0078D4"/>
+                    </TextBlock>
+                </Button>
+            </StatusBarItem>
         </StatusBar>
 
         <!-- 左侧导航栏 -->

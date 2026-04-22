@@ -1,0 +1,32 @@
+<Project>
+  <PropertyGroup>
+    <!-- 发布版本号；bump 后打同名 git tag (vX.Y.Z) -->
+    <Version>0.1.0</Version>
+    <AssemblyVersion>$(Version).0</AssemblyVersion>
+    <FileVersion>$(Version).0</FileVersion>
+    <!-- InformationalVersion 自动 = Version + "+" + SourceRevisionId -->
+    <IncludeSourceRevisionInInformationalVersion>true</IncludeSourceRevisionInInformationalVersion>
+
+    <Company>MagnetometerSystem</Company>
+    <Product>磁力仪系统</Product>
+    <Copyright>Copyright © $([System.DateTime]::Now.Year)</Copyright>
+  </PropertyGroup>
+
+  <!-- 构建时读 git 短 hash 注入 SourceRevisionId（含 dirty 标记） -->
+  <Target Name="InjectGitSha" BeforeTargets="GetAssemblyVersion;GetAssemblyAttributes">
+    <Exec Command="git rev-parse --short=7 HEAD" ConsoleToMSBuild="true"
+          ContinueOnError="true" IgnoreExitCode="true" StandardOutputImportance="low">
+      <Output TaskParameter="ConsoleOutput" PropertyName="GitShaRaw" />
+      <Output TaskParameter="ExitCode" PropertyName="GitShaExit" />
+    </Exec>
+    <Exec Command="git status --porcelain" ConsoleToMSBuild="true"
+          ContinueOnError="true" IgnoreExitCode="true" StandardOutputImportance="low">
+      <Output TaskParameter="ConsoleOutput" PropertyName="GitStatusRaw" />
+    </Exec>
+    <PropertyGroup>
+      <_GitShaTrim>$(GitShaRaw.Trim())</_GitShaTrim>
+      <_DirtySuffix Condition="'$(GitStatusRaw.Trim())' != ''">-dirty</_DirtySuffix>
+      <SourceRevisionId Condition="'$(_GitShaTrim)' != '' and '$(GitShaExit)' == '0'">$(_GitShaTrim)$(_DirtySuffix)</SourceRevisionId>
+    </PropertyGroup>
+  </Target>
+</Project>
