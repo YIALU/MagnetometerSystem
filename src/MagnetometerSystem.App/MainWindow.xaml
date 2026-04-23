@@ -12,6 +12,7 @@
         WindowStartupLocation="CenterScreen">
     <Window.Resources>
         <converters:InverseBoolToVisibilityConverter x:Key="InverseBoolToVisibilityConverter"/>
+        <BooleanToVisibilityConverter x:Key="BoolToVisibilityConverter"/>
     </Window.Resources>
     <Grid>
     <DockPanel>
@@ -72,10 +73,30 @@
         <Border DockPanel.Dock="Left" Width="160" Background="#F0F0F0" BorderBrush="#D0D0D0" BorderThickness="0,0,1,0">
             <StackPanel Margin="5">
                 <TextBlock Text="功能导航" FontWeight="Bold" FontSize="14" Margin="5,10,5,15" HorizontalAlignment="Center"/>
+
+                <!-- 录制状态卡片 -->
+                <Border Visibility="{Binding SessionListVM.IsRecording, Converter={StaticResource BoolToVisibilityConverter}}"
+                        Background="#FFEBEE" BorderBrush="#E57373" BorderThickness="1"
+                        CornerRadius="4" Padding="8" Margin="3,0,3,8">
+                    <StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,3">
+                            <Ellipse Width="8" Height="8" Fill="#E53935" Margin="0,0,5,0" VerticalAlignment="Center"/>
+                            <TextBlock Text="录制中" Foreground="#C62828" FontWeight="Bold" FontSize="11"/>
+                        </StackPanel>
+                        <TextBlock Text="{Binding ActiveSessionName}" Foreground="#B71C1C" FontSize="10" TextWrapping="Wrap"/>
+                        <TextBlock Foreground="#B71C1C" FontSize="10">
+                            <Run Text="{Binding DataCount, Mode=OneWay}"/>
+                            <Run Text=" 条"/>
+                        </TextBlock>
+                    </StackPanel>
+                </Border>
+
                 <Button Content="设备连接" Margin="3" Padding="8,6" HorizontalContentAlignment="Left"
                         Command="{Binding NavigateToConnectionCommand}"/>
                 <Button Content="实时采集" Margin="3" Padding="8,6" HorizontalContentAlignment="Left"
                         Command="{Binding NavigateToRealtimeChartCommand}"/>
+                <Button Content="设备命令" Margin="3" Padding="8,6" HorizontalContentAlignment="Left"
+                        Command="{Binding NavigateToDeviceCommandCommand}"/>
                 <Button Content="数据管理" Margin="3" Padding="8,6" HorizontalContentAlignment="Left"
                         Command="{Binding NavigateToSessionListCommand}"/>
                 <Button Content="历史回放" Margin="3" Padding="8,6" HorizontalContentAlignment="Left"
@@ -86,8 +107,6 @@
                         Command="{Binding NavigateToSensorCalibrationCommand}"/>
                 <Button Content="系统设置" Margin="3" Padding="8,6" HorizontalContentAlignment="Left"
                         Command="{Binding NavigateToSettingsCommand}"/>
-                <Button Content="设备命令" Margin="3" Padding="8,6" HorizontalContentAlignment="Left"
-                        Command="{Binding NavigateToDeviceCommandCommand}"/>
             </StackPanel>
         </Border>
 

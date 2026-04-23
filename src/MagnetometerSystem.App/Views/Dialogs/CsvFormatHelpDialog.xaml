@@ -1,0 +1,68 @@
+<Window x:Class="MagnetometerSystem.App.Views.Dialogs.CsvFormatHelpDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="CSV 格式说明"
+        Width="540" Height="500"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize" ShowInTaskbar="False">
+    <Grid Margin="18">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <TextBlock Grid.Row="0" Text="正交度校准 — 支持的 CSV 格式"
+                   FontSize="15" FontWeight="Bold" Margin="0,0,0,12"/>
+
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+            <StackPanel>
+                <TextBlock Text="格式 A：本软件导出的 CSV（推荐）"
+                           FontWeight="SemiBold" Foreground="#0078D4" Margin="0,0,0,4"/>
+                <Border Background="#F4F6F8" Padding="10" CornerRadius="3" Margin="0,0,0,12">
+                    <TextBlock FontFamily="Consolas" FontSize="12">
+                        Timestamp,X,Y,Z<LineBreak/>
+                        2026-04-22 14:30:45.123,-12.345,23.456,-34.567<LineBreak/>
+                        2026-04-22 14:30:45.223,-12.401,23.498,-34.612<LineBreak/>
+                        ...
+                    </TextBlock>
+                </Border>
+                <TextBlock TextWrapping="Wrap" Margin="0,0,0,16">
+                    自动识别 header 与时间戳列。<LineBreak/>
+                    • 三轴：取列 <Run FontFamily="Consolas">X / Y / Z</Run>（也支持 <Run FontFamily="Consolas">Bx/By/Bz</Run>、<Run FontFamily="Consolas">CH0/CH1/CH2</Run>）<LineBreak/>
+                    • 双三轴：取 <Run FontFamily="Consolas">X1/Y1/Z1/X2/Y2/Z2</Run>（或 <Run FontFamily="Consolas">CH0..CH5</Run>）
+                </TextBlock>
+
+                <TextBlock Text="格式 B：裸数据"
+                           FontWeight="SemiBold" Foreground="#0078D4" Margin="0,0,0,4"/>
+                <Border Background="#F4F6F8" Padding="10" CornerRadius="3" Margin="0,0,0,12">
+                    <TextBlock FontFamily="Consolas" FontSize="12">
+                        -12.345,23.456,-34.567<LineBreak/>
+                        -12.401,23.498,-34.612<LineBreak/>
+                        ...
+                    </TextBlock>
+                </Border>
+                <TextBlock TextWrapping="Wrap" Margin="0,0,0,16">
+                    无 header，每行前 3 列即为 X/Y/Z。<LineBreak/>
+                    • 双三轴：每行前 6 列<LineBreak/>
+                    • 若第一列无法解析为数字（含时间戳）会自动跳过该列尝试 1..3
+                </TextBlock>
+
+                <Border Background="#FFF8E1" BorderBrush="#FFD54F" BorderThickness="1"
+                        Padding="10" CornerRadius="3">
+                    <TextBlock TextWrapping="Wrap">
+                        <Run FontWeight="SemiBold">通用规则：</Run><LineBreak/>
+                        • 分隔符：逗号 / 制表符 / 分号 任一<LineBreak/>
+                        • 小数点：必须用英文 <Run FontFamily="Consolas">.</Run>（不支持中文逗号）<LineBreak/>
+                        • 空行自动跳过<LineBreak/>
+                        • 列数不足、解析失败的行会被记入跳过计数
+                    </TextBlock>
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+
+        <Button Grid.Row="2" Content="关闭" Width="80" HorizontalAlignment="Right"
+                IsCancel="True" IsDefault="True" Margin="0,12,0,0"
+                Click="Close_Click"/>
+    </Grid>
+</Window>

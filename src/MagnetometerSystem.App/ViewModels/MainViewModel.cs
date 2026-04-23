@@ -23,6 +23,9 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty]
     private long _dataCount;
 
+    [ObservableProperty]
+    private string _activeSessionName = "";
+
     /// <summary>
     /// 后台初始化（数据库迁移 + 配置加载）是否已完成。
     /// 初始为 false，完成后置为 true，用于驱动加载遮���的可见性。
@@ -94,6 +97,24 @@ public partial class MainViewModel : ObservableObject
             {
                 HistoryPlaybackVM.SelectedSession = target;
                 HistoryPlaybackVM.LoadSessionCommand.Execute(null);
+            }
+        };
+
+        // 订阅会话列表的活跃会话变化，更新录制状态卡片显示名称
+        SessionListVM.PropertyChanged += (s, e) =>
+        {
+            if (e.PropertyName == nameof(SessionListViewModel.ActiveSessionId))
+            {
+                var activeId = SessionListVM.ActiveSessionId;
+                if (activeId == null)
+                {
+                    ActiveSessionName = "";
+                }
+                else
+                {
+                    var session = SessionListVM.Sessions.FirstOrDefault(sess => sess.Id == activeId);
+                    ActiveSessionName = session?.Name ?? "";
+                }
             }
         };
     }

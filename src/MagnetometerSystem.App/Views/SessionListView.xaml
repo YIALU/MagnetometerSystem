@@ -3,11 +3,13 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:conv="clr-namespace:MagnetometerSystem.App.Converters"
              mc:Ignorable="d"
              d:DesignHeight="600" d:DesignWidth="900">
 
     <UserControl.Resources>
         <BooleanToVisibilityConverter x:Key="BoolToVis"/>
+        <conv:EqualsConverter x:Key="EqualsConverter"/>
     </UserControl.Resources>
 
     <DockPanel Margin="10">
@@ -35,11 +37,17 @@
         <!-- 状态: 当前采集指示 -->
         <Border DockPanel.Dock="Top"
                 Visibility="{Binding IsRecording, Converter={StaticResource BoolToVis}}"
-                Background="#FFF3E0" Padding="8,4" Margin="0,0,0,10" CornerRadius="3">
-            <TextBlock>
-                <Run Text="正在采集中 - 会话 ID: "/>
-                <Run Text="{Binding ActiveSessionId, Mode=OneWay}" FontWeight="Bold"/>
-            </TextBlock>
+                Background="#FFCDD2" BorderBrush="#E53935" BorderThickness="3,1,1,1"
+                Padding="10,6" Margin="0,0,0,10" CornerRadius="4">
+            <StackPanel Orientation="Horizontal">
+                <Ellipse Width="10" Height="10" Fill="#E53935" Margin="0,0,6,0" VerticalAlignment="Center"/>
+                <TextBlock FontWeight="Bold" Foreground="#B71C1C">
+                    <Run Text="录制中  "/>
+                    <Run Text="会话 ID: "/>
+                    <Run Text="{Binding ActiveSessionId, Mode=OneWay}"/>
+                    <Run Text="  （即下表橙色行）"/>
+                </TextBlock>
+            </StackPanel>
         </Border>
 
         <!-- 主体: DataGrid -->
@@ -60,6 +68,25 @@
                   AlternatingRowBackground="#F9F9F9"
                   HeadersVisibility="Column"
                   CanUserResizeColumns="True">
+            <DataGrid.RowStyle>
+                <Style TargetType="DataGridRow">
+                    <Style.Triggers>
+                        <DataTrigger Value="True">
+                            <DataTrigger.Binding>
+                                <MultiBinding Converter="{StaticResource EqualsConverter}">
+                                    <Binding Path="Id"/>
+                                    <Binding Path="DataContext.ActiveSessionId" RelativeSource="{RelativeSource AncestorType=DataGrid}"/>
+                                </MultiBinding>
+                            </DataTrigger.Binding>
+                            <Setter Property="Background" Value="#FFF3E0"/>
+                            <Setter Property="Foreground" Value="#E65100"/>
+                            <Setter Property="FontWeight" Value="SemiBold"/>
+                            <Setter Property="BorderBrush" Value="#E65100"/>
+                            <Setter Property="BorderThickness" Value="4,0,0,0"/>
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </DataGrid.RowStyle>
             <DataGrid.Columns>
                 <DataGridTextColumn Header="会话名称" Binding="{Binding Name}" Width="200"/>
                 <DataGridTextColumn Header="开始时间" Binding="{Binding StartedAt, StringFormat=yyyy-MM-dd HH:mm:ss}" Width="160"/>

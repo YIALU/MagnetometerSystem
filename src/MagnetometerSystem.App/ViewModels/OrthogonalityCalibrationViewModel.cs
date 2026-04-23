@@ -7,6 +7,7 @@ using Microsoft.Win32;
 using MagnetometerSystem.Core.Calibration;
 using MagnetometerSystem.Core.Models;
 using MagnetometerSystem.Core.Services;
+using MagnetometerSystem.Core.Storage;
 
 namespace MagnetometerSystem.App.ViewModels;
 
@@ -19,17 +20,20 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
     private readonly IOrthogonalityService _orthogonalityService;
     private readonly ICalibrationRepository _calibrationRepository;
     private readonly DataBus _dataBus;
+    private readonly IDataStorageService _storageService;
     private readonly List<double[]> _collectedData = new();
     private readonly List<double[]> _collectedDataSecondGroup = new();
 
     public OrthogonalityCalibrationViewModel(
         IOrthogonalityService orthogonalityService,
         ICalibrationRepository calibrationRepository,
-        DataBus dataBus)
+        DataBus dataBus,
+        IDataStorageService storageService)
     {
         _orthogonalityService = orthogonalityService;
         _calibrationRepository = calibrationRepository;
         _dataBus = dataBus;
+        _storageService = storageService;
 
         ProfileName = $"正交度校正_{DateTime.Now:yyyyMMdd_HHmmss}";
         UpdateStepNavigation();
@@ -330,26 +334,61 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
             var importedData = new List<double[]>();
             var importedDataSecond = new List<double[]>();
             int skippedLines = 0;
-            int requiredCols = SelectedSensorType == SensorType.DualTriaxialFluxgate ? 6 : 3;
+            bool dual = SelectedSensorType == SensorType.DualTriaxialFluxgate;
+            int requiredCols = dual ? 6 : 3;
 
-            foreach (var line in lines)
+            // 第一行特判 header：所有列都无法 parse 成 double ⇒ 是 header
+            int startIdx = 0;
+            int[]? columnMap = null; // 长度 = requiredCols，映射到具体列索引
+            if (lines.Length > 0)
             {
+                var firstParts = SplitCsvLine(lines[0]);
+                if (firstParts.Length >= requiredCols && !firstParts.Any(p => TryParseDouble(p, out _)))
+                {
+                    // 是 header，尝试按列名定位
+                    columnMap = BuildColumnMap(firstParts, dual);
+                    startIdx = 1;
+                }
+            }
+
+            for (int i = startIdx; i < lines.Length; i++)
+            {
+                var line = lines[i];
                 if (string.IsNullOrWhiteSpace(line)) continue;
 
-                var parts = line.Split(new[] { ',', '\t', ';' }, StringSplitOptions.RemoveEmptyEntries);
+                var parts = SplitCsvLine(line);
+
+                // 有 header 列名映射时直接按 map 取
+                if (columnMap != null)
+                {
+                    if (!TryExtractByMap(parts, columnMap, 0, 3, out var triple)) { skippedLines++; continue; }
+                    importedData.Add(triple);
+                    if (dual)
+                    {
+                        if (TryExtractByMap(parts, columnMap, 3, 3, out var triple2))
+                            importedDataSecond.Add(triple2);
+                    }
+                    continue;
+                }
+
+                // 无 header：先尝试前 3 列；若前 3 列含非 double（可能第一列是时间戳）则跳过第一列试 1..3
                 if (parts.Length < requiredCols) { skippedLines++; continue; }
 
-                if (double.TryParse(parts[0].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double bx) &&
-                    double.TryParse(parts[1].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double by) &&
-                    double.TryParse(parts[2].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double bz))
+                int offset = 0;
+                if (!TryParseDouble(parts[0], out _) && parts.Length >= requiredCols + 1) offset = 1;
+
+                if (parts.Length < offset + requiredCols) { skippedLines++; continue; }
+
+                if (TryParseDouble(parts[offset], out var bx) &&
+                    TryParseDouble(parts[offset + 1], out var by) &&
+                    TryParseDouble(parts[offset + 2], out var bz))
                 {
                     importedData.Add(new[] { bx, by, bz });
 
-                    if (SelectedSensorType == SensorType.DualTriaxialFluxgate &&
-                        parts.Length >= 6 &&
-                        double.TryParse(parts[3].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double bx2) &&
-                        double.TryParse(parts[4].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double by2) &&
-                        double.TryParse(parts[5].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double bz2))
+                    if (dual && parts.Length >= offset + 6 &&
+                        TryParseDouble(parts[offset + 3], out var bx2) &&
+                        TryParseDouble(parts[offset + 4], out var by2) &&
+                        TryParseDouble(parts[offset + 5], out var bz2))
                     {
                         importedDataSecond.Add(new[] { bx2, by2, bz2 });
                     }
@@ -362,7 +401,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
 
             if (importedData.Count == 0)
             {
-                CollectionStatus = "导入失败：文件中未找到有效的三轴数据";
+                CollectionStatus = "导入失败：文件中未找到有效的三轴数据。点击 [格式说明] 查看支持的格式。";
                 return;
             }
 
@@ -729,5 +768,137 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         _collectedData.Clear();
         _collectedDataSecondGroup.Clear();
         CollectedData.Clear();
+    }
+
+    // ========== CSV 导入辅助 + 从数据库选 session ==========
+
+    [RelayCommand]
+    private void ShowCsvFormatHelp()
+    {
+        var dlg = new Views.Dialogs.CsvFormatHelpDialog
+        {
+            Owner = System.Windows.Application.Current?.MainWindow
+        };
+        dlg.ShowDialog();
+    }
+
+    [RelayCommand]
+    private async Task LoadFromSessionAsync()
+    {
+        var picker = new Views.Dialogs.SessionPickerDialog(_storageService)
+        {
+            Owner = System.Windows.Application.Current?.MainWindow
+        };
+        if (picker.ShowDialog() != true || picker.SelectedSession == null) return;
+
+        var session = picker.SelectedSession;
+        try
+        {
+            var readings = await _storageService.GetReadingsAsync(session.Id);
+            if (readings.Count == 0)
+            {
+                CollectionStatus = $"会话 '{session.Name}' 中没有数据";
+                return;
+            }
+
+            bool dual = SelectedSensorType == SensorType.DualTriaxialFluxgate;
+            int requiredCols = dual ? 6 : 3;
+
+            var importedData = new List<double[]>();
+            var importedDataSecond = new List<double[]>();
+            int skipped = 0;
+
+            foreach (var r in readings)
+            {
+                var v = r.ChannelValues;
+                if (v.Length < requiredCols) { skipped++; continue; }
+                importedData.Add(new[] { v[0], v[1], v[2] });
+                if (dual && v.Length >= 6)
+                    importedDataSecond.Add(new[] { v[3], v[4], v[5] });
+            }
+
+            if (importedData.Count == 0)
+            {
+                CollectionStatus = $"会话 '{session.Name}' 通道数不足（需要至少 {requiredCols} 通道）";
+                return;
+            }
+
+            _collectedData.Clear();
+            _collectedDataSecondGroup.Clear();
+            CollectedData.Clear();
+            _collectedData.AddRange(importedData);
+            _collectedDataSecondGroup.AddRange(importedDataSecond);
+            foreach (var d in importedData) CollectedData.Add(d);
+
+            CollectedSampleCount = _collectedData.Count;
+            IsCollecting = false;
+            string skipInfo = skipped > 0 ? $"（跳过 {skipped} 条）" : "";
+            CollectionStatus = $"已从会话 '{session.Name}' 加载 {importedData.Count} 个样本{skipInfo}";
+
+            UpdateCoverageEstimate();
+            RunDataValidation();
+            UpdateStepNavigation();
+        }
+        catch (Exception ex)
+        {
+            CollectionStatus = $"加载会话失败：{ex.Message}";
+        }
+    }
+
+    private static string[] SplitCsvLine(string line) =>
+        line.Split(new[] { ',', '\t', ';' }, StringSplitOptions.RemoveEmptyEntries)
+            .Select(p => p.Trim()).ToArray();
+
+    private static bool TryParseDouble(string s, out double v) =>
+        double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out v);
+
+    private static bool TryExtractByMap(string[] parts, int[] map, int start, int count, out double[] result)
+    {
+        result = new double[count];
+        for (int i = 0; i < count; i++)
+        {
+            int colIdx = map[start + i];
+            if (colIdx < 0 || colIdx >= parts.Length || !TryParseDouble(parts[colIdx], out result[i]))
+                return false;
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// 按 header 列名定位 X/Y/Z (双三轴: X1/Y1/Z1/X2/Y2/Z2)。
+    /// 找不到的列返回 -1，TryExtractByMap 会因此返回 false 并跳行。
+    /// </summary>
+    private static int[] BuildColumnMap(string[] headers, bool dual)
+    {
+        var lower = headers.Select(h => h.ToLowerInvariant().Trim()).ToArray();
+
+        int find(params string[] names)
+        {
+            foreach (var n in names)
+            {
+                int idx = Array.IndexOf(lower, n);
+                if (idx >= 0) return idx;
+            }
+            return -1;
+        }
+
+        if (dual)
+        {
+            return new[]
+            {
+                find("x1", "bx1", "ch0"),
+                find("y1", "by1", "ch1"),
+                find("z1", "bz1", "ch2"),
+                find("x2", "bx2", "ch3"),
+                find("y2", "by2", "ch4"),
+                find("z2", "bz2", "ch5"),
+            };
+        }
+        return new[]
+        {
+            find("x", "bx", "ch0"),
+            find("y", "by", "ch1"),
+            find("z", "bz", "ch2"),
+        };
     }
 }

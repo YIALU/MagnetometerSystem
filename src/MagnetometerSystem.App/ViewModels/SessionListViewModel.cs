@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.IO;
 using System.Windows;
 using System.Windows.Data;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -266,6 +267,12 @@ public partial class SessionListViewModel : ObservableObject
         var newNotes = PromptInput("编辑备注", "请输入备注内容:", session.Notes ?? "");
         if (newNotes == null) return;
 
+        if (newNotes.Length > 60)
+        {
+            MessageBox.Show("备注最多 60 字符，已自动截断", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+            newNotes = newNotes[..60];
+        }
+
         try
         {
             await _storageService.UpdateSessionAsync(session.Id, session.Name, newNotes);
@@ -314,7 +321,10 @@ public partial class SessionListViewModel : ObservableObject
             _ => "_Custom"
         };
         var timestamp = session.StartedAt.ToString("yyyy-MM-dd_HH-mm-ss");
-        var fileName = $"{timestamp}{suffix}.csv";
+        var notes = SanitizeForFileName(session.Notes);
+        var fileName = string.IsNullOrEmpty(notes)
+            ? $"{timestamp}{suffix}.csv"
+            : $"{timestamp}_{notes}{suffix}.csv";
 
         var dialog = new Microsoft.Win32.SaveFileDialog
         {
@@ -523,5 +533,26 @@ public partial class SessionListViewModel : ObservableObject
 
         dialog.ShowDialog();
         return result;
+    }
+
+    private static string SanitizeForFileName(string? notes)
+    {
+        if (string.IsNullOrWhiteSpace(notes)) return string.Empty;
+
+        var invalidChars = Path.GetInvalidFileNameChars();
+        var sb = new System.Text.StringBuilder();
+        foreach (var c in notes)
+        {
+            if (c == '\n' || c == '\r' || c == '\t') { sb.Append(' '); continue; }
+            if (Array.IndexOf(invalidChars, c) >= 0) continue;
+            sb.Append(c);
+        }
+
+        // 压缩连续空白为单空格
+        var result = System.Text.RegularExpressions.Regex.Replace(sb.ToString(), @"\s+", " ").Trim();
+        // 截断到 60 字符
+        if (result.Length > 60) result = result[..60];
+        // 空格替换为下划线
+        return result.Replace(' ', '_');
     }
 }

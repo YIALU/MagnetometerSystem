@@ -246,15 +246,30 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
             DataPointCount = 0;
             IsPaused = false;
 
-            // 初始化通道显示配置
-            ChannelConfigs.Clear();
-            var defaults = ChannelDisplayConfig.CreateDefaults(_channelCount, _channelNames);
-            foreach (var cfg in defaults)
-                ChannelConfigs.Add(cfg);
+            // 初始化通道显示配置：仅当通道数量或名称发生变化时才重建，否则保留现有 Visible 等用户配置
+            bool channelLayoutChanged =
+                ChannelConfigs.Count != _channelCount ||
+                !Enumerable.Range(0, _channelCount).All(i =>
+                    i < ChannelConfigs.Count &&
+                    i < _channelNames.Length &&
+                    ChannelConfigs[i].Name == _channelNames[i]);
 
-            // 清空计算通道
-            ComputedChannels.Clear();
-            _formulaCache.Clear();
+            if (channelLayoutChanged)
+            {
+                ChannelConfigs.Clear();
+                var defaults = ChannelDisplayConfig.CreateDefaults(_channelCount, _channelNames);
+                foreach (var cfg in defaults)
+                    ChannelConfigs.Add(cfg);
+
+                // 通道布局改变时才清空计算通道（通道引用可能无效）
+                ComputedChannels.Clear();
+                _formulaCache.Clear();
+            }
+            else
+            {
+                // 通道布局未变，仅清空公式缓存以便下一 session 重新求值
+                _formulaCache.Clear();
+            }
 
             // 关闭向导面板
             IsAddingTotalField = false;

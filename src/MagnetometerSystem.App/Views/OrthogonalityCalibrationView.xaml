@@ -186,6 +186,22 @@
                                 </Style>
                             </Button.Style>
                         </Button>
+                        <Button Content="格式说明" Padding="10,6" Margin="4,0,0,0"
+                                ToolTip="查看支持的 CSV 格式与示例"
+                                Command="{Binding ShowCsvFormatHelpCommand}"/>
+                        <Button Content="从已采集会话导入" Padding="10,6" Margin="4,0,0,0"
+                                ToolTip="直接从数据库选择一个会话作为校准输入"
+                                Command="{Binding LoadFromSessionCommand}">
+                            <Button.Style>
+                                <Style TargetType="Button">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsCollecting}" Value="True">
+                                            <Setter Property="IsEnabled" Value="False"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                        </Button>
                     </StackPanel>
 
                     <!-- 采集状态 -->
