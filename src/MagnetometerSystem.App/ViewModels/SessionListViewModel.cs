@@ -62,12 +62,23 @@ public partial class SessionListViewModel : ObservableObject
     [ObservableProperty]
     private bool _isRecording;
 
+    /// <summary>
+    /// 当前会话已接收的读数计数（实时递增）。UI 订阅此值显示录制中的点数，
+    /// 比 RealtimeChart 的 DataPointCount 可靠（不受页面可见性影响）。
+    /// </summary>
+    [ObservableProperty]
+    private long _activeSessionReadingCount;
+
     // ---- 批量校正 ----
     [ObservableProperty]
     private ObservableCollection<OrthogonalityParams> _availableProfiles = new();
 
     [ObservableProperty]
     private OrthogonalityParams? _selectedCorrectionProfile;
+
+    /// <summary>双三轴第二组正交度配置（仅双三轴传感器会话使用）</summary>
+    [ObservableProperty]
+    private OrthogonalityParams? _selectedCorrectionProfileSecond;
 
     [ObservableProperty]
     private bool _isCorrecting;
@@ -135,6 +146,7 @@ public partial class SessionListViewModel : ObservableObject
             {
                 ActiveSessionId = sessionId;
                 IsRecording = true;
+                ActiveSessionReadingCount = 0;
             });
 
             _dataBus.PublishSessionStarted(sessionId);
@@ -182,6 +194,7 @@ public partial class SessionListViewModel : ObservableObject
 
         // 设置会话 ID
         reading.SessionId = ActiveSessionId;
+        ActiveSessionReadingCount++;
 
         lock (_bufferLock)
         {
@@ -387,13 +400,41 @@ public partial class SessionListViewModel : ObservableObject
     {
         if (session == null || SelectedCorrectionProfile == null) return;
 
+        // 双三轴必须同时选第二组
+        bool isDual = session.ChannelCount >= 6;
+        if (isDual && SelectedCorrectionProfileSecond == null)
+        {
+            MessageBox.Show(
+                "该会话为双三轴（6 通道）数据，请同时选择第二组正交度配置。\n" +
+                "否则后 3 通道（X2/Y2/Z2）不会被校正。",
+                "缺少配置", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        var profileDesc = isDual
+            ? $"'{SelectedCorrectionProfile.Name}' + '{SelectedCorrectionProfileSecond!.Name}'"
+            : $"'{SelectedCorrectionProfile.Name}'";
+
         var result = MessageBox.Show(
-            $"将对会话 '{session.Name}' 应用正交度校正 '{SelectedCorrectionProfile.Name}'。\n原始数据将保留不变，校正结果单独存储。\n继续？",
+            $"将对会话 '{session.Name}' 应用正交度校正 {profileDesc}。\n" +
+            "原始数据将保留不变，校正结果会：\n" +
+            "  1) 单独保存到数据库\n" +
+            "  2) 导出到你选择的 CSV 文件\n继续？",
             "批量校正",
             MessageBoxButton.YesNo,
             MessageBoxImage.Question);
 
         if (result != MessageBoxResult.Yes) return;
+
+        // 让用户先选导出路径，避免跑完才发现用户取消
+        var csvDialog = new Microsoft.Win32.SaveFileDialog
+        {
+            Title = "选择校正结果 CSV 保存位置",
+            Filter = "CSV 文件 (*.csv)|*.csv",
+            FileName = $"{SanitizeForFileName(session.Name)}_corrected_{DateTime.Now:yyyyMMdd_HHmmss}.csv",
+            DefaultExt = ".csv"
+        };
+        if (csvDialog.ShowDialog() != true) return;
 
         IsCorrecting = true;
         CorrectionProgress = 0;
@@ -411,16 +452,16 @@ public partial class SessionListViewModel : ObservableObject
             // 2. 删除此配置的旧校正结果
             await _storageService.DeleteCorrectedReadingsAsync(session.Id, SelectedCorrectionProfile.Id);
 
-            // 3. 批量应用校正
+            // 3. 批量应用校正（双三轴时传第二组）
             var progress = new Progress<int>(processed =>
             {
                 CorrectionProgress = processed;
             });
 
             var batchResult = await _orthogonalityCorrector.ApplyBatchAsync(
-                SelectedCorrectionProfile, readings, progress);
+                SelectedCorrectionProfile, SelectedCorrectionProfileSecond, readings, progress);
 
-            // 4. 映射为 CorrectedReading 并保存（保留原始数据）
+            // 4. 映射为 CorrectedReading 并保存
             var correctedReadings = new List<CorrectedReading>();
             for (int i = 0; i < readings.Count; i++)
             {
@@ -433,9 +474,14 @@ public partial class SessionListViewModel : ObservableObject
 
             await _storageService.SaveCorrectedReadingsAsync(correctedReadings);
 
+            // 5. 导出 CSV 到用户选定的路径
+            await WriteCorrectedCsvAsync(csvDialog.FileName, session, batchResult.CorrectedReadings);
+
             CorrectionProgress = 100;
             MessageBox.Show(
-                $"校正完成！\n处理 {batchResult.ProcessedCount} 条数据。\n原始数据已保留，校正结果已单独保存。",
+                $"校正完成！\n处理 {batchResult.ProcessedCount} 条数据。\n" +
+                $"• 数据库：已保存到 corrected_readings 表\n" +
+                $"• 文件：{csvDialog.FileName}",
                 "成功",
                 MessageBoxButton.OK,
                 MessageBoxImage.Information);
@@ -447,6 +493,36 @@ public partial class SessionListViewModel : ObservableObject
         finally
         {
             IsCorrecting = false;
+        }
+    }
+
+    private static async Task WriteCorrectedCsvAsync(
+        string path, SessionInfo session, IReadOnlyList<MagnetometerReading> corrected)
+    {
+        using var stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None);
+        using var writer = new StreamWriter(stream, new System.Text.UTF8Encoding(true)) { NewLine = "\r\n" };
+
+        // Header
+        var headerParts = new List<string> { "Timestamp" };
+        for (int i = 0; i < session.ChannelCount; i++)
+        {
+            headerParts.Add(i < session.ChannelNames.Length ? session.ChannelNames[i] : $"CH{i}");
+        }
+        await writer.WriteLineAsync(string.Join(",", headerParts));
+
+        // Rows
+        foreach (var r in corrected)
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.Append(r.Timestamp.ToString("yyyy-MM-dd HH:mm:ss.fff",
+                System.Globalization.CultureInfo.InvariantCulture));
+            for (int i = 0; i < session.ChannelCount && i < r.ChannelValues.Length; i++)
+            {
+                sb.Append(',');
+                sb.Append(r.ChannelValues[i].ToString("R",
+                    System.Globalization.CultureInfo.InvariantCulture));
+            }
+            await writer.WriteLineAsync(sb.ToString());
         }
     }
 

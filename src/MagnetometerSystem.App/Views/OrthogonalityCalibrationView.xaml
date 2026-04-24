@@ -5,7 +5,7 @@
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:views="clr-namespace:MagnetometerSystem.App.Views"
              mc:Ignorable="d"
-             d:DesignHeight="600" d:DesignWidth="900">
+             d:DesignHeight="900" d:DesignWidth="900">
 
     <DockPanel Margin="10">
 
@@ -94,6 +94,7 @@
         </Border>
 
         <!-- 步骤内容区域 -->
+        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
         <Grid>
             <!-- ==================== Step 1: 选择传感器 ==================== -->
             <Grid>
@@ -631,18 +632,78 @@
                     <TextBlock Text="已保存的校正配置" FontSize="16" FontWeight="Bold" Margin="0,20,0,8"/>
                     <Border Background="#F5F5F5" CornerRadius="4" Padding="10" Margin="0,0,0,10">
                         <StackPanel>
-                            <ListBox ItemsSource="{Binding SavedProfiles}" SelectedItem="{Binding SelectedSavedProfile}"
-                                     DisplayMemberPath="Name" Height="120" Margin="0,0,0,8"/>
+                            <DataGrid ItemsSource="{Binding SavedProfiles}"
+                                      SelectedItem="{Binding SelectedSavedProfile}"
+                                      AutoGenerateColumns="False" CanUserAddRows="False"
+                                      IsReadOnly="True" SelectionMode="Single"
+                                      HeadersVisibility="Column" GridLinesVisibility="Horizontal"
+                                      Height="140" Margin="0,0,0,8">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="名称" Binding="{Binding Name}" Width="*"/>
+                                    <DataGridTextColumn Header="传感器序列号" Binding="{Binding SensorSerial}" Width="110"/>
+                                    <DataGridTextColumn Header="创建时间" Binding="{Binding CreatedAt, StringFormat=yyyy-MM-dd HH:mm}" Width="130"/>
+                                    <DataGridTextColumn Header="样本数" Binding="{Binding SampleCount}" Width="70"/>
+                                    <DataGridTextColumn Header="残差均值" Binding="{Binding ResidualMean, StringFormat=F4}" Width="80"/>
+                                    <DataGridTextColumn Header="残差 Std" Binding="{Binding ResidualStd, StringFormat=F4}" Width="80"/>
+                                </DataGrid.Columns>
+                            </DataGrid>
+
+                            <!-- 详情面板：选中行的偏移 + 3x3 矩阵 -->
+                            <Border Background="White" BorderBrush="#DDD" BorderThickness="1"
+                                    CornerRadius="3" Padding="10" Margin="0,0,0,8">
+                                <Border.Style>
+                                    <Style TargetType="Border">
+                                        <Setter Property="Visibility" Value="Visible"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding SelectedSavedProfile}" Value="{x:Null}">
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Border.Style>
+                                <StackPanel>
+                                    <TextBlock FontWeight="SemiBold" Margin="0,0,0,4" Text="参数详情"/>
+                                    <StackPanel Orientation="Horizontal" Margin="0,2">
+                                        <TextBlock Text="偏移: " FontFamily="Consolas"/>
+                                        <TextBlock FontFamily="Consolas" Foreground="#0078D4">
+                                            <Run Text="[Ox="/>
+                                            <Run Text="{Binding SelectedSavedProfile.Offset[0], StringFormat=F4, Mode=OneWay}"/>
+                                            <Run Text=", Oy="/>
+                                            <Run Text="{Binding SelectedSavedProfile.Offset[1], StringFormat=F4, Mode=OneWay}"/>
+                                            <Run Text=", Oz="/>
+                                            <Run Text="{Binding SelectedSavedProfile.Offset[2], StringFormat=F4, Mode=OneWay}"/>
+                                            <Run Text="]"/>
+                                        </TextBlock>
+                                    </StackPanel>
+                                    <TextBlock Text="补偿矩阵 M (3x3):" Margin="0,6,0,2"/>
+                                    <Border Background="#F4F6F8" Padding="6" CornerRadius="2">
+                                        <TextBlock FontFamily="Consolas" FontSize="11">
+                                            <Run Text="["/><Run Text="{Binding SelectedSavedProfile.CompensationMatrix[0], StringFormat=F4, Mode=OneWay}"/><Run Text="  "/><Run Text="{Binding SelectedSavedProfile.CompensationMatrix[1], StringFormat=F4, Mode=OneWay}"/><Run Text="  "/><Run Text="{Binding SelectedSavedProfile.CompensationMatrix[2], StringFormat=F4, Mode=OneWay}"/><Run Text="]"/><LineBreak/>
+                                            <Run Text="["/><Run Text="{Binding SelectedSavedProfile.CompensationMatrix[3], StringFormat=F4, Mode=OneWay}"/><Run Text="  "/><Run Text="{Binding SelectedSavedProfile.CompensationMatrix[4], StringFormat=F4, Mode=OneWay}"/><Run Text="  "/><Run Text="{Binding SelectedSavedProfile.CompensationMatrix[5], StringFormat=F4, Mode=OneWay}"/><Run Text="]"/><LineBreak/>
+                                            <Run Text="["/><Run Text="{Binding SelectedSavedProfile.CompensationMatrix[6], StringFormat=F4, Mode=OneWay}"/><Run Text="  "/><Run Text="{Binding SelectedSavedProfile.CompensationMatrix[7], StringFormat=F4, Mode=OneWay}"/><Run Text="  "/><Run Text="{Binding SelectedSavedProfile.CompensationMatrix[8], StringFormat=F4, Mode=OneWay}"/><Run Text="]"/>
+                                        </TextBlock>
+                                    </Border>
+                                </StackPanel>
+                            </Border>
+
                             <StackPanel Orientation="Horizontal">
                                 <Button Content="加载选中" Command="{Binding LoadSelectedProfileCommand}" Padding="10,4" Margin="0,0,5,0"/>
                                 <Button Content="删除选中" Command="{Binding DeleteSavedProfileCommand}"
                                         CommandParameter="{Binding SelectedSavedProfile}" Padding="10,4" Margin="0,0,5,0"/>
-                                <Button Content="刷新列表" Command="{Binding LoadSavedProfilesCommand}" Padding="10,4"/>
+                                <Button Content="刷新列表" Command="{Binding LoadSavedProfilesCommand}" Padding="10,4" Margin="0,0,5,0"/>
+                                <Rectangle Width="1" Fill="#CCC" Margin="4,2"/>
+                                <Button Content="导出 JSON" Command="{Binding ExportSelectedProfileJsonCommand}" Padding="10,4" Margin="0,0,5,0"
+                                        ToolTip="导出选中配置为 JSON（含全部字段）"/>
+                                <Button Content="导出 CSV" Command="{Binding ExportSelectedProfileCsvCommand}" Padding="10,4" Margin="0,0,5,0"
+                                        ToolTip="导出为 CSV（偏移 + 矩阵元素）"/>
+                                <Button Content="使用说明" Command="{Binding ShowProfileUsageHelpCommand}" Padding="10,4"
+                                        ToolTip="查看如何手动用这组参数计算校正结果"/>
                             </StackPanel>
                         </StackPanel>
                     </Border>
                 </StackPanel>
             </Grid>
         </Grid>
+        </ScrollViewer>
     </DockPanel>
 </UserControl>

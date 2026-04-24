@@ -80,13 +80,26 @@ public class OrthogonalityCorrector
         IProgress<int>? progress = null,
         CancellationToken cancellationToken = default)
     {
+        return await ApplyBatchAsync(parameters, null, readings, progress, cancellationToken);
+    }
+
+    /// <summary>
+    /// 批量校正（双组，用于双三轴传感器；secondGroup 为 null 时等价于单组）
+    /// </summary>
+    public async Task<BatchCorrectionResult> ApplyBatchAsync(
+        OrthogonalityParams firstGroup,
+        OrthogonalityParams? secondGroup,
+        IReadOnlyList<MagnetometerReading> readings,
+        IProgress<int>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
         return await Task.Run(() =>
         {
             var results = new List<MagnetometerReading>(readings.Count);
             for (int i = 0; i < readings.Count; i++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                results.Add(ApplyToReading(parameters, readings[i]));
+                results.Add(ApplyToReading(firstGroup, secondGroup, readings[i]));
                 progress?.Report((i + 1) * 100 / readings.Count);
             }
             return new BatchCorrectionResult

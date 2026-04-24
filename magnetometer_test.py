@@ -12,6 +12,8 @@
 依赖: pip install pyserial
 """
 
+# D:\Python\python.exe "d:/Code/VIsual Studio_Workspace/MagnetometerSystem/magnetometer_test.py" -s dual
+
 import serial
 import struct
 import time

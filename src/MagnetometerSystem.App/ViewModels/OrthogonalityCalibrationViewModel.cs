@@ -783,6 +783,99 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
     }
 
     [RelayCommand]
+    private void ShowProfileUsageHelp()
+    {
+        var dlg = new Views.Dialogs.ProfileUsageHelpDialog
+        {
+            Owner = System.Windows.Application.Current?.MainWindow
+        };
+        dlg.ShowDialog();
+    }
+
+    [RelayCommand]
+    private async Task ExportSelectedProfileJsonAsync()
+    {
+        if (SelectedSavedProfile == null)
+        {
+            System.Windows.MessageBox.Show("请先在表格中选中一个配置", "提示");
+            return;
+        }
+        var dlg = new Microsoft.Win32.SaveFileDialog
+        {
+            Title = "导出正交度配置 (JSON)",
+            Filter = "JSON 文件 (*.json)|*.json",
+            FileName = $"{SanitizeFileName(SelectedSavedProfile.Name)}.json",
+            DefaultExt = ".json"
+        };
+        if (dlg.ShowDialog() != true) return;
+        try
+        {
+            var json = System.Text.Json.JsonSerializer.Serialize(SelectedSavedProfile,
+                new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+            await File.WriteAllTextAsync(dlg.FileName, json);
+            System.Windows.MessageBox.Show($"已导出: {dlg.FileName}", "成功");
+        }
+        catch (Exception ex)
+        {
+            System.Windows.MessageBox.Show($"导出失败: {ex.Message}", "错误");
+        }
+    }
+
+    [RelayCommand]
+    private async Task ExportSelectedProfileCsvAsync()
+    {
+        if (SelectedSavedProfile == null)
+        {
+            System.Windows.MessageBox.Show("请先在表格中选中一个配置", "提示");
+            return;
+        }
+        var dlg = new Microsoft.Win32.SaveFileDialog
+        {
+            Title = "导出正交度配置 (CSV)",
+            Filter = "CSV 文件 (*.csv)|*.csv",
+            FileName = $"{SanitizeFileName(SelectedSavedProfile.Name)}.csv",
+            DefaultExt = ".csv"
+        };
+        if (dlg.ShowDialog() != true) return;
+        try
+        {
+            var p = SelectedSavedProfile;
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine("name,sensor_serial,created_at,sample_count,residual_mean,residual_std," +
+                          "offset_x,offset_y,offset_z," +
+                          "m00,m01,m02,m10,m11,m12,m20,m21,m22");
+            string D(double v) => v.ToString("R", CultureInfo.InvariantCulture);
+            string DN(double? v) => v.HasValue ? D(v.Value) : "";
+            sb.Append($"\"{p.Name}\",\"{p.SensorSerial}\",{p.CreatedAt:yyyy-MM-dd HH:mm:ss},");
+            sb.Append($"{p.SampleCount},{DN(p.ResidualMean)},{DN(p.ResidualStd)},");
+            sb.Append($"{D(p.Offset[0])},{D(p.Offset[1])},{D(p.Offset[2])},");
+            for (int i = 0; i < 9; i++)
+            {
+                sb.Append(D(p.CompensationMatrix[i]));
+                if (i < 8) sb.Append(',');
+            }
+            sb.AppendLine();
+            await File.WriteAllTextAsync(dlg.FileName, sb.ToString(), new System.Text.UTF8Encoding(true));
+            System.Windows.MessageBox.Show($"已导出: {dlg.FileName}", "成功");
+        }
+        catch (Exception ex)
+        {
+            System.Windows.MessageBox.Show($"导出失败: {ex.Message}", "错误");
+        }
+    }
+
+    private static string SanitizeFileName(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return "profile";
+        var invalid = Path.GetInvalidFileNameChars();
+        var sb = new System.Text.StringBuilder();
+        foreach (var c in name)
+            if (Array.IndexOf(invalid, c) < 0) sb.Append(c);
+        var s = sb.ToString().Trim();
+        return s.Length == 0 ? "profile" : (s.Length > 80 ? s[..80] : s);
+    }
+
+    [RelayCommand]
     private async Task LoadFromSessionAsync()
     {
         var picker = new Views.Dialogs.SessionPickerDialog(_storageService)

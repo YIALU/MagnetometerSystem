@@ -1,0 +1,93 @@
+<Window x:Class="MagnetometerSystem.App.Views.Dialogs.ProfileUsageHelpDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="正交度配置使用说明"
+        Width="640" Height="600"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="CanResize" ShowInTaskbar="False">
+    <Grid Margin="18">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <TextBlock Grid.Row="0" Text="如何用正交度配置计算校正后的数据"
+                   FontSize="15" FontWeight="Bold" Margin="0,0,0,12"/>
+
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+            <StackPanel>
+                <TextBlock TextWrapping="Wrap" Margin="0,0,0,10">
+                    每组配置包含 <Run FontFamily="Consolas">Offset</Run>（3 维偏移向量）和 3×3 <Run FontFamily="Consolas">CompensationMatrix</Run>（行优先存储为 9 个元素）。校正公式：
+                </TextBlock>
+
+                <Border Background="#F4F6F8" Padding="10" CornerRadius="3" Margin="0,0,0,12">
+                    <TextBlock FontFamily="Consolas" FontSize="13">
+                        <Run Text="B_corrected = M × (B_raw − Offset)" FontWeight="Bold"/>
+                    </TextBlock>
+                </Border>
+
+                <TextBlock Text="符号定义" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                <Border Background="#F4F6F8" Padding="10" CornerRadius="3" Margin="0,0,0,12">
+                    <TextBlock FontFamily="Consolas" FontSize="12">
+                        B_raw   = [Bx, By, Bz]ᵀ          原始测量向量<LineBreak/>
+                        Offset  = [Ox, Oy, Oz]ᵀ          偏移向量<LineBreak/>
+                        M       = [[m00 m01 m02],         3×3 补偿矩阵<LineBreak/>
+                        <Run Text="          "/>[m10 m11 m12],<LineBreak/>
+                        <Run Text="          "/>[m20 m21 m22]]
+                    </TextBlock>
+                </Border>
+
+                <TextBlock Text="按分量展开" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                <Border Background="#F4F6F8" Padding="10" CornerRadius="3" Margin="0,0,0,12">
+                    <TextBlock FontFamily="Consolas" FontSize="12">
+                        Bx' = m00·(Bx−Ox) + m01·(By−Oy) + m02·(Bz−Oz)<LineBreak/>
+                        By' = m10·(Bx−Ox) + m11·(By−Oy) + m12·(Bz−Oz)<LineBreak/>
+                        Bz' = m20·(Bx−Ox) + m21·(By−Oy) + m22·(Bz−Oz)
+                    </TextBlock>
+                </Border>
+
+                <TextBlock TextWrapping="Wrap" Margin="0,0,0,12">
+                    <Run FontWeight="SemiBold">双三轴（梯度三分量）</Run>：保存时会产生两组配置，名称分别为
+                    <Run FontFamily="Consolas">原名</Run> 和 <Run FontFamily="Consolas">原名_第二组</Run>。
+                    后 3 通道 [X2, Y2, Z2] 用第二组配置按相同公式计算。
+                </TextBlock>
+
+                <TextBlock Text="Python 示例（NumPy）" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                <Border Background="#1E1E1E" Padding="10" CornerRadius="3" Margin="0,0,0,12">
+                    <TextBlock FontFamily="Consolas" FontSize="12" Foreground="#D4D4D4">
+                        <Run Foreground="#569CD6">import</Run><Run Text=" numpy "/><Run Foreground="#569CD6">as</Run><Run Text=" np"/><LineBreak/>
+                        <LineBreak/>
+                        <Run Foreground="#608B4E"># 来自导出的 JSON / CSV</Run><LineBreak/>
+                        offset = np.array([Ox, Oy, Oz])<LineBreak/>
+                        M = np.array([[m00, m01, m02],<LineBreak/>
+                        <Run Text="              "/>[m10, m11, m12],<LineBreak/>
+                        <Run Text="              "/>[m20, m21, m22]])<LineBreak/>
+                        <LineBreak/>
+                        <Run Foreground="#608B4E"># 单条原始读数</Run><LineBreak/>
+                        B_raw = np.array([Bx, By, Bz])<LineBreak/>
+                        B_corr = M @ (B_raw - offset)<LineBreak/>
+                        <LineBreak/>
+                        <Run Foreground="#608B4E"># 批量（N×3 矩阵）</Run><LineBreak/>
+                        readings = np.loadtxt(<Run Foreground="#CE9178">"data.csv"</Run>, delimiter=<Run Foreground="#CE9178">","</Run>, skiprows=1, usecols=(1,2,3))<LineBreak/>
+                        corrected = (readings - offset) @ M.T
+                    </TextBlock>
+                </Border>
+
+                <Border Background="#FFF8E1" BorderBrush="#FFD54F" BorderThickness="1"
+                        Padding="10" CornerRadius="3">
+                    <TextBlock TextWrapping="Wrap">
+                        <Run FontWeight="SemiBold">注意：</Run><LineBreak/>
+                        • 矩阵乘向量是 <Run FontFamily="Consolas">M @ v</Run>；批量是 <Run FontFamily="Consolas">(rows - offset) @ M.T</Run><LineBreak/>
+                        • 单位 nT，与原始数据一致<LineBreak/>
+                        • 软件内"应用校正"按钮已等价完成上述计算，外部 Python 仅用于复核或自动化处理
+                    </TextBlock>
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+
+        <Button Grid.Row="2" Content="关闭" Width="80" HorizontalAlignment="Right"
+                IsCancel="True" IsDefault="True" Margin="0,12,0,0"
+                Click="Close_Click"/>
+    </Grid>
+</Window>

@@ -77,12 +77,13 @@ public partial class MainViewModel : ObservableObject
             }
         };
 
-        // 订阅实时图表的数据点计数
-        RealtimeChartVM.PropertyChanged += (s, e) =>
+        // 订阅会话列表的"实时录制点数"，作为左侧卡片 / 状态栏的可靠数据源
+        // （比 RealtimeChartVM.DataPointCount 可靠：只在图表页可见时才更新）
+        SessionListVM.PropertyChanged += (s, e) =>
         {
-            if (e.PropertyName == nameof(RealtimeChartViewModel.DataPointCount))
+            if (e.PropertyName == nameof(SessionListViewModel.ActiveSessionReadingCount))
             {
-                DataCount = RealtimeChartVM.DataPointCount;
+                DataCount = SessionListVM.ActiveSessionReadingCount;
             }
         };
 

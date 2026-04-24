@@ -205,4 +205,73 @@ public class OrthogonalityCorrectorTests
 
         Assert.Same(reading, result);
     }
+
+    [Fact]
+    public async Task ApplyBatchAsync_DualGroups_AppliesBothToAllReadings()
+    {
+        var firstGroup = new OrthogonalityParams
+        {
+            CompensationMatrix = [1, 0, 0, 0, 1, 0, 0, 0, 1],
+            Offset = [1.0, 2.0, 3.0],
+        };
+        var secondGroup = new OrthogonalityParams
+        {
+            CompensationMatrix = [1, 0, 0, 0, 1, 0, 0, 0, 1],
+            Offset = [10.0, 20.0, 30.0],
+        };
+        var readings = new[]
+        {
+            new MagnetometerReading
+            {
+                SensorType = SensorType.DualTriaxialFluxgate,
+                ChannelValues = [11.0, 22.0, 33.0, 100.0, 200.0, 300.0],
+            },
+            new MagnetometerReading
+            {
+                SensorType = SensorType.DualTriaxialFluxgate,
+                ChannelValues = [12.0, 23.0, 34.0, 110.0, 210.0, 310.0],
+            },
+        };
+
+        var batch = await _corrector.ApplyBatchAsync(firstGroup, secondGroup, readings);
+
+        Assert.Equal(2, batch.ProcessedCount);
+        // First reading
+        Assert.Equal(10.0, batch.CorrectedReadings[0].ChannelValues[0], 6);  // 11 - 1
+        Assert.Equal(20.0, batch.CorrectedReadings[0].ChannelValues[1], 6);  // 22 - 2
+        Assert.Equal(30.0, batch.CorrectedReadings[0].ChannelValues[2], 6);  // 33 - 3
+        Assert.Equal(90.0, batch.CorrectedReadings[0].ChannelValues[3], 6);  // 100 - 10
+        Assert.Equal(180.0, batch.CorrectedReadings[0].ChannelValues[4], 6); // 200 - 20
+        Assert.Equal(270.0, batch.CorrectedReadings[0].ChannelValues[5], 6); // 300 - 30
+        // Second reading: 后 3 通道也必须被校正（之前的 bug 是会保持不变）
+        Assert.Equal(100.0, batch.CorrectedReadings[1].ChannelValues[3], 6); // 110 - 10
+        Assert.Equal(190.0, batch.CorrectedReadings[1].ChannelValues[4], 6); // 210 - 20
+        Assert.Equal(280.0, batch.CorrectedReadings[1].ChannelValues[5], 6); // 310 - 30
+    }
+
+    [Fact]
+    public async Task ApplyBatchAsync_DualGroups_NullSecondGroup_LeavesLast3Untouched()
+    {
+        var firstGroup = new OrthogonalityParams
+        {
+            CompensationMatrix = [1, 0, 0, 0, 1, 0, 0, 0, 1],
+            Offset = [1.0, 2.0, 3.0],
+        };
+        var readings = new[]
+        {
+            new MagnetometerReading
+            {
+                SensorType = SensorType.DualTriaxialFluxgate,
+                ChannelValues = [11.0, 22.0, 33.0, 100.0, 200.0, 300.0],
+            },
+        };
+
+        var batch = await _corrector.ApplyBatchAsync(firstGroup, null, readings);
+
+        Assert.Equal(10.0, batch.CorrectedReadings[0].ChannelValues[0], 6);
+        // null secondGroup → 后 3 通道保留原值
+        Assert.Equal(100.0, batch.CorrectedReadings[0].ChannelValues[3], 6);
+        Assert.Equal(200.0, batch.CorrectedReadings[0].ChannelValues[4], 6);
+        Assert.Equal(300.0, batch.CorrectedReadings[0].ChannelValues[5], 6);
+    }
 }

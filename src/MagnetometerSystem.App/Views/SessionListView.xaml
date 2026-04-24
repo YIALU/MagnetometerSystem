@@ -93,7 +93,32 @@
                 <DataGridTextColumn Header="结束时间" Binding="{Binding EndedAt, StringFormat=yyyy-MM-dd HH:mm:ss}" Width="160"/>
                 <DataGridTextColumn Header="传感器" Binding="{Binding SensorType}" Width="120"/>
                 <DataGridTextColumn Header="采样率" Binding="{Binding SampleRate, StringFormat={}{0} Hz}" Width="80"/>
-                <DataGridTextColumn Header="数据点数" Binding="{Binding TotalReadings, StringFormat=N0}" Width="100"/>
+                <DataGridTemplateColumn Header="数据点数" Width="130">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <TextBlock>
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Text" Value="{Binding TotalReadings, StringFormat=N0}"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Value="True">
+                                                <DataTrigger.Binding>
+                                                    <MultiBinding Converter="{StaticResource EqualsConverter}">
+                                                        <Binding Path="Id"/>
+                                                        <Binding Path="DataContext.ActiveSessionId" RelativeSource="{RelativeSource AncestorType=DataGrid}"/>
+                                                    </MultiBinding>
+                                                </DataTrigger.Binding>
+                                                <Setter Property="Text" Value="{Binding DataContext.ActiveSessionReadingCount, RelativeSource={RelativeSource AncestorType=DataGrid}, StringFormat={}{0:N0} (录制中)}"/>
+                                                <Setter Property="FontWeight" Value="Bold"/>
+                                                <Setter Property="Foreground" Value="#C62828"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
                 <DataGridTextColumn Header="备注" Binding="{Binding Notes}" Width="*"/>
             </DataGrid.Columns>
 
@@ -125,11 +150,16 @@
             <GroupBox Grid.Row="1" Header="批量校正" Margin="0,10,0,0" Padding="8">
                 <StackPanel>
                     <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
-                        <TextBlock Text="校正配置:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <TextBlock Text="第一组:" VerticalAlignment="Center" Margin="0,0,8,0"/>
                         <ComboBox ItemsSource="{Binding AvailableProfiles}"
                                   SelectedItem="{Binding SelectedCorrectionProfile}"
-                                  DisplayMemberPath="Name" Width="200" Margin="0,0,8,0"/>
-                        <Button Content="刷新配置" Command="{Binding LoadCorrectionProfilesCommand}" Padding="8,4" Margin="0,0,8,0"/>
+                                  DisplayMemberPath="Name" Width="180" Margin="0,0,12,0"/>
+                        <TextBlock Text="第二组（双三轴）:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <ComboBox ItemsSource="{Binding AvailableProfiles}"
+                                  SelectedItem="{Binding SelectedCorrectionProfileSecond}"
+                                  DisplayMemberPath="Name" Width="180" Margin="0,0,8,0"
+                                  ToolTip="仅当目标会话为双三轴（6 通道）时必填"/>
+                        <Button Content="刷新" Command="{Binding LoadCorrectionProfilesCommand}" Padding="8,4" Margin="0,0,8,0"/>
                         <Button Content="应用校正" Command="{Binding ApplyBatchCorrectionCommand}"
                                 CommandParameter="{Binding SelectedSession}"
                                 Padding="10,4"/>
