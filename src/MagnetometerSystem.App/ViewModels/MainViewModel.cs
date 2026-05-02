@@ -1,5 +1,6 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using MagnetometerSystem.Core.Services;
 
 namespace MagnetometerSystem.App.ViewModels;
 
@@ -42,7 +43,13 @@ public partial class MainViewModel : ObservableObject
     public SettingsViewModel SettingsVM { get; }
     public DeviceCommandViewModel DeviceCommandVM { get; }
 
-    public MainViewModel(ConnectionViewModel connectionVm, RealtimeChartViewModel realtimeChartVm, SessionListViewModel sessionListVm, HistoryPlaybackViewModel historyPlaybackVm, OrthogonalityCalibrationViewModel orthoCalibVm, SensorCalibrationViewModel sensorCalibVm, SettingsViewModel settingsVm, DeviceCommandViewModel deviceCommandVm)
+    /// <summary>暴露 DataBus 给左侧导航栏触发"记录当前点"</summary>
+    public DataBus DataBus { get; }
+
+    /// <summary>手动正交度采集状态（左侧蓝色卡片绑定）</summary>
+    public ManualOrthoState ManualOrthoState => DataBus.ManualOrthoState;
+
+    public MainViewModel(ConnectionViewModel connectionVm, RealtimeChartViewModel realtimeChartVm, SessionListViewModel sessionListVm, HistoryPlaybackViewModel historyPlaybackVm, OrthogonalityCalibrationViewModel orthoCalibVm, SensorCalibrationViewModel sensorCalibVm, SettingsViewModel settingsVm, DeviceCommandViewModel deviceCommandVm, DataBus dataBus)
     {
         ConnectionVM = connectionVm;
         RealtimeChartVM = realtimeChartVm;
@@ -52,6 +59,7 @@ public partial class MainViewModel : ObservableObject
         SensorCalibVM = sensorCalibVm;
         SettingsVM = settingsVm;
         DeviceCommandVM = deviceCommandVm;
+        DataBus = dataBus;
         CurrentView = connectionVm;
 
         // 订阅连接状态变化

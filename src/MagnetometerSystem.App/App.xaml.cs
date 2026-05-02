@@ -9,6 +9,7 @@ using MagnetometerSystem.Infrastructure.Database;
 using MagnetometerSystem.Infrastructure.Export;
 using MagnetometerSystem.Infrastructure.Services;
 using MagnetometerSystem.App.Services;
+using MagnetometerSystem.App.Helpers;
 using MagnetometerSystem.App.ViewModels;
 
 namespace MagnetometerSystem.App;
@@ -21,6 +22,7 @@ public partial class App : Application
     {
         try
         {
+            ChartFontHelper.ApplyToAll();
             GlobalErrorHandler.Initialize(this);
 
             var services = new ServiceCollection();

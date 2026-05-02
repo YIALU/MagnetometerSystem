@@ -28,6 +28,14 @@ public class StatisticsResultItem
         return string.Join(" ", parts);
     }
 
+    /// <summary>
+    /// 用于多图表右上角标注的多行统计摘要
+    /// </summary>
+    public string FormatMultiline()
+    {
+        return $"μ={Mean:F3}\nσ={StdDev:F3}\nmin={Min:F2}  max={Max:F2}\npp={PeakToPeak:F2}";
+    }
+
     public static StatisticsResultItem Compute(string name, ReadOnlySpan<double> data)
     {
         if (data.Length == 0)

@@ -142,10 +142,43 @@
                     </Style>
                 </Grid.Style>
 
-                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Width="450">
+                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Width="500">
                     <TextBlock Text="采集校正数据" FontSize="20" FontWeight="Bold" Margin="0,0,0,10"/>
                     <TextBlock Text="方式一：实时采集 — 缓慢旋转传感器覆盖尽可能多的方位。&#x0a;方式二：导入文件 — 从 CSV/TXT 文件导入已有的三轴数据（Bx,By,Bz）。"
-                               Foreground="Gray" TextWrapping="Wrap" Margin="0,0,0,15"/>
+                               Foreground="Gray" TextWrapping="Wrap" Margin="0,0,0,12"/>
+
+                    <!-- 采集模式选择 -->
+                    <Border Background="#F5F5F5" CornerRadius="3" Padding="10" Margin="0,0,0,10">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="采集模式：" VerticalAlignment="Center" Margin="0,0,8,0" FontWeight="SemiBold"/>
+                            <RadioButton GroupName="CalibMode" Content="连续采集" Margin="0,0,16,0"
+                                         IsChecked="{Binding IsContinuousMode, Mode=OneWay}"
+                                         Click="ContinuousMode_Click" VerticalAlignment="Center"/>
+                            <RadioButton GroupName="CalibMode" Content="手动采集 48 点 (取最近 10 条均值)"
+                                         IsChecked="{Binding IsManualMode, Mode=OneWay}"
+                                         Click="Manual48Mode_Click" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 手动模式提示横幅 -->
+                    <Border Background="#E3F2FD" BorderBrush="#1976D2" BorderThickness="1"
+                            CornerRadius="4" Padding="10" Margin="0,0,0,12">
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsManualMode}" Value="True">
+                                        <Setter Property="Visibility" Value="Visible"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Border.Style>
+                        <TextBlock Foreground="#0D47A1" TextWrapping="Wrap" FontSize="12">
+                            已开启手动正交度模式。点击「开始采集」后，请回到 [实时采集] 页面监控波形，
+                            旋转传感器到 48 个方位（推荐球面均匀分布），在每个稳定位置点击导航栏中的
+                            <Run FontWeight="Bold">【● 记录当前点】</Run> 按钮（取最近 10 条读数均值作为 1 个点）。
+                        </TextBlock>
+                    </Border>
 
                     <!-- 控制按钮 -->
                     <StackPanel Orientation="Horizontal" Margin="0,0,0,15">

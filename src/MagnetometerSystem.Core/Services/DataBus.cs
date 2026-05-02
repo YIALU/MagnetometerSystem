@@ -1,13 +1,46 @@
+using System.ComponentModel;
 using MagnetometerSystem.Core.Communication;
 using MagnetometerSystem.Core.Models;
 
 namespace MagnetometerSystem.Core.Services;
 
 /// <summary>
+/// 手动正交度采集状态，供 MainWindow 导航栏卡片绑定
+/// </summary>
+public sealed class ManualOrthoState : INotifyPropertyChanged
+{
+    public bool IsActive { get; private set; }
+    public int PointsRecorded { get; private set; }
+    public string? RawFilePath { get; private set; }
+    public string StatusMessage { get; private set; } = "";
+    public bool HasEnoughBuffer { get; private set; }  // 缓冲队列里 ≥10 条
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    public void Update(bool active, int points, string? rawPath, string status, bool enoughBuf)
+    {
+        IsActive = active;
+        PointsRecorded = points;
+        RawFilePath = rawPath;
+        StatusMessage = status;
+        HasEnoughBuffer = enoughBuf;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(string.Empty));
+    }
+}
+
+/// <summary>
 /// 实时数据总线：发布-订阅模式，解耦数据源与消费者
 /// </summary>
 public class DataBus
 {
+    /// <summary>手动正交度采集状态</summary>
+    public ManualOrthoState ManualOrthoState { get; } = new();
+
+    /// <summary>记录按钮点击请求（从导航栏触发到 ViewModel）</summary>
+    public event Action? ManualOrthoRecordRequested;
+
+    public void RaiseManualOrthoRecord() => ManualOrthoRecordRequested?.Invoke();
+
     /// <summary>新的读数到达时触发</summary>
     public event Action<MagnetometerReading>? ReadingReceived;
 

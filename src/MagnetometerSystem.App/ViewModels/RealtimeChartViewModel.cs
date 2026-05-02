@@ -8,6 +8,7 @@ using MagnetometerSystem.Core.Helpers;
 using MagnetometerSystem.Core.Models;
 using MagnetometerSystem.Core.Processing;
 using MagnetometerSystem.Core.Services;
+using MagnetometerSystem.App.Helpers;
 using ScottPlot;
 
 namespace MagnetometerSystem.App.ViewModels;
@@ -411,22 +412,24 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
         int startIdx, int count, double xMin, double xMax)
     {
         int plotIdx = 0;
-        for (int ch = 0; ch < _channelCount; ch++)
-        {
-            var config = ch < ChannelConfigs.Count ? ChannelConfigs[ch] : null;
-            if (config != null && !config.Visible)
-                continue;
 
-            if (plotIdx >= MultiPlotControls.Count) break;
+        // 修复拖拽错位：按 ChannelConfigs 顺序迭代，用 config.ChannelIndex 取物理通道数据
+        foreach (var config in ChannelConfigs)
+        {
+            if (!config.Visible) continue;
+
+            int ch = config.ChannelIndex;
+            if (ch >= _channelCount || plotIdx >= MultiPlotControls.Count) break;
+
             var plotCtrl = MultiPlotControls[plotIdx];
             var plot = plotCtrl.Plot;
             plot.Clear();
 
-            if (channelData[ch].Length >= startIdx + count)
+            if (ch < channelData.Length && channelData[ch].Length >= startIdx + count)
             {
                 var windowValues = channelData[ch].AsSpan(startIdx, count).ToArray();
 
-                if (config != null && config.DisplayOffset != 0)
+                if (config.DisplayOffset != 0)
                 {
                     for (int i = 0; i < windowValues.Length; i++)
                         windowValues[i] += config.DisplayOffset;
@@ -437,16 +440,21 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
 
                 var (plotXs, plotYs) = ApplyDownsampling(windowTimes, windowValues);
                 var sig = plot.Add.ScatterLine(plotXs, plotYs);
-                if (config != null)
-                {
-                    var (a, r, g, b) = config.ParseColor();
-                    sig.Color = new ScottPlot.Color(r, g, b, a);
-                }
+                var (a, r, g, b) = config.ParseColor();
+                sig.Color = new ScottPlot.Color(r, g, b, a);
                 sig.LineWidth = 1.5f;
+
+                // 图上统计标注（右上角）
+                var stat = StatisticsResultItem.Compute(config.Name, windowValues);
+                var ann = plot.Add.Annotation(stat.FormatMultiline(), ScottPlot.Alignment.UpperRight);
+                ann.LabelFontSize = 10;
+                ann.LabelFontName = ChartFontHelper.DefaultCjkFont;
+                ann.LabelBackgroundColor = new ScottPlot.Color(255, 255, 255, 200);
+                ann.LabelBorderColor = new ScottPlot.Color(200, 200, 200, 255);
+                ann.LabelBorderWidth = 1;
             }
 
-            string name = config?.Name ?? (ch < _channelNames.Length ? _channelNames[ch] : $"CH{ch}");
-            plot.Axes.Left.Label.Text = name;
+            plot.Axes.Left.Label.Text = config.Name;
             ConfigurePlotAxes(plot, xMin, xMax);
             plotCtrl.Refresh();
             plotIdx++;
@@ -492,6 +500,15 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
             var (ca, cr, cg, cb) = new ChannelDisplayConfig { ColorHex = computed.ColorHex }.ParseColor();
             compSig.Color = new ScottPlot.Color(cr, cg, cb, ca);
             compSig.LineWidth = computed.LineWidth;
+
+            // 计算通道统计标注
+            var compStat = StatisticsResultItem.Compute(computed.Name, computedValues);
+            var compAnn = plot.Add.Annotation(compStat.FormatMultiline(), ScottPlot.Alignment.UpperRight);
+            compAnn.LabelFontSize = 10;
+            compAnn.LabelFontName = ChartFontHelper.DefaultCjkFont;
+            compAnn.LabelBackgroundColor = new ScottPlot.Color(255, 255, 255, 200);
+            compAnn.LabelBorderColor = new ScottPlot.Color(200, 200, 200, 255);
+            compAnn.LabelBorderWidth = 1;
 
             plot.Axes.Left.Label.Text = computed.Name;
             ConfigurePlotAxes(plot, xMin, xMax);

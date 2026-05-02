@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Controls;
+using MagnetometerSystem.App.Helpers;
 using MagnetometerSystem.Core.Calibration;
 using ScottPlot;
 using ScottPlot.WPF;
@@ -79,6 +80,16 @@ public partial class CalibrationVisualizationControl : UserControl
     public CalibrationVisualizationControl()
     {
         InitializeComponent();
+        Loaded += OnLoaded;
+    }
+
+    private void OnLoaded(object sender, RoutedEventArgs e)
+    {
+        ChartFontHelper.Apply(XYPlot.Plot);
+        ChartFontHelper.Apply(XZPlot.Plot);
+        ChartFontHelper.Apply(YZPlot.Plot);
+        ChartFontHelper.Apply(TotalFieldPlot.Plot);
+        ChartFontHelper.Apply(ResidualPlot.Plot);
     }
 
     private static void OnDataChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)

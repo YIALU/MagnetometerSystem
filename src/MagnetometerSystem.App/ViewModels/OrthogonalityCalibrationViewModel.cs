@@ -15,6 +15,8 @@ namespace MagnetometerSystem.App.ViewModels;
 /// 正交度校正向导 ViewModel（4 步向导）
 /// Step 1: 选择传感器  Step 2: 采集/导入数据  Step 3: 计算与结果  Step 4: 保存配置
 /// </summary>
+public enum CalibrationCollectionMode { Continuous, Manual48 }
+
 public partial class OrthogonalityCalibrationViewModel : ObservableObject
 {
     private readonly IOrthogonalityService _orthogonalityService;
@@ -23,6 +25,15 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
     private readonly IDataStorageService _storageService;
     private readonly List<double[]> _collectedData = new();
     private readonly List<double[]> _collectedDataSecondGroup = new();
+
+    // 手动模式：保留最近 10 条读数用于记录点时求均值
+    private readonly Queue<MagnetometerReading> _recentReadings = new(10);
+    private const int RecentBufferSize = 10;
+
+    // raw CSV 写入
+    private StreamWriter? _rawWriter;
+    private string? _rawFilePath;
+    private int _rawPointIndex;
 
     public OrthogonalityCalibrationViewModel(
         IOrthogonalityService orthogonalityService,
@@ -38,7 +49,16 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         ProfileName = $"正交度校正_{DateTime.Now:yyyyMMdd_HHmmss}";
         UpdateStepNavigation();
 
+        // 订阅左侧导航栏"记录当前点"按钮
+        _dataBus.ManualOrthoRecordRequested += OnManualOrthoRecordRequested;
+
         // 已保存配置延迟加载
+    }
+
+    private void OnManualOrthoRecordRequested()
+    {
+        if (SelectedMode == CalibrationCollectionMode.Manual48 && IsCollecting)
+            RecordCurrentPointCommand.Execute(null);
     }
 
     private bool _isLoaded;
@@ -209,20 +229,43 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
 
     public ObservableCollection<double[]> CollectedData { get; } = new();
 
+    /// <summary>采集模式：连续 / 手动 48 点</summary>
+    [ObservableProperty]
+    private CalibrationCollectionMode _selectedMode = CalibrationCollectionMode.Continuous;
+
+    /// <summary>是否处于手动模式（供 XAML DataTrigger 使用）</summary>
+    public bool IsManualMode => SelectedMode == CalibrationCollectionMode.Manual48;
+    partial void OnSelectedModeChanged(CalibrationCollectionMode value)
+    {
+        OnPropertyChanged(nameof(IsManualMode));
+        OnPropertyChanged(nameof(IsContinuousMode));
+    }
+    public bool IsContinuousMode => SelectedMode == CalibrationCollectionMode.Continuous;
+
     [RelayCommand]
     private void StartCollecting()
     {
         _collectedData.Clear();
         _collectedDataSecondGroup.Clear();
         CollectedData.Clear();
+        _recentReadings.Clear();
         CollectedSampleCount = 0;
         SphericityCoverage = 0;
-        CollectionStatus = "采集中...";
+        CollectionStatus = SelectedMode == CalibrationCollectionMode.Manual48
+            ? "已开启手动模式：请回到 [实时采集] 页面，旋转传感器到 48 个方位，每个稳定位置点击导航栏【记录当前点】"
+            : "采集中（连续模式）...";
         IsCollecting = true;
 
         DataValidation = null;
         ValidationStatusText = string.Empty;
         HasValidationWarnings = false;
+
+        OpenRawCsv(SelectedMode);
+
+        if (SelectedMode == CalibrationCollectionMode.Manual48)
+        {
+            _dataBus.ManualOrthoState.Update(true, 0, _rawFilePath, "等待数据缓冲...", false);
+        }
 
         _dataBus.ReadingReceived += OnCalibrationDataReceived;
         UpdateStepNavigation();
@@ -230,6 +273,22 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
 
     private void OnCalibrationDataReceived(MagnetometerReading reading)
     {
+        // 任何模式都先维护"最近 10 条"队列
+        if (_recentReadings.Count >= RecentBufferSize)
+            _recentReadings.Dequeue();
+        _recentReadings.Enqueue(reading);
+
+        if (SelectedMode == CalibrationCollectionMode.Manual48)
+        {
+            // 手动模式：仅保持队列，不入 _collectedData；更新缓冲就绪状态
+            bool enough = _recentReadings.Count >= RecentBufferSize;
+            _dataBus.ManualOrthoState.Update(true, _collectedData.Count, _rawFilePath,
+                enough ? "缓冲就绪，可以记录" : $"缓冲中 ({_recentReadings.Count}/{RecentBufferSize})",
+                enough);
+            return;
+        }
+
+        // 连续模式：原有逻辑
         double[] sample1;
 
         if (SelectedSensorType == SensorType.DualTriaxialFluxgate)
@@ -246,6 +305,8 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
             sample1 = new double[] { reading.ChannelValues[0], reading.ChannelValues[1], reading.ChannelValues[2] };
             _collectedData.Add(sample1);
         }
+
+        AppendRawPoint(reading);
 
         System.Windows.Application.Current?.Dispatcher?.Invoke(() =>
         {
@@ -312,8 +373,138 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         IsCollecting = false;
         CollectionStatus = $"采集完成，共 {CollectedSampleCount} 个样本";
 
+        CloseRawCsv();
+        _dataBus.ManualOrthoState.Update(false, 0, null, "", false);
+
         RunDataValidation();
         UpdateStepNavigation();
+    }
+
+    /// <summary>
+    /// 手动模式下，把最近 10 条读数对每通道求均值，作为 1 个点加入 _collectedData。
+    /// </summary>
+    [RelayCommand]
+    private void RecordCurrentPoint()
+    {
+        if (SelectedMode != CalibrationCollectionMode.Manual48 || !IsCollecting) return;
+        if (_recentReadings.Count == 0)
+        {
+            CollectionStatus = "无可用读数";
+            return;
+        }
+
+        bool dual = SelectedSensorType == SensorType.DualTriaxialFluxgate;
+        int n = dual ? 6 : 3;
+
+        // 对每通道求均值
+        var sums = new double[n];
+        int validCount = 0;
+        DateTime lastTs = DateTime.Now;
+        foreach (var r in _recentReadings)
+        {
+            if (r.ChannelValues.Length < n) continue;
+            for (int i = 0; i < n; i++) sums[i] += r.ChannelValues[i];
+            validCount++;
+            lastTs = r.Timestamp;
+        }
+        if (validCount == 0)
+        {
+            CollectionStatus = "缓冲中无符合通道数的读数";
+            return;
+        }
+        var avg = new double[n];
+        for (int i = 0; i < n; i++) avg[i] = sums[i] / validCount;
+
+        var sample1 = new double[] { avg[0], avg[1], avg[2] };
+        _collectedData.Add(sample1);
+        if (dual)
+        {
+            var sample2 = new double[] { avg[3], avg[4], avg[5] };
+            _collectedDataSecondGroup.Add(sample2);
+        }
+
+        // 写 raw CSV
+        var avgReading = new MagnetometerReading
+        {
+            Timestamp = lastTs,
+            ChannelValues = avg,
+            SensorType = SelectedSensorType,
+        };
+        AppendRawPoint(avgReading);
+
+        System.Windows.Application.Current?.Dispatcher?.Invoke(() =>
+        {
+            CollectedData.Add(sample1);
+            CollectedSampleCount = _collectedData.Count;
+            CollectionStatus = $"已记录第 {CollectedSampleCount} 点 (基于最近 {validCount} 条均值)";
+            _dataBus.ManualOrthoState.Update(true, _collectedData.Count, _rawFilePath,
+                CollectedSampleCount >= 48 ? "已达 48 点，可以完成" : $"已记录 {CollectedSampleCount} 点",
+                _recentReadings.Count >= RecentBufferSize);
+
+            if (_collectedData.Count % 6 == 0)
+            {
+                UpdateCoverageEstimate();
+                RunDataValidation();
+            }
+        });
+    }
+
+    // ---- raw CSV 写入 ----
+
+    private static string RawDataDir
+    {
+        get
+        {
+            var dir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "MagnetometerSystem", "statistics", "calibration_raw");
+            Directory.CreateDirectory(dir);
+            return dir;
+        }
+    }
+
+    private void OpenRawCsv(CalibrationCollectionMode mode)
+    {
+        if (_rawWriter != null) return;
+        var safeName = string.Join("_",
+            (ProfileName ?? "calib").Split(Path.GetInvalidFileNameChars()));
+        if (string.IsNullOrWhiteSpace(safeName)) safeName = "calib";
+        _rawFilePath = Path.Combine(RawDataDir,
+            $"{safeName}_{DateTime.Now:yyyyMMdd_HHmmss}_raw.csv");
+        _rawWriter = new StreamWriter(_rawFilePath, append: false, new System.Text.UTF8Encoding(true));
+        _rawPointIndex = 0;
+        _rawWriter.WriteLine($"# Calibration Profile : {ProfileName}");
+        _rawWriter.WriteLine($"# Sensor Type         : {SelectedSensorType}");
+        _rawWriter.WriteLine($"# Collection Mode     : {mode}");
+        _rawWriter.WriteLine($"# Recorded At         : {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+        var channelNames = SelectedSensorType == SensorType.DualTriaxialFluxgate
+            ? "X1,Y1,Z1,X2,Y2,Z2" : "X,Y,Z";
+        _rawWriter.WriteLine("point_index,timestamp," + channelNames);
+        _rawWriter.Flush();
+    }
+
+    private void AppendRawPoint(MagnetometerReading reading)
+    {
+        if (_rawWriter == null) return;
+        _rawPointIndex++;
+        var sb = new System.Text.StringBuilder();
+        sb.Append(_rawPointIndex).Append(',');
+        sb.Append(reading.Timestamp.ToString("yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture));
+        int n = SelectedSensorType == SensorType.DualTriaxialFluxgate ? 6 : 3;
+        for (int i = 0; i < n && i < reading.ChannelValues.Length; i++)
+        {
+            sb.Append(',');
+            sb.Append(reading.ChannelValues[i].ToString("R", CultureInfo.InvariantCulture));
+        }
+        _rawWriter.WriteLine(sb.ToString());
+        _rawWriter.Flush();
+    }
+
+    private void CloseRawCsv()
+    {
+        try { _rawWriter?.Flush(); } catch { }
+        try { _rawWriter?.Dispose(); } catch { }
+        _rawWriter = null;
     }
 
     [RelayCommand]
@@ -765,6 +956,9 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
             _dataBus.ReadingReceived -= OnCalibrationDataReceived;
             IsCollecting = false;
         }
+        _dataBus.ManualOrthoRecordRequested -= OnManualOrthoRecordRequested;
+        CloseRawCsv();
+        _dataBus.ManualOrthoState.Update(false, 0, null, "", false);
         _collectedData.Clear();
         _collectedDataSecondGroup.Clear();
         CollectedData.Clear();

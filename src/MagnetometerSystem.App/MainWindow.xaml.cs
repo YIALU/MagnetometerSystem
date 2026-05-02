@@ -1,4 +1,5 @@
 using System.Windows;
+using MagnetometerSystem.App.ViewModels;
 using MagnetometerSystem.App.Views.Dialogs;
 
 namespace MagnetometerSystem.App;
@@ -15,5 +16,11 @@ public partial class MainWindow : Window
     {
         var dlg = new AboutDialog { Owner = this };
         dlg.ShowDialog();
+    }
+
+    private void RecordOrthoPoint_Click(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is MainViewModel vm)
+            vm.DataBus.RaiseManualOrthoRecord();
     }
 }

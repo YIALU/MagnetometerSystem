@@ -91,6 +91,32 @@
                     </StackPanel>
                 </Border>
 
+                <!-- 手动正交度采集卡片（蓝色） -->
+                <Border Visibility="{Binding ManualOrthoState.IsActive, Converter={StaticResource BoolToVisibilityConverter}}"
+                        Background="#E3F2FD" BorderBrush="#1976D2" BorderThickness="1"
+                        CornerRadius="4" Padding="8" Margin="3,0,3,8">
+                    <StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                            <Ellipse Width="8" Height="8" Fill="#1976D2" Margin="0,0,5,0" VerticalAlignment="Center"/>
+                            <TextBlock Text="手动正交度采集" Foreground="#0D47A1" FontWeight="Bold" FontSize="11"/>
+                        </StackPanel>
+                        <TextBlock Foreground="#0D47A1" FontSize="10">
+                            <Run Text="已保存 "/>
+                            <Run Text="{Binding ManualOrthoState.PointsRecorded, Mode=OneWay}"/>
+                            <Run Text=" / 48 点"/>
+                        </TextBlock>
+                        <TextBlock Foreground="#0D47A1" FontSize="9" TextWrapping="Wrap"
+                                   Text="{Binding ManualOrthoState.RawFilePath, Mode=OneWay}"
+                                   ToolTip="{Binding ManualOrthoState.RawFilePath, Mode=OneWay}"/>
+                        <Button Content="● 记录当前点" Margin="0,4,0,2" Padding="6,4"
+                                Background="#1976D2" Foreground="White" FontWeight="Bold"
+                                IsEnabled="{Binding ManualOrthoState.HasEnoughBuffer}"
+                                Click="RecordOrthoPoint_Click"/>
+                        <TextBlock Text="{Binding ManualOrthoState.StatusMessage, Mode=OneWay}"
+                                   Foreground="#0D47A1" FontSize="9" TextWrapping="Wrap" Margin="0,3,0,0"/>
+                    </StackPanel>
+                </Border>
+
                 <Button Content="设备连接" Margin="3" Padding="8,6" HorizontalContentAlignment="Left"
                         Command="{Binding NavigateToConnectionCommand}"/>
                 <Button Content="实时采集" Margin="3" Padding="8,6" HorizontalContentAlignment="Left"

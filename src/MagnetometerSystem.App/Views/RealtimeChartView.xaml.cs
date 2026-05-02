@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Windows.Controls;
 using System.Windows.Input;
+using MagnetometerSystem.App.Helpers;
 using MagnetometerSystem.App.ViewModels;
 
 namespace MagnetometerSystem.App.Views;
@@ -17,6 +18,7 @@ public partial class RealtimeChartView : UserControl
         if (DataContext is RealtimeChartViewModel vm)
         {
             vm.PlotControl = WpfPlot1;
+            ChartFontHelper.Apply(WpfPlot1.Plot);
             vm.PropertyChanged += OnViewModelPropertyChanged;
             vm.ChannelConfigs.CollectionChanged += OnChannelConfigsChanged;
             vm.ComputedChannels.CollectionChanged += OnComputedChannelsChanged;
@@ -125,6 +127,7 @@ public partial class RealtimeChartView : UserControl
                 Margin = new System.Windows.Thickness(2),
             };
             wpfPlot.MouseWheel += OnPlotMouseWheel;
+            ChartFontHelper.Apply(wpfPlot.Plot);
 
             System.Windows.Controls.Grid.SetRow(wpfPlot, row);
             System.Windows.Controls.Grid.SetColumn(wpfPlot, col);
@@ -148,6 +151,7 @@ public partial class RealtimeChartView : UserControl
                 Margin = new System.Windows.Thickness(2),
             };
             wpfPlot.MouseWheel += OnPlotMouseWheel;
+            ChartFontHelper.Apply(wpfPlot.Plot);
 
             System.Windows.Controls.Grid.SetRow(wpfPlot, row);
             System.Windows.Controls.Grid.SetColumn(wpfPlot, col);
