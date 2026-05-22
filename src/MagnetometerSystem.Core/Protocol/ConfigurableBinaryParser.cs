@@ -212,24 +212,36 @@ public class ConfigurableBinaryParser : IDataParser
 
     private double ReadSegmentValue(byte[] frame, int offset, FrameSegment seg)
     {
-        byte[] fieldBytes = new byte[seg.ByteCount];
-        Array.Copy(frame, offset, fieldBytes, 0, seg.ByteCount);
-
-        if (seg.BigEndian != !BitConverter.IsLittleEndian)
+        try
         {
-            Array.Reverse(fieldBytes);
+            if (offset < 0 || seg.ByteCount <= 0 || offset + seg.ByteCount > frame.Length)
+                return 0;
+
+            byte[] fieldBytes = new byte[seg.ByteCount];
+            Array.Copy(frame, offset, fieldBytes, 0, seg.ByteCount);
+
+            if (seg.BigEndian != !BitConverter.IsLittleEndian)
+            {
+                Array.Reverse(fieldBytes);
+            }
+
+            return seg.DataType switch
+            {
+                FieldDataType.Float => fieldBytes.Length >= 4 ? BitConverter.ToSingle(fieldBytes, 0) : 0,
+                FieldDataType.Double => fieldBytes.Length >= 8 ? BitConverter.ToDouble(fieldBytes, 0) : 0,
+                FieldDataType.Int16 => fieldBytes.Length >= 2 ? BitConverter.ToInt16(fieldBytes, 0) : 0,
+                FieldDataType.UInt16 => fieldBytes.Length >= 2 ? BitConverter.ToUInt16(fieldBytes, 0) : 0,
+                FieldDataType.Int32 => fieldBytes.Length >= 4 ? BitConverter.ToInt32(fieldBytes, 0) : 0,
+                FieldDataType.UInt32 => fieldBytes.Length >= 4 ? BitConverter.ToUInt32(fieldBytes, 0) : 0,
+                _ => 0
+            };
         }
-
-        return seg.DataType switch
+        catch (Exception ex)
         {
-            FieldDataType.Float => BitConverter.ToSingle(fieldBytes, 0),
-            FieldDataType.Double => BitConverter.ToDouble(fieldBytes, 0),
-            FieldDataType.Int16 => BitConverter.ToInt16(fieldBytes, 0),
-            FieldDataType.UInt16 => BitConverter.ToUInt16(fieldBytes, 0),
-            FieldDataType.Int32 => BitConverter.ToInt32(fieldBytes, 0),
-            FieldDataType.UInt32 => BitConverter.ToUInt32(fieldBytes, 0),
-            _ => 0
-        };
+            System.Diagnostics.Trace.TraceError(
+                $"[ReadSegmentValue] ch={seg.ChannelIndex} type={seg.DataType} bytes={seg.ByteCount} ex={ex.Message}");
+            return 0;
+        }
     }
 
     // =====================================================================
@@ -390,23 +402,35 @@ public class ConfigurableBinaryParser : IDataParser
 
     private double ReadFieldValue(byte[] frame, int offset, FieldMapping field)
     {
-        byte[] fieldBytes = new byte[field.ByteSize];
-        Array.Copy(frame, offset, fieldBytes, 0, field.ByteSize);
-
-        if (field.BigEndian != !BitConverter.IsLittleEndian)
+        try
         {
-            Array.Reverse(fieldBytes);
+            if (offset < 0 || field.ByteSize <= 0 || offset + field.ByteSize > frame.Length)
+                return 0;
+
+            byte[] fieldBytes = new byte[field.ByteSize];
+            Array.Copy(frame, offset, fieldBytes, 0, field.ByteSize);
+
+            if (field.BigEndian != !BitConverter.IsLittleEndian)
+            {
+                Array.Reverse(fieldBytes);
+            }
+
+            return field.DataType switch
+            {
+                FieldDataType.Float => fieldBytes.Length >= 4 ? BitConverter.ToSingle(fieldBytes, 0) : 0,
+                FieldDataType.Double => fieldBytes.Length >= 8 ? BitConverter.ToDouble(fieldBytes, 0) : 0,
+                FieldDataType.Int16 => fieldBytes.Length >= 2 ? BitConverter.ToInt16(fieldBytes, 0) : 0,
+                FieldDataType.UInt16 => fieldBytes.Length >= 2 ? BitConverter.ToUInt16(fieldBytes, 0) : 0,
+                FieldDataType.Int32 => fieldBytes.Length >= 4 ? BitConverter.ToInt32(fieldBytes, 0) : 0,
+                FieldDataType.UInt32 => fieldBytes.Length >= 4 ? BitConverter.ToUInt32(fieldBytes, 0) : 0,
+                _ => 0
+            };
         }
-
-        return field.DataType switch
+        catch (Exception ex)
         {
-            FieldDataType.Float => BitConverter.ToSingle(fieldBytes, 0),
-            FieldDataType.Double => BitConverter.ToDouble(fieldBytes, 0),
-            FieldDataType.Int16 => BitConverter.ToInt16(fieldBytes, 0),
-            FieldDataType.UInt16 => BitConverter.ToUInt16(fieldBytes, 0),
-            FieldDataType.Int32 => BitConverter.ToInt32(fieldBytes, 0),
-            FieldDataType.UInt32 => BitConverter.ToUInt32(fieldBytes, 0),
-            _ => 0
-        };
+            System.Diagnostics.Trace.TraceError(
+                $"[ReadFieldValue] ch={field.ChannelIndex} type={field.DataType} bytes={field.ByteSize} ex={ex.Message}");
+            return 0;
+        }
     }
 }

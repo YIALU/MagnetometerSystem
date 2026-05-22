@@ -1,7 +1,7 @@
 <Project>
   <PropertyGroup>
     <!-- 发布版本号；bump 后打同名 git tag (vX.Y.Z) -->
-    <Version>0.2.0</Version>
+    <Version>0.2.1</Version>
     <AssemblyVersion>$(Version).0</AssemblyVersion>
     <FileVersion>$(Version).0</FileVersion>
     <!-- InformationalVersion 自动 = Version + "+" + SourceRevisionId -->

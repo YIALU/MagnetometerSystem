@@ -303,33 +303,62 @@ public partial class ConnectionViewModel : ObservableObject
             });
         }
 
-        _parser?.Feed(data, 0, data.Length);
-
-        while (_parser?.TryParse(out var reading) == true && reading != null)
+        try
         {
-            var processed = _sensorAdapter?.Process(reading) ?? reading;
+            _parser?.Feed(data, 0, data.Length);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Trace.TraceError($"[Parser.Feed] {ex}");
+            return;
+        }
 
-            // 正交度校正（在发布之前应用）
-            if (IsOrthogonalityCorrectionEnabled && ActiveOrthogonalityProfile != null)
+        // 单帧独立 try/catch：一帧失败不影响后续帧，更不能让异常冒泡断流
+        while (true)
+        {
+            MagnetometerReading? reading;
+            try
             {
-                // 保存原始值
-                processed.OriginalChannelValues = processed.ChannelValues.ToArray();
-                processed = _orthogonalityCorrector.ApplyToReading(
-                    ActiveOrthogonalityProfile, SecondOrthogonalityProfile, processed);
+                if (_parser?.TryParse(out reading) != true || reading == null)
+                    break;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Trace.TraceError($"[Parser.TryParse] {ex}");
+                break; // parser 内部状态可能脏，跳出，下次 Feed 再继续
             }
 
-            // 发布到数据总线（供实时图表等消费者使用）
-            _dataBus.PublishReading(processed);
-
-            Application.Current?.Dispatcher.BeginInvoke(() =>
+            try
             {
-                var line = $"[{processed.Timestamp:HH:mm:ss.fff}] " +
-                           string.Join(", ", processed.ChannelValues.Select(v => v.ToString("F2")));
+                var processed = _sensorAdapter?.Process(reading) ?? reading;
 
-                RawDataLines.Add(line);
-                while (RawDataLines.Count > MaxRawDataLines)
-                    RawDataLines.RemoveAt(0);
-            });
+                // 正交度校正（在发布之前应用）
+                if (IsOrthogonalityCorrectionEnabled && ActiveOrthogonalityProfile != null)
+                {
+                    processed.OriginalChannelValues = processed.ChannelValues.ToArray();
+                    processed = _orthogonalityCorrector.ApplyToReading(
+                        ActiveOrthogonalityProfile, SecondOrthogonalityProfile, processed);
+                }
+
+                // 发布到数据总线（供实时图表等消费者使用）
+                _dataBus.PublishReading(processed);
+
+                Application.Current?.Dispatcher.BeginInvoke(() =>
+                {
+                    var line = $"[{processed.Timestamp:HH:mm:ss.fff}] " +
+                               string.Join(", ", processed.ChannelValues.Select(v => v.ToString("F2")));
+                    RawDataLines.Add(line);
+                    while (RawDataLines.Count > MaxRawDataLines)
+                        RawDataLines.RemoveAt(0);
+                });
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Trace.TraceError(
+                    $"[ProcessReading] channels={reading?.ChannelValues?.Length} " +
+                    $"sensorType={reading?.SensorType} ortho={IsOrthogonalityCorrectionEnabled} ex={ex}");
+                // 单帧失败，继续下一帧
+            }
         }
     }
 
