@@ -73,7 +73,21 @@ public class DataBus
 
     public void PublishReading(MagnetometerReading reading)
     {
-        ReadingReceived?.Invoke(reading);
+        var handlers = ReadingReceived;
+        if (handlers == null) return;
+
+        // 逐订阅者隔离：任一订阅者（如实时图表）抛异常，不影响其余订阅者（尤其是存储）被调用。
+        foreach (Action<MagnetometerReading> handler in handlers.GetInvocationList())
+        {
+            try
+            {
+                handler(reading);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Trace.TraceError($"[PublishReading] 订阅者异常已隔离: {ex}");
+            }
+        }
     }
 
     /// <summary>

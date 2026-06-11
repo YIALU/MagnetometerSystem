@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using MagnetometerSystem.Core.Protocol;
 
 namespace MagnetometerSystem.Core.Models;
 
@@ -132,6 +133,12 @@ public class ProtocolConfig
 
     /// <summary>校验计算的范围起始（0=从帧头开始，通常为 0）</summary>
     public int ChecksumStartOffset { get; set; } = 0;
+
+    /// <summary>CRC-16 变体（仅当 Checksum=CRC16 时有效）。必须与设备端一致。</summary>
+    public Crc16Variant Crc16Variant { get; set; } = Crc16Variant.Modbus;
+
+    /// <summary>CRC-16 校验值在帧中的字节序：false=低字节在前（Modbus RTU 习惯），true=高字节在前。</summary>
+    public bool ChecksumBigEndian { get; set; } = false;
 
     // ==== 字段映射（旧模式，保留兼容） ====
 

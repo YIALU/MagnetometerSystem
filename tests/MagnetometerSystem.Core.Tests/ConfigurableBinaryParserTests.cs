@@ -136,6 +136,125 @@ public class ConfigurableBinaryParserTests
         Assert.Equal(110.0, reading.ChannelValues[0], 1);
     }
 
+    [Fact]
+    public void TryParseLegacy_LeadingGarbage_AlignsToHeaderAndParses()
+    {
+        // P1-2 回归：帧前有垃圾字节时，必须先 FindHeader 对齐再读长度，
+        // 否则会从垃圾字节读出错误的大长度而永远卡住。
+        var config = new ProtocolConfig
+        {
+            Category = ProtocolCategory.Binary,
+            FrameHeader = "AA55",
+            FrameTail = "0D",
+            HasLengthByte = true,
+            LengthByteCount = 1,
+            Checksum = ChecksumType.Xor,
+            ChecksumStartOffset = 0,
+            FieldMappings =
+            [
+                new FieldMapping { Name = "X", ChannelIndex = 0, ByteOffset = 0, DataType = FieldDataType.Float },
+                new FieldMapping { Name = "Y", ChannelIndex = 1, ByteOffset = 4, DataType = FieldDataType.Float },
+                new FieldMapping { Name = "Z", ChannelIndex = 2, ByteOffset = 8, DataType = FieldDataType.Float },
+            ],
+        };
+        var parser = new ConfigurableBinaryParser(config);
+
+        var frame = BuildLegacyFrame(config, 100.5f, 200.25f, 300.75f);
+        // 前导垃圾：0x33 若被误当作长度=51，旧代码会算出超大帧长而卡死；不含 AA55
+        var garbage = new byte[] { 0x11, 0x22, 0x33 };
+        var withGarbage = new byte[garbage.Length + frame.Length];
+        Array.Copy(garbage, 0, withGarbage, 0, garbage.Length);
+        Array.Copy(frame, 0, withGarbage, garbage.Length, frame.Length);
+        parser.Feed(withGarbage, 0, withGarbage.Length);
+
+        bool result = parser.TryParse(out var reading);
+
+        Assert.True(result);
+        Assert.NotNull(reading);
+        Assert.Equal(100.5, reading!.ChannelValues[0], 1);
+        Assert.Equal(200.25, reading.ChannelValues[1], 2);
+        Assert.Equal(300.75, reading.ChannelValues[2], 2);
+    }
+
+    [Fact]
+    public void TryParseLegacy_Crc16Modbus_ValidFrame_Parses()
+    {
+        // P1-4：CRC16(Modbus) 校验，2 字节小端在帧尾
+        var config = new ProtocolConfig
+        {
+            Category = ProtocolCategory.Binary,
+            FrameHeader = "AA55",
+            FrameTail = "",
+            HasLengthByte = true,
+            LengthByteCount = 1,
+            Checksum = ChecksumType.CRC16,
+            Crc16Variant = Crc16Variant.Modbus,
+            ChecksumBigEndian = false,
+            ChecksumStartOffset = 0,
+            FieldMappings =
+            [
+                new FieldMapping { Name = "X", ChannelIndex = 0, ByteOffset = 0, DataType = FieldDataType.Float },
+            ],
+        };
+        var parser = new ConfigurableBinaryParser(config);
+
+        // body: [AA 55] [04] [float]，CRC 覆盖 body 全部（ChecksumStartOffset=0）
+        var floatBytes = BitConverter.GetBytes(123.5f);
+        var body = new byte[2 + 1 + 4];
+        body[0] = 0xAA; body[1] = 0x55; body[2] = 4;
+        Array.Copy(floatBytes, 0, body, 3, 4);
+        ushort crc = Crc16.Compute(body, Crc16Variant.Modbus);
+
+        var frame = new byte[body.Length + 2];
+        Array.Copy(body, 0, frame, 0, body.Length);
+        frame[body.Length] = (byte)(crc & 0xFF);          // 低字节在前
+        frame[body.Length + 1] = (byte)((crc >> 8) & 0xFF);
+        parser.Feed(frame, 0, frame.Length);
+
+        bool result = parser.TryParse(out var reading);
+
+        Assert.True(result);
+        Assert.NotNull(reading);
+        Assert.Equal(123.5, reading!.ChannelValues[0], 1);
+    }
+
+    [Fact]
+    public void TryParseLegacy_Crc16Modbus_BadCrc_ReturnsFalse()
+    {
+        var config = new ProtocolConfig
+        {
+            Category = ProtocolCategory.Binary,
+            FrameHeader = "AA55",
+            FrameTail = "",
+            HasLengthByte = true,
+            LengthByteCount = 1,
+            Checksum = ChecksumType.CRC16,
+            Crc16Variant = Crc16Variant.Modbus,
+            ChecksumStartOffset = 0,
+            FieldMappings =
+            [
+                new FieldMapping { Name = "X", ChannelIndex = 0, ByteOffset = 0, DataType = FieldDataType.Float },
+            ],
+        };
+        var parser = new ConfigurableBinaryParser(config);
+
+        var floatBytes = BitConverter.GetBytes(123.5f);
+        var body = new byte[2 + 1 + 4];
+        body[0] = 0xAA; body[1] = 0x55; body[2] = 4;
+        Array.Copy(floatBytes, 0, body, 3, 4);
+        ushort crc = Crc16.Compute(body, Crc16Variant.Modbus);
+
+        var frame = new byte[body.Length + 2];
+        Array.Copy(body, 0, frame, 0, body.Length);
+        frame[body.Length] = (byte)((crc & 0xFF) ^ 0xFF); // 损坏低字节
+        frame[body.Length + 1] = (byte)((crc >> 8) & 0xFF);
+        parser.Feed(frame, 0, frame.Length);
+
+        bool result = parser.TryParse(out _);
+
+        Assert.False(result);
+    }
+
     #endregion
 
     #region Segment mode

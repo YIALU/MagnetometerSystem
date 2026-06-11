@@ -4,6 +4,7 @@
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:models="clr-namespace:MagnetometerSystem.Core.Models;assembly=MagnetometerSystem.Core"
+             xmlns:protocol="clr-namespace:MagnetometerSystem.Core.Protocol;assembly=MagnetometerSystem.Core"
              xmlns:sys="clr-namespace:System;assembly=System.Runtime"
              mc:Ignorable="d"
              d:DesignHeight="800" d:DesignWidth="900">
@@ -16,6 +17,11 @@
         <ObjectDataProvider x:Key="ChecksumAlgorithmValues" MethodName="GetValues" ObjectType="{x:Type sys:Enum}">
             <ObjectDataProvider.MethodParameters>
                 <x:Type TypeName="models:ChecksumAlgorithm"/>
+            </ObjectDataProvider.MethodParameters>
+        </ObjectDataProvider>
+        <ObjectDataProvider x:Key="Crc16VariantValues" MethodName="GetValues" ObjectType="{x:Type sys:Enum}">
+            <ObjectDataProvider.MethodParameters>
+                <x:Type TypeName="protocol:Crc16Variant"/>
             </ObjectDataProvider.MethodParameters>
         </ObjectDataProvider>
     </UserControl.Resources>
@@ -385,6 +391,26 @@
                                                                 <DataTrigger Binding="{Binding Type}" Value="{x:Static models:SegmentType.Checksum}">
                                                                     <Setter Property="Visibility" Value="Visible"/>
                                                                 </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </ComboBox.Style>
+                                                </ComboBox>
+
+                                                <!-- Checksum: CRC16 变体选择（仅 CRC16 算法时显示） -->
+                                                <ComboBox ItemsSource="{Binding Source={StaticResource Crc16VariantValues}}"
+                                                          SelectedItem="{Binding Crc16Variant}" Width="90" FontSize="11"
+                                                          Margin="4,0,0,0" ToolTip="CRC-16 变体，必须与设备端一致">
+                                                    <ComboBox.Style>
+                                                        <Style TargetType="ComboBox">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                            <Style.Triggers>
+                                                                <MultiDataTrigger>
+                                                                    <MultiDataTrigger.Conditions>
+                                                                        <Condition Binding="{Binding Type}" Value="{x:Static models:SegmentType.Checksum}"/>
+                                                                        <Condition Binding="{Binding ChecksumAlgorithm}" Value="{x:Static models:ChecksumAlgorithm.CRC16}"/>
+                                                                    </MultiDataTrigger.Conditions>
+                                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                                </MultiDataTrigger>
                                                             </Style.Triggers>
                                                         </Style>
                                                     </ComboBox.Style>

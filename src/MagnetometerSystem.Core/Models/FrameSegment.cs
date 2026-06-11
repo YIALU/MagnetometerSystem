@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using MagnetometerSystem.Core.Protocol;
 
 namespace MagnetometerSystem.Core.Models;
 
@@ -141,10 +142,28 @@ public class FrameSegment : INotifyPropertyChanged
     // ---- Checksum 专用 ----
 
     /// <summary>校验算法</summary>
-    public ChecksumAlgorithm ChecksumAlgorithm { get; set; } = ChecksumAlgorithm.Xor;
+    private ChecksumAlgorithm _checksumAlgorithm = ChecksumAlgorithm.Xor;
+    public ChecksumAlgorithm ChecksumAlgorithm
+    {
+        get => _checksumAlgorithm;
+        set
+        {
+            if (_checksumAlgorithm != value)
+            {
+                _checksumAlgorithm = value;
+                OnPropertyChanged(nameof(ChecksumAlgorithm));
+            }
+        }
+    }
 
     /// <summary>校验计算起始段索引（0=从第一段开始）</summary>
     public int ChecksumStartIndex { get; set; } = 0;
+
+    /// <summary>CRC-16 变体（仅当 ChecksumAlgorithm=CRC16 时有效）。必须与设备端一致。</summary>
+    public Crc16Variant Crc16Variant { get; set; } = Crc16Variant.Modbus;
+
+    /// <summary>CRC-16 校验值字节序：false=低字节在前（Modbus RTU 习惯），true=高字节在前。CRC16 时该段 ByteCount 应为 2。</summary>
+    public bool ChecksumBigEndian { get; set; } = false;
 
     // ---- 自动计算 ----
 

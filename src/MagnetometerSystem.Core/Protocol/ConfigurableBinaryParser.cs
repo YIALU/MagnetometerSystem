@@ -151,7 +151,6 @@ public class ConfigurableBinaryParser : IDataParser
         if (_checksumSegment != null)
         {
             int checksumPos = _checksumSegment.ComputedOffset;
-            byte expected = _ringBuffer.Peek(checksumPos);
 
             // 计算校验起始位置
             int checksumStart = 0;
@@ -160,22 +159,43 @@ public class ConfigurableBinaryParser : IDataParser
                 checksumStart = _config.Segments[_checksumSegment.ChecksumStartIndex].ComputedOffset;
             }
 
-            byte computed = 0;
-            for (int i = checksumStart; i < checksumPos; i++)
+            if (_checksumSegment.ChecksumAlgorithm == ChecksumAlgorithm.CRC16)
             {
-                byte b = _ringBuffer.Peek(i);
-                computed = _checksumSegment.ChecksumAlgorithm switch
+                // CRC-16：2 字节校验值（该段 ByteCount 应配为 2），按字节序组合后比较
+                var crcData = new byte[checksumPos - checksumStart];
+                for (int i = 0; i < crcData.Length; i++)
+                    crcData[i] = _ringBuffer.Peek(checksumStart + i);
+                ushort computed = Crc16.Compute(crcData, _checksumSegment.Crc16Variant);
+                byte c0 = _ringBuffer.Peek(checksumPos);
+                byte c1 = _ringBuffer.Peek(checksumPos + 1);
+                ushort expected = _checksumSegment.ChecksumBigEndian
+                    ? (ushort)((c0 << 8) | c1)
+                    : (ushort)(c0 | (c1 << 8));
+                if (computed != expected)
                 {
-                    ChecksumAlgorithm.Xor => (byte)(computed ^ b),
-                    ChecksumAlgorithm.Sum8 => (byte)(computed + b),
-                    _ => computed
-                };
+                    _ringBuffer.Skip(1);
+                    return false;
+                }
             }
-
-            if (computed != expected)
+            else
             {
-                _ringBuffer.Skip(1);
-                return false;
+                byte expected = _ringBuffer.Peek(checksumPos);
+                byte computed = 0;
+                for (int i = checksumStart; i < checksumPos; i++)
+                {
+                    byte b = _ringBuffer.Peek(i);
+                    computed = _checksumSegment.ChecksumAlgorithm switch
+                    {
+                        ChecksumAlgorithm.Xor => (byte)(computed ^ b),
+                        ChecksumAlgorithm.Sum8 => (byte)(computed + b),
+                        _ => computed
+                    };
+                }
+                if (computed != expected)
+                {
+                    _ringBuffer.Skip(1);
+                    return false;
+                }
             }
         }
 
@@ -252,25 +272,23 @@ public class ConfigurableBinaryParser : IDataParser
     {
         reading = null;
 
+        int headerLen = _headerBytes.Length;
+        int lengthFieldLen = _config.HasLengthByte ? _config.LengthByteCount : 0;
+        int checksumLen = _config.Checksum == ChecksumType.None
+            ? 0
+            : (_config.Checksum == ChecksumType.CRC16 ? 2 : 1);
+        int tailLen = _tailBytes.Length;
+
+        // 先对齐帧头再读长度：未对齐（前导垃圾字节）时从错误位置读出的长度可能极大，
+        // 导致 frameLen 过大、Count<frameLen 永远提前返回而卡死。必须先 FindHeader 对齐。
+        if (!FindHeader())
+            return false;
+
         int dataLen = GetDataLength();
         if (dataLen < 0)
             return false;
 
-        int headerLen = _headerBytes.Length;
-        int lengthFieldLen = _config.HasLengthByte ? _config.LengthByteCount : 0;
-        int checksumLen = _config.Checksum != ChecksumType.None ? 1 : 0;
-        int tailLen = _tailBytes.Length;
         int frameLen = headerLen + lengthFieldLen + dataLen + checksumLen + tailLen;
-
-        if (_ringBuffer.Count < frameLen)
-            return false;
-
-        if (!FindHeader())
-            return false;
-
-        dataLen = GetDataLength();
-        if (dataLen < 0) return false;
-        frameLen = headerLen + lengthFieldLen + dataLen + checksumLen + tailLen;
         if (_ringBuffer.Count < frameLen)
             return false;
 
@@ -289,24 +307,45 @@ public class ConfigurableBinaryParser : IDataParser
         if (_config.Checksum != ChecksumType.None)
         {
             int checksumPos = headerLen + lengthFieldLen + dataLen;
-            byte expected = _ringBuffer.Peek(checksumPos);
+            int start = _config.ChecksumStartOffset;
 
-            byte computed = 0;
-            for (int i = _config.ChecksumStartOffset; i < checksumPos; i++)
+            if (_config.Checksum == ChecksumType.CRC16)
             {
-                byte b = _ringBuffer.Peek(i);
-                computed = _config.Checksum switch
+                // CRC-16：2 字节校验值，按配置字节序组合后与计算值比较
+                var crcData = new byte[checksumPos - start];
+                for (int i = 0; i < crcData.Length; i++)
+                    crcData[i] = _ringBuffer.Peek(start + i);
+                ushort computed = Crc16.Compute(crcData, _config.Crc16Variant);
+                byte c0 = _ringBuffer.Peek(checksumPos);
+                byte c1 = _ringBuffer.Peek(checksumPos + 1);
+                ushort expected = _config.ChecksumBigEndian
+                    ? (ushort)((c0 << 8) | c1)
+                    : (ushort)(c0 | (c1 << 8));
+                if (computed != expected)
                 {
-                    ChecksumType.Xor => (byte)(computed ^ b),
-                    ChecksumType.Sum8 => (byte)(computed + b),
-                    _ => computed
-                };
+                    _ringBuffer.Skip(1);
+                    return false;
+                }
             }
-
-            if (computed != expected)
+            else
             {
-                _ringBuffer.Skip(1);
-                return false;
+                byte expected = _ringBuffer.Peek(checksumPos);
+                byte computed = 0;
+                for (int i = start; i < checksumPos; i++)
+                {
+                    byte b = _ringBuffer.Peek(i);
+                    computed = _config.Checksum switch
+                    {
+                        ChecksumType.Xor => (byte)(computed ^ b),
+                        ChecksumType.Sum8 => (byte)(computed + b),
+                        _ => computed
+                    };
+                }
+                if (computed != expected)
+                {
+                    _ringBuffer.Skip(1);
+                    return false;
+                }
             }
         }
 
