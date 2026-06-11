@@ -16,6 +16,12 @@ public interface IDataStorageService
     /// <summary>批量保存读数</summary>
     Task SaveReadingsAsync(IEnumerable<MagnetometerReading> readings);
 
+    /// <summary>
+    /// 等待后台写入队列把当前已入队的读数全部落库（用于结束会话前确保计数准确）。
+    /// 超时后返回，不阻塞退出。
+    /// </summary>
+    Task WaitForPendingWritesAsync(int timeoutMs = 5000);
+
     /// <summary>获取所有会话列表</summary>
     Task<IReadOnlyList<SessionInfo>> GetSessionsAsync();
 

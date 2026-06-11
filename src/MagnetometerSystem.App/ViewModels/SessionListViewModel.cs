@@ -162,13 +162,18 @@ public partial class SessionListViewModel : ObservableObject
         catch (Exception ex)
         {
             System.Diagnostics.Trace.TraceError($"创建会话失败: {ex.Message}");
+            // 重新抛出：让连接流程在打开端口之前中止。否则数据库不可用时仍会打开连接，
+            // 而 ActiveSessionId 为 null 导致读数被静默丢弃。
+            throw;
         }
     }
 
     private async void OnAcquisitionStopped()
     {
-        // 先 flush 剩余缓冲数据
+        // 先 flush 剩余缓冲数据（入队），再等待后台写入队列把已入队读数全部落库，
+        // 否则 EndSessionAsync 的 COUNT(*) 会早于落库执行，导致 total_readings 少计。
         await FlushBufferAsync();
+        await _storageService.WaitForPendingWritesAsync();
 
         var sessionId = ActiveSessionId;
         if (sessionId != null)

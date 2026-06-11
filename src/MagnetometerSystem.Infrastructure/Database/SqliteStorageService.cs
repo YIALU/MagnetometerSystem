@@ -24,6 +24,9 @@ public class SqliteStorageService : IDataStorageService, IDisposable
     private readonly CancellationTokenSource _cts = new();
     private bool _disposed;
 
+    // 消费循环是否处于空闲（队列空、阻塞等待中）。配合队列计数判断"已全部落库"。
+    private volatile bool _writerIdle;
+
     // 缓存 session_id -> 通道名（一个会话不会变）
     private readonly Dictionary<string, string[]> _channelNamesCache = new();
     private readonly object _channelNamesLock = new();
@@ -113,6 +116,24 @@ public class SqliteStorageService : IDataStorageService, IDisposable
             _writeChannel.Writer.TryWrite(reading);
         }
         return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public async Task WaitForPendingWritesAsync(int timeoutMs = 5000)
+    {
+        // 当队列计数为 0 且消费循环处于空闲（阻塞等待）时，说明此前入队的读数已全部落库。
+        // 调用方应先把缓冲 flush（入队）再调用本方法，再统计会话总数。
+        int waited = 0;
+        const int step = 15;
+        while (waited < timeoutMs)
+        {
+            if (_writeChannel.Reader.Count == 0 && _writerIdle)
+                return;
+            await Task.Delay(step);
+            waited += step;
+        }
+        System.Diagnostics.Trace.TraceWarning(
+            $"WaitForPendingWritesAsync 超时（{timeoutMs}ms），会话总数计数可能偏少");
     }
 
     /// <inheritdoc />
@@ -306,8 +327,15 @@ public class SqliteStorageService : IDataStorageService, IDisposable
 
         try
         {
-            while (await reader.WaitToReadAsync(_cts.Token))
+            while (true)
             {
+                // 队列空、即将阻塞等待 → 标记空闲。WaitForPendingWritesAsync 据此判断已排空。
+                _writerIdle = true;
+                bool hasMore;
+                try { hasMore = await reader.WaitToReadAsync(_cts.Token); }
+                finally { _writerIdle = false; }
+                if (!hasMore) break;
+
                 batch.Clear();
                 while (batch.Count < BatchSize && reader.TryRead(out var item))
                 {
