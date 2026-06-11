@@ -161,11 +161,18 @@ public class ProtocolConfig
         ? Segments.Count(s => s.Type == SegmentType.DataField)
         : FieldMappings.Count;
 
-    /// <summary>从协议配置派生的通道名称列表</summary>
+    /// <summary>
+    /// 从协议配置派生的通道名称列表。
+    /// 必须按 ChannelIndex 升序返回：parser 把值写入 values[ChannelIndex]（物理槽位），
+    /// 而通道名/图表/数据库 JSON key 都按数组下标对齐。若按段的列表顺序返回，
+    /// 用户在编辑器里上下调整段顺序后名字与数据会错位（图表标题错、DB 名值错配）。
+    /// </summary>
     [JsonIgnore]
     public List<string> DerivedChannelNames => UsesSegments
-        ? Segments.Where(s => s.Type == SegmentType.DataField).Select(s => s.Name).ToList()
-        : FieldMappings.Select(f => f.Name).ToList();
+        ? Segments.Where(s => s.Type == SegmentType.DataField)
+                  .OrderBy(s => s.ChannelIndex)
+                  .Select(s => s.Name).ToList()
+        : FieldMappings.OrderBy(f => f.ChannelIndex).Select(f => f.Name).ToList();
 
     // ==== 辅助方法 ====
 
