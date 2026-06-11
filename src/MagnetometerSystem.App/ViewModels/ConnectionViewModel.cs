@@ -245,6 +245,10 @@ public partial class ConnectionViewModel : ObservableObject
 
             StatusMessage = "正在连接...";
 
+            // 原始数据显示默认值按协议类型自动选择：二进制协议默认 16 进制，
+            // ASCII 协议默认字符串。用户仍可在界面手动勾选切换。
+            ShowHex = ProtocolConfig.Category == ProtocolCategory.Binary;
+
             // 关键时序：在打开连接之前先创建会话并就绪 ActiveSessionId。
             // 串口/TCP 一旦打开即可在后台线程触发数据事件，若此时会话尚未创建，
             // 到达的读数会被 SessionListViewModel 丢弃。故此处 await 直到会话就绪。
