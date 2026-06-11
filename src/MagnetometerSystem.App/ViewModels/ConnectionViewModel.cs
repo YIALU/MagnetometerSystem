@@ -244,11 +244,17 @@ public partial class ConnectionViewModel : ObservableObject
             _sensorAdapter = SensorAdapterFactory.Create(sensorConfig);
 
             StatusMessage = "正在连接...";
+
+            // 关键时序：在打开连接之前先创建会话并就绪 ActiveSessionId。
+            // 串口/TCP 一旦打开即可在后台线程触发数据事件，若此时会话尚未创建，
+            // 到达的读数会被 SessionListViewModel 丢弃。故此处 await 直到会话就绪。
+            await _dataBus.PublishAcquisitionStartingAsync(sensorConfig);
+
             await _connection.ConnectAsync();
             StatusMessage = "已连接";
             _dataBus.PublishConnectionChanged(_connection);
 
-            // 通知数据总线采集开始
+            // 通知数据总线采集开始（连接已打开，供图表等非关键消费者初始化）
             _dataBus.PublishAcquisitionStarted(sensorConfig);
         }
         catch (Exception ex)
@@ -265,6 +271,8 @@ public partial class ConnectionViewModel : ObservableObject
             }
             _parser = null;
             _sensorAdapter = null;
+            // 回滚：连接失败时结束已提前创建的空会话，避免遗留无数据的会话记录
+            _dataBus.PublishAcquisitionStopped();
             StatusMessage = $"连接失败: {ex.Message}";
         }
     }

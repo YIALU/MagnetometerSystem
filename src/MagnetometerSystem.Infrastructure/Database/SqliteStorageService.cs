@@ -341,41 +341,67 @@ public class SqliteStorageService : IDataStorageService, IDisposable
         }
     }
 
+    // SQLite 瞬时错误码：忙 / 被锁。多进程或长事务下可能短暂出现，退避重试通常即可成功。
+    private const int SqliteBusy = 5;    // SQLITE_BUSY
+    private const int SqliteLocked = 6;  // SQLITE_LOCKED
+
     private async Task WriteBatchAsync(List<MagnetometerReading> batch)
     {
-        try
+        const int maxAttempts = 3;
+        for (int attempt = 1; attempt <= maxAttempts; attempt++)
         {
-            using var conn = new SqliteConnection(_dbInit.ConnectionString);
-            await conn.OpenAsync();
-
-            var sessionToNames = new Dictionary<string, string[]>();
-            foreach (var r in batch)
+            try
             {
-                if (!sessionToNames.ContainsKey(r.SessionId))
-                {
-                    sessionToNames[r.SessionId] = await GetChannelNamesAsync(conn, r.SessionId);
-                }
+                await WriteBatchOnceAsync(batch);
+                return; // 成功落库
             }
-
-            using var tx = conn.BeginTransaction();
-
-            const string sql = """
-                INSERT INTO readings (session_id, timestamp, data)
-                VALUES (@SessionId, @Timestamp, @Data)
-                """;
-
-            foreach (var r in batch)
+            catch (SqliteException ex)
+                when ((ex.SqliteErrorCode == SqliteBusy || ex.SqliteErrorCode == SqliteLocked)
+                      && attempt < maxAttempts)
             {
-                var param = MapReadingToParam(r, sessionToNames[r.SessionId]);
-                await conn.ExecuteAsync(sql, param, tx);
+                int delayMs = attempt switch { 1 => 50, 2 => 150, _ => 450 };
+                System.Diagnostics.Trace.TraceWarning(
+                    $"SqliteStorageService.WriteBatchAsync 第 {attempt}/{maxAttempts} 次 busy/locked，{delayMs}ms 后重试: {ex.Message}");
+                await Task.Delay(delayMs);
             }
-
-            tx.Commit();
+            catch (Exception ex)
+            {
+                // 非瞬时错误，或重试耗尽：记录并放弃该批（已确认不做落盘）
+                System.Diagnostics.Trace.TraceError(
+                    $"SqliteStorageService.WriteBatchAsync failed ({batch.Count} readings, attempt {attempt}): {ex.Message}");
+                return;
+            }
         }
-        catch (Exception ex)
+    }
+
+    private async Task WriteBatchOnceAsync(List<MagnetometerReading> batch)
+    {
+        using var conn = new SqliteConnection(_dbInit.ConnectionString);
+        await conn.OpenAsync();
+
+        var sessionToNames = new Dictionary<string, string[]>();
+        foreach (var r in batch)
         {
-            System.Diagnostics.Trace.TraceError($"SqliteStorageService.WriteBatchAsync failed ({batch.Count} readings): {ex.Message}");
+            if (!sessionToNames.ContainsKey(r.SessionId))
+            {
+                sessionToNames[r.SessionId] = await GetChannelNamesAsync(conn, r.SessionId);
+            }
         }
+
+        using var tx = conn.BeginTransaction();
+
+        const string sql = """
+            INSERT INTO readings (session_id, timestamp, data)
+            VALUES (@SessionId, @Timestamp, @Data)
+            """;
+
+        foreach (var r in batch)
+        {
+            var param = MapReadingToParam(r, sessionToNames[r.SessionId]);
+            await conn.ExecuteAsync(sql, param, tx);
+        }
+
+        tx.Commit();
     }
 
     #endregion
@@ -608,10 +634,18 @@ public class SqliteStorageService : IDataStorageService, IDisposable
         if (_disposed) return;
         _disposed = true;
 
+        // 标记不再写入。消费循环会把队列内剩余读数全部落库后自然退出。
         _writeChannel.Writer.Complete();
 
-        _cts.Cancel();
-        _consumerTask.Wait(TimeSpan.FromSeconds(5));
+        // 正常退出应等待队列排空，不能用固定短超时直接丢尾部数据。
+        // 不在此处 Cancel —— Cancel 会中断排空；仅当排空异常缓慢（30s 未完成）才兜底取消。
+        if (!_consumerTask.Wait(TimeSpan.FromSeconds(30)))
+        {
+            System.Diagnostics.Trace.TraceWarning(
+                "SqliteStorageService.Dispose: 写入队列 30s 内未排空，强制取消，可能丢失尾部数据");
+            _cts.Cancel();
+            try { _consumerTask.Wait(TimeSpan.FromSeconds(5)); } catch { /* 退出阶段忽略 */ }
+        }
 
         _cts.Dispose();
     }

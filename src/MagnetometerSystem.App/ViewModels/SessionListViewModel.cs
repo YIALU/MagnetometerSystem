@@ -110,8 +110,10 @@ public partial class SessionListViewModel : ObservableObject
         SessionsView.SortDescriptions.Add(
             new SortDescription(nameof(SessionInfo.StartedAt), ListSortDirection.Descending));
 
-        // 订阅采集事件
-        _dataBus.AcquisitionStarted += OnAcquisitionStarted;
+        // 订阅采集事件。
+        // 会话创建走 AcquisitionStarting（连接打开前 await 完成），保证第一条数据到达时
+        // ActiveSessionId 已就绪，消除启动丢数据窗口。
+        _dataBus.AcquisitionStarting += OnAcquisitionStartingAsync;
         _dataBus.AcquisitionStopped += OnAcquisitionStopped;
         _dataBus.ReadingReceived += OnReadingReceived;
 
@@ -128,7 +130,12 @@ public partial class SessionListViewModel : ObservableObject
 
     // ---- 采集生命周期管理 ----
 
-    private async void OnAcquisitionStarted(SensorConfig config)
+    /// <summary>
+    /// 采集即将开始：在连接打开之前创建会话并就绪 ActiveSessionId。
+    /// 返回 Task（非 async void），供 DataBus.PublishAcquisitionStartingAsync 等待完成，
+    /// 确保连接打开后第一条数据到达时会话已存在，不丢数据。
+    /// </summary>
+    private async Task OnAcquisitionStartingAsync(SensorConfig config)
     {
         if (_dataBus.IsPlaybackMode) return;
         _currentSensorConfig = config;

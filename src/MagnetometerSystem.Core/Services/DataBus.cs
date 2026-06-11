@@ -44,7 +44,13 @@ public class DataBus
     /// <summary>新的读数到达时触发</summary>
     public event Action<MagnetometerReading>? ReadingReceived;
 
-    /// <summary>采集开始</summary>
+    /// <summary>
+    /// 采集即将开始（连接打开之前触发）。存储等关键消费者在此 await 完成准备工作
+    /// （如创建会话、就绪 ActiveSessionId），确保连接打开后第一条数据到达时下游已就绪，不丢数据。
+    /// </summary>
+    public event Func<SensorConfig, Task>? AcquisitionStarting;
+
+    /// <summary>采集开始（连接打开之后触发，供图表等非关键消费者初始化）</summary>
     public event Action<SensorConfig>? AcquisitionStarted;
 
     /// <summary>采集停止</summary>
@@ -68,6 +74,18 @@ public class DataBus
     public void PublishReading(MagnetometerReading reading)
     {
         ReadingReceived?.Invoke(reading);
+    }
+
+    /// <summary>
+    /// 触发"采集即将开始"，按订阅顺序逐个 await。调用方应在连接打开前 await 本方法，
+    /// 使会话等准备工作先于数据到达完成。
+    /// </summary>
+    public async Task PublishAcquisitionStartingAsync(SensorConfig config)
+    {
+        var handlers = AcquisitionStarting;
+        if (handlers == null) return;
+        foreach (Func<SensorConfig, Task> handler in handlers.GetInvocationList())
+            await handler(config);
     }
 
     public void PublishAcquisitionStarted(SensorConfig config)
