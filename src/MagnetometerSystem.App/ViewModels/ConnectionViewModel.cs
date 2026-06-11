@@ -291,17 +291,17 @@ public partial class ConnectionViewModel : ObservableObject
 
     private void OnDataReceived(object? sender, byte[] data)
     {
-        // 如果开启了 Hex 显示，先显示原始字节
-        if (ShowHex)
+        // 原始数据显示：纯调试参考，独立于解析链路，无条件回显收到的字节。
+        // 勾选 ShowHex → 16 进制；否则 → ASCII 字符串。解析失败/卡死都不影响这里。
+        var rawLine = ShowHex
+            ? BitConverter.ToString(data).Replace("-", " ")
+            : System.Text.Encoding.ASCII.GetString(data);
+        Application.Current?.Dispatcher.BeginInvoke(() =>
         {
-            var hexLine = $"[HEX] {BitConverter.ToString(data).Replace("-", " ")}";
-            Application.Current?.Dispatcher.BeginInvoke(() =>
-            {
-                RawDataLines.Add(hexLine);
-                while (RawDataLines.Count > MaxRawDataLines)
-                    RawDataLines.RemoveAt(0);
-            });
-        }
+            RawDataLines.Add(rawLine);
+            while (RawDataLines.Count > MaxRawDataLines)
+                RawDataLines.RemoveAt(0);
+        });
 
         try
         {
@@ -342,15 +342,6 @@ public partial class ConnectionViewModel : ObservableObject
 
                 // 发布到数据总线（供实时图表等消费者使用）
                 _dataBus.PublishReading(processed);
-
-                Application.Current?.Dispatcher.BeginInvoke(() =>
-                {
-                    var line = $"[{processed.Timestamp:HH:mm:ss.fff}] " +
-                               string.Join(", ", processed.ChannelValues.Select(v => v.ToString("F2")));
-                    RawDataLines.Add(line);
-                    while (RawDataLines.Count > MaxRawDataLines)
-                        RawDataLines.RemoveAt(0);
-                });
             }
             catch (Exception ex)
             {
