@@ -347,6 +347,46 @@ public class ConfigurableBinaryParserTests
     }
 
     [Fact]
+    public void Cct5Gradiometer_DocExample1Frame_ParsesAndCrcValidates()
+    {
+        // 协议文档示例 1 的完整 ADC 数据上传帧（设备 26001，8 路值 10000~80000）。
+        // TryParse 返回 true 即同时验证：帧长/帧尾/CRC(IBM,大端,范围 TYPE+LEN+PAYLOAD) 全部正确。
+        var config = ProtocolConfig.CreateCct5Gradiometer();
+        var parser = new ConfigurableBinaryParser(config);
+
+        byte[] frame =
+        [
+            0xFF, 0x5A, 0xA1, 0x24,
+            0x91, 0x65, 0x00, 0x00,             // device_id = 26001
+            0x00, 0x40, 0x1C, 0x46,             // X1 = 10000
+            0x00, 0x40, 0x9C, 0x46,             // X2 = 20000
+            0x00, 0x60, 0xEA, 0x46,             // Y1 = 30000
+            0x00, 0x40, 0x1C, 0x47,             // Y2 = 40000
+            0x00, 0x50, 0x43, 0x47,             // Z1 = 50000
+            0x00, 0x60, 0x6A, 0x47,             // Z2 = 60000
+            0x00, 0xB8, 0x88, 0x47,             // ADC6 = 70000
+            0x00, 0x40, 0x9C, 0x47,             // ADC7 = 80000
+            0xC2, 0xA9,                         // CRC16/IBM 高字节在前
+            0x33,                               // TAIL
+        ];
+        parser.Feed(frame, 0, frame.Length);
+
+        bool result = parser.TryParse(out var reading);
+
+        Assert.True(result); // 为 true 即说明 CRC 校验通过（变体/字节序/范围均正确）
+        Assert.NotNull(reading);
+        Assert.Equal(8, reading!.ChannelValues.Length);
+        Assert.Equal(10000.0, reading.ChannelValues[0], 0); // X1
+        Assert.Equal(20000.0, reading.ChannelValues[1], 0); // X2
+        Assert.Equal(30000.0, reading.ChannelValues[2], 0); // Y1
+        Assert.Equal(40000.0, reading.ChannelValues[3], 0); // Y2
+        Assert.Equal(50000.0, reading.ChannelValues[4], 0); // Z1
+        Assert.Equal(60000.0, reading.ChannelValues[5], 0); // Z2
+        Assert.Equal(70000.0, reading.ChannelValues[6], 0); // ADC6
+        Assert.Equal(80000.0, reading.ChannelValues[7], 0); // ADC7
+    }
+
+    [Fact]
     public void Constructor_NullConfig_ThrowsArgumentNullException()
     {
         Assert.Throws<ArgumentNullException>(() => new ConfigurableBinaryParser(null!));

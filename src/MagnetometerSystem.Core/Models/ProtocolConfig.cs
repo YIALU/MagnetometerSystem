@@ -319,6 +319,43 @@ public class ProtocolConfig
     }
 
     /// <summary>
+    /// 创建 CCT-5 磁梯度仪 RS422 ADC 数据上传帧（TYPE=A1）的固有协议。
+    /// 固定 43 字节：HEAD(FF5A) + TYPE(A1) + LEN(24) + device_id(4) + 8×float32(LE) + CRC16 + TAIL(33)。
+    /// CRC-16/IBM(ARC)，帧内高字节在前；计算范围为 TYPE+LEN+PAYLOAD（从 TYPE 段起到 CRC 前）。
+    /// 通道顺序按协议文档：X1,X2,Y1,Y2,Z1,Z2 + 两路悬空 ADC6/ADC7。device_id 不作为通道展示。
+    /// </summary>
+    public static ProtocolConfig CreateCct5Gradiometer()
+    {
+        var config = new ProtocolConfig
+        {
+            Name = "CCT-5 磁梯度仪 (FF5A, 8通道 Float, CRC16/IBM)",
+            Category = ProtocolCategory.Binary,
+            Segments =
+            [
+                new() { Type = SegmentType.Header,   Name = "帧头",     ByteCount = 2, FixedHexValue = "FF5A" },
+                new() { Type = SegmentType.Padding,  Name = "类型(A1)", ByteCount = 1, FixedHexValue = "A1" },
+                new() { Type = SegmentType.Padding,  Name = "长度(24)", ByteCount = 1, FixedHexValue = "24" },
+                new() { Type = SegmentType.Padding,  Name = "设备编号", ByteCount = 4 },
+                new() { Type = SegmentType.DataField, Name = "X1", ByteCount = 4, DataType = FieldDataType.Float, ChannelIndex = 0 },
+                new() { Type = SegmentType.DataField, Name = "X2", ByteCount = 4, DataType = FieldDataType.Float, ChannelIndex = 1 },
+                new() { Type = SegmentType.DataField, Name = "Y1", ByteCount = 4, DataType = FieldDataType.Float, ChannelIndex = 2 },
+                new() { Type = SegmentType.DataField, Name = "Y2", ByteCount = 4, DataType = FieldDataType.Float, ChannelIndex = 3 },
+                new() { Type = SegmentType.DataField, Name = "Z1", ByteCount = 4, DataType = FieldDataType.Float, ChannelIndex = 4 },
+                new() { Type = SegmentType.DataField, Name = "Z2", ByteCount = 4, DataType = FieldDataType.Float, ChannelIndex = 5 },
+                new() { Type = SegmentType.DataField, Name = "ADC6", ByteCount = 4, DataType = FieldDataType.Float, ChannelIndex = 6 },
+                new() { Type = SegmentType.DataField, Name = "ADC7", ByteCount = 4, DataType = FieldDataType.Float, ChannelIndex = 7 },
+                // CRC 计算从索引 1（类型段，偏移 2）开始，覆盖 TYPE+LEN+PAYLOAD
+                new() { Type = SegmentType.Checksum, Name = "CRC", ByteCount = 2,
+                        ChecksumAlgorithm = ChecksumAlgorithm.CRC16, Crc16Variant = Crc16Variant.Ibm,
+                        ChecksumBigEndian = true, ChecksumStartIndex = 1 },
+                new() { Type = SegmentType.Tail, Name = "帧尾", ByteCount = 1, FixedHexValue = "33" },
+            ],
+        };
+        config.ComputeSegmentOffsets();
+        return config;
+    }
+
+    /// <summary>
     /// 创建双三轴 ASCII 协议的默认配置（6通道）
     /// </summary>
     public static ProtocolConfig CreateDefaultAsciiDualTriaxial()

@@ -648,6 +648,7 @@ public partial class ConnectionViewModel : ObservableObject
         SavedProtocols.Add(ProtocolConfig.CreateDefaultAsciiDualTriaxial());
         SavedProtocols.Add(ProtocolConfig.CreateDefaultBinaryTriaxial());
         SavedProtocols.Add(ProtocolConfig.CreateDefaultBinaryTriaxialSegments());
+        SavedProtocols.Add(ProtocolConfig.CreateCct5Gradiometer());
 
         // 从文件加载
         if (Directory.Exists(ProtocolConfigDir))

@@ -23,6 +23,15 @@ public class Crc16Tests
     }
 
     [Fact]
+    public void Compute_Ibm_Cct5DocVector()
+    {
+        // CCT-5 协议文档给出的 CRC 示例：输入 C0 05 FF FF FF FF 01 → 0x5954（CRC-16/IBM）。
+        // 用设备文档的真实向量确认 Ibm 变体与设备端一致。
+        byte[] input = [0xC0, 0x05, 0xFF, 0xFF, 0xFF, 0xFF, 0x01];
+        Assert.Equal((ushort)0x5954, Crc16.Compute(input, Crc16Variant.Ibm));
+    }
+
+    [Fact]
     public void Compute_EmptyInput_ReturnsInit()
     {
         // 空输入：结果应为各变体的初值（未经任何字节处理）
