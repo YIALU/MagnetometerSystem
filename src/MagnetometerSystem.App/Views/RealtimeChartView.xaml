@@ -41,7 +41,7 @@
 
             <!-- 工具栏 -->
             <WrapPanel Grid.Row="0" Margin="0,0,0,8">
-                <Button Padding="10,5" Margin="0,0,8,0" Command="{Binding TogglePauseCommand}">
+                <Button Padding="10,5" Margin="0,0,8,6" Command="{Binding TogglePauseCommand}">
                     <Button.Style>
                         <Style TargetType="Button">
                             <Setter Property="Content" Value="暂停"/>
@@ -54,7 +54,7 @@
                     </Button.Style>
                 </Button>
 
-                <Button Content="清空" Padding="10,5" Margin="0,0,15,0"
+                <Button Content="清空" Padding="10,5" Margin="0,0,15,6"
                         Command="{Binding ClearChartCommand}"/>
 
                 <Separator Style="{StaticResource {x:Static ToolBar.SeparatorStyleKey}}" Margin="0,2,15,2"/>
@@ -62,12 +62,12 @@
                 <TextBlock Text="时间窗口:" VerticalAlignment="Center" Margin="0,0,5,0"/>
                 <ComboBox Width="80" ItemsSource="{Binding TimeWindowOptions}"
                           SelectedItem="{Binding TimeWindowSeconds}" IsEditable="True"/>
-                <TextBlock Text="s" VerticalAlignment="Center" Margin="3,0,15,0"/>
+                <TextBlock Text="s" VerticalAlignment="Center" Margin="3,0,15,6"/>
 
-                <CheckBox Content="Y轴自适应" VerticalAlignment="Center" Margin="0,0,10,0"
+                <CheckBox Content="Y轴自适应" VerticalAlignment="Center" Margin="0,0,10,6"
                           IsChecked="{Binding AutoScaleY}"/>
 
-                <StackPanel Orientation="Horizontal" Margin="0,0,15,0">
+                <StackPanel Orientation="Horizontal" Margin="0,0,15,6">
                     <StackPanel.Style>
                         <Style TargetType="StackPanel">
                             <Setter Property="Visibility" Value="Visible"/>
@@ -86,14 +86,14 @@
 
                 <Separator Style="{StaticResource {x:Static ToolBar.SeparatorStyleKey}}" Margin="0,2,15,2"/>
 
-                <CheckBox Content="自动滚动" VerticalAlignment="Center" Margin="0,0,10,0"
+                <CheckBox Content="自动滚动" VerticalAlignment="Center" Margin="0,0,10,6"
                           IsChecked="{Binding AutoScroll}"/>
-                <CheckBox Content="网格" VerticalAlignment="Center" Margin="0,0,10,0"
+                <CheckBox Content="网格" VerticalAlignment="Center" Margin="0,0,10,6"
                           IsChecked="{Binding ShowGrid}"/>
 
                 <Separator Style="{StaticResource {x:Static ToolBar.SeparatorStyleKey}}" Margin="0,2,15,2"/>
 
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,0,6">
                     <StackPanel.Style>
                         <Style TargetType="StackPanel">
                             <Setter Property="Visibility" Value="Visible"/>
@@ -111,7 +111,7 @@
                                VerticalAlignment="Center" Margin="5,0,0,0" Width="30"/>
                 </StackPanel>
 
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,0,6">
                     <StackPanel.Style>
                         <Style TargetType="StackPanel">
                             <Setter Property="Visibility" Value="Collapsed"/>
@@ -131,7 +131,7 @@
 
                 <Separator Style="{StaticResource {x:Static ToolBar.SeparatorStyleKey}}" Margin="0,2,15,2"/>
 
-                <Button Padding="10,5" Margin="0,0,8,0" Command="{Binding ToggleMultiPlotModeCommand}">
+                <Button Padding="10,5" Margin="0,0,8,6" Command="{Binding ToggleMultiPlotModeCommand}">
                     <Button.Style>
                         <Style TargetType="Button">
                             <Setter Property="Content" Value="多图表"/>
@@ -144,7 +144,7 @@
                     </Button.Style>
                 </Button>
 
-                <Button Padding="10,5" Margin="0,0,8,0" Command="{Binding ToggleColumnCountCommand}">
+                <Button Padding="10,5" Margin="0,0,8,6" Command="{Binding ToggleColumnCountCommand}">
                     <Button.Style>
                         <Style TargetType="Button">
                             <Setter Property="Content" Value="双列"/>

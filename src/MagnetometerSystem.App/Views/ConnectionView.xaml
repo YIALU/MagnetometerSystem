@@ -415,6 +415,26 @@
                                                         </Style>
                                                     </ComboBox.Style>
                                                 </ComboBox>
+
+                                                <!-- Checksum: CRC16 校验值字节序（仅 CRC16 算法时显示） -->
+                                                <CheckBox Content="大端" VerticalAlignment="Center" FontSize="11"
+                                                          Margin="4,0,0,0" IsChecked="{Binding ChecksumBigEndian}"
+                                                          ToolTip="CRC 校验值字节序：勾选=高字节在前(大端)，不勾=低字节在前(Modbus RTU 习惯)">
+                                                    <CheckBox.Style>
+                                                        <Style TargetType="CheckBox">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                            <Style.Triggers>
+                                                                <MultiDataTrigger>
+                                                                    <MultiDataTrigger.Conditions>
+                                                                        <Condition Binding="{Binding Type}" Value="{x:Static models:SegmentType.Checksum}"/>
+                                                                        <Condition Binding="{Binding ChecksumAlgorithm}" Value="{x:Static models:ChecksumAlgorithm.CRC16}"/>
+                                                                    </MultiDataTrigger.Conditions>
+                                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                                </MultiDataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </CheckBox.Style>
+                                                </CheckBox>
                                             </StackPanel>
                                         </DataTemplate>
                                     </GridViewColumn.CellTemplate>
