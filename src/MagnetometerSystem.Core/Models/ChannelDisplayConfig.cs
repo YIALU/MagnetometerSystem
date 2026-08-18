@@ -48,7 +48,12 @@ public class ChannelDisplayConfig : INotifyPropertyChanged
     /// <summary>曲线颜色（ARGB hex 字符串，如 "#FF0000FF"）</summary>
     public string ColorHex { get; set; } = "#FF0000FF";
 
-    /// <summary>预设颜色列表</summary>
+    /// <summary>
+    /// 预设颜色列表。默认色按 index % Length 回绕分配，因此长度决定了
+    /// "多少个通道之后开始出现同色"。21 通道协议（磁梯度数采卡-pt）下
+    /// 8 色会让 CH0/CH8/CH16 撞色，故扩到 24 色。
+    /// 前 8 个保持原有顺序和取值，已保存的用户配置和既有截图不受影响。
+    /// </summary>
     public static readonly string[] PresetColors =
     [
         "#FF0000FF", // Blue
@@ -59,6 +64,22 @@ public class ChannelDisplayConfig : INotifyPropertyChanged
         "#FF00FFFF", // Cyan
         "#FFFF00FF", // Magenta
         "#FFB8860B", // DarkGoldenrod
+        "#FF1E90FF", // DodgerBlue
+        "#FFDC143C", // Crimson
+        "#FF2E8B57", // SeaGreen
+        "#FFFF6347", // Tomato
+        "#FF9932CC", // DarkOrchid
+        "#FF008B8B", // DarkCyan
+        "#FFC71585", // MediumVioletRed
+        "#FF808000", // Olive
+        "#FF4169E1", // RoyalBlue
+        "#FF8B0000", // DarkRed
+        "#FF6B8E23", // OliveDrab
+        "#FFD2691E", // Chocolate
+        "#FF483D8B", // DarkSlateBlue
+        "#FF20B2AA", // LightSeaGreen
+        "#FFA0522D", // Sienna
+        "#FF708090", // SlateGray
     ];
 
     /// <summary>
