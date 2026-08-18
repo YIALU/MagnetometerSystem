@@ -35,7 +35,15 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
     private readonly CircularBuffer<double> _timeBuffer = new(100000);
     private CircularBuffer<double>[] _channelBuffers;
     private readonly object _dataLock = new();
-    private const int MaxChannels = 16;
+
+    /// <summary>
+    /// 通道缓冲上限。仅作为异常配置的兜底防线（每通道缓冲 100000×8B≈800KB，
+    /// 无节制分配会吃掉大量内存），实际缓冲按协议通道数惰性增长，不预分配到上限。
+    /// </summary>
+    private const int MaxChannels = 64;
+
+    /// <summary>每通道环形缓冲的容量（点数）</summary>
+    private const int ChannelBufferCapacity = 100000;
 
     private int _channelCount;
     private string[] _channelNames = [];
@@ -204,10 +212,9 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
         _dataBus = dataBus;
         _preferencesService = preferencesService;
 
-        // 预创建通道缓冲
-        _channelBuffers = new CircularBuffer<double>[MaxChannels];
-        for (int i = 0; i < MaxChannels; i++)
-            _channelBuffers[i] = new CircularBuffer<double>(100000);
+        // 通道缓冲按实际协议通道数惰性分配（见 EnsureChannelBuffers），
+        // 这里先建一个最小实例，避免其余代码面对 null。
+        _channelBuffers = [];
 
         _dataBus.ReadingReceived += OnReadingReceived;
         _dataBus.AcquisitionStarted += OnAcquisitionStarted;
@@ -226,6 +233,23 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
             _renderTimer.Interval = TimeSpan.FromMilliseconds(1000.0 / value);
     }
 
+    /// <summary>
+    /// 确保通道缓冲至少覆盖 <paramref name="required"/> 个通道。
+    /// 已有缓冲原样保留（避免丢掉正在显示的数据），只补齐缺少的部分。
+    /// 调用方需持有 _dataLock。
+    /// </summary>
+    private void EnsureChannelBuffers(int required)
+    {
+        if (required <= _channelBuffers.Length)
+            return;
+
+        var grown = new CircularBuffer<double>[required];
+        Array.Copy(_channelBuffers, grown, _channelBuffers.Length);
+        for (int i = _channelBuffers.Length; i < required; i++)
+            grown[i] = new CircularBuffer<double>(ChannelBufferCapacity);
+        _channelBuffers = grown;
+    }
+
     private void OnAcquisitionStarted(SensorConfig config)
     {
         int channelCount = Math.Min(config.ChannelCount, MaxChannels);
@@ -237,6 +261,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
         {
             _channelCount = channelCount;
             _channelNames = channelNames;
+            EnsureChannelBuffers(channelCount);
             _timeBuffer.Clear();
             for (int i = 0; i < _channelBuffers.Length; i++)
                 _channelBuffers[i].Clear();
@@ -301,6 +326,19 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
 
         lock (_dataLock)
         {
+            // 正常路径下缓冲已由 OnAcquisitionStarted 按协议通道数备好。
+            // 这里兜住"读数先于采集开始事件到达"或"实际通道数多于配置"的情况：
+            // 补齐缓冲，并把新缓冲填到与时间轴等长，避免通道间错位。
+            int needed = Math.Min(reading.ChannelValues.Length, MaxChannels);
+            if (needed > _channelBuffers.Length)
+            {
+                int previous = _channelBuffers.Length;
+                EnsureChannelBuffers(needed);
+                for (int i = previous; i < needed; i++)
+                    for (int pad = 0; pad < _timeBuffer.Count; pad++)
+                        _channelBuffers[i].Add(double.NaN);
+            }
+
             _timeBuffer.Add(elapsed);
             for (int i = 0; i < Math.Min(reading.ChannelValues.Length, _channelBuffers.Length); i++)
             {
