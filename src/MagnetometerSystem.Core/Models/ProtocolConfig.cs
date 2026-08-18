@@ -154,6 +154,12 @@ public class ProtocolConfig
     [JsonIgnore]
     public bool UsesSegments => Segments.Count > 0;
 
+    /// <summary>
+    /// 随协议一起提供的设备命令组（内置协议自带，用户协议可留空）。
+    /// 命令与设备强相关，切换协议时 UI 只展示当前协议的指令，避免混入无关命令。
+    /// </summary>
+    public List<CommandGroup> Commands { get; set; } = [];
+
     /// <summary>备注</summary>
     public string? Notes { get; set; }
 
@@ -217,7 +223,11 @@ public class ProtocolConfig
 
     private static readonly JsonSerializerOptions _safeJsonOptions = new()
     {
-        MaxDepth = 8,
+        // 深度需容纳最深的一条链：
+        // root → Commands[] → CommandGroup → Commands[] → DeviceCommand
+        //      → Parameters[] → CommandParameter → EnumMap[] → EnumChoice = 9 层。
+        // 留一层余量。仍保留上限以防恶意构造的深层嵌套 JSON。
+        MaxDepth = 12,
         Converters = { new JsonStringEnumConverter() },
     };
 
@@ -441,6 +451,7 @@ public class ProtocolConfig
             Name = "磁梯度数采卡-pt",
             Category = ProtocolCategory.Binary,
             Segments = BuildZdzC08Segments(magneticOnly: false),
+            Commands = ZdzC08Commands.CreateGroups(),
             Notes = "ZDZ_C08 / CTMBS-3 数采卡 101 字节上传帧，全字段。串口 115200 8N1。"
                   + "磁分量与梯度单位 nT，加速度 m/s²，陀螺 °/s，深度 m。CRC 段不校验。",
         };
@@ -459,6 +470,7 @@ public class ProtocolConfig
             Name = "磁梯度数采卡-pt (仅磁场6通道)",
             Category = ProtocolCategory.Binary,
             Segments = BuildZdzC08Segments(magneticOnly: true),
+            Commands = ZdzC08Commands.CreateGroups(),
             Notes = "ZDZ_C08 / CTMBS-3 数采卡 101 字节上传帧，仅映射 X1/Y1/Z1/X2/Y2/Z2（单位 nT）。"
                   + "其余字段按保留区跳过。CRC 段不校验。",
         };

@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace MagnetometerSystem.Core.Models;
 
 public enum CommandEncoding
@@ -44,6 +46,24 @@ public enum CommandParameterType
     HexBytes,
 }
 
+/// <summary>二进制枚举参数的一个可选项：界面显示 <see cref="Label"/>，实际编码 <see cref="Value"/></summary>
+public class EnumChoice
+{
+    public string Label { get; set; } = "";
+    public long Value { get; set; }
+
+    public EnumChoice() { }
+
+    public EnumChoice(string label, long value)
+    {
+        Label = label;
+        Value = value;
+    }
+
+    /// <summary>下拉框直接绑定对象时的显示文本</summary>
+    public override string ToString() => Label;
+}
+
 /// <summary>设备命令参数定义</summary>
 public class CommandParameter
 {
@@ -54,7 +74,16 @@ public class CommandParameter
     public string? Unit { get; set; }
     public double? Min { get; set; }
     public double? Max { get; set; }
+    /// <summary>枚举可选值（ASCII 模板用；二进制参数请用 <see cref="EnumMap"/>）</summary>
     public List<string> EnumOptions { get; set; } = new();
+
+    /// <summary>
+    /// 二进制枚举映射：显示名 → 实际数值。
+    /// 用于 U8/U16/U32 等数值型参数需要以下拉方式呈现的场合
+    /// （如采样率 "25 Hz" → 25、波特率 "2000000" → 255）。
+    /// 非空时 UI 出下拉框，编码时把选中项映射回数值再按 <see cref="Type"/> 编码。
+    /// </summary>
+    public List<EnumChoice> EnumMap { get; set; } = new();
 
     /// <summary>字节序（仅 U16/U32/I16/I32/Float32/Float64 生效）</summary>
     public Endianness Endian { get; set; } = Endianness.LittleEndian;
@@ -89,6 +118,14 @@ public class CommandGroup
     public string Id { get; set; } = Guid.NewGuid().ToString();
     public string Name { get; set; } = "";
     public List<DeviceCommand> Commands { get; set; } = new();
+
+    /// <summary>
+    /// 是否为协议自带的内置组。内置组随协议切换出现/消失，不参与用户目录持久化，
+    /// 也不允许改名/删除/增删命令 —— 否则改动会在下次加载协议时被覆盖。
+    /// 不序列化：该标志由协议装配时赋予，不应从用户目录文件中读入。
+    /// </summary>
+    [JsonIgnore]
+    public bool IsBuiltIn { get; set; }
 }
 
 public class CommandCatalog

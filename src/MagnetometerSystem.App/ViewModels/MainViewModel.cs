@@ -83,7 +83,15 @@ public partial class MainViewModel : ObservableObject
             {
                 SampleRateInfo = $"{ConnectionVM.SampleRate} Hz";
             }
+            else if (e.PropertyName == nameof(ConnectionViewModel.ProtocolConfig))
+            {
+                // 协议自带的命令组随协议切换：设备命令页只展示当前协议的指令
+                DeviceCommandVM.SetProtocolCommands(ConnectionVM.ProtocolConfig?.Commands);
+            }
         };
+
+        // 初始协议的内置命令（构造时 ProtocolConfig 已有默认值，不会触发上面的变更事件）
+        DeviceCommandVM.SetProtocolCommands(ConnectionVM.ProtocolConfig?.Commands);
 
         // 订阅会话列表的"实时录制点数"，作为左侧卡片 / 状态栏的可靠数据源
         // （比 RealtimeChartVM.DataPointCount 可靠：只在图表页可见时才更新）
