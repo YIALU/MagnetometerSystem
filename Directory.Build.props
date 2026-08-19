@@ -1,7 +1,7 @@
 <Project>
   <PropertyGroup>
     <!-- 发布版本号；bump 后打同名 git tag (vX.Y.Z) -->
-    <Version>0.3.2</Version>
+    <Version>0.4.0</Version>
     <AssemblyVersion>$(Version).0</AssemblyVersion>
     <FileVersion>$(Version).0</FileVersion>
     <!-- InformationalVersion 自动 = Version + "+" + SourceRevisionId -->
@@ -11,6 +11,16 @@
     <Product>磁力仪系统</Product>
     <Copyright>Copyright © $([System.DateTime]::Now.Year)</Copyright>
   </PropertyGroup>
+
+  <!--
+    构建时间注入程序集元数据。
+    只在 Release 下注入：值每次求值都变，Debug 下会让程序集每次都重新生成，拖慢开发内循环。
+    运行时由 AppVersion.BuildTime 读取 —— 单文件发布下 Assembly.Location 为空，
+    拿不到文件时间，只能靠这个常量。
+  -->
+  <ItemGroup Condition="'$(Configuration)' == 'Release'">
+    <AssemblyMetadata Include="BuildTimeUtc" Value="$([System.DateTime]::UtcNow.ToString('O'))" />
+  </ItemGroup>
 
   <!-- 构建时读 git 短 hash 注入 SourceRevisionId（含 dirty 标记） -->
   <Target Name="InjectGitSha" BeforeTargets="GetAssemblyVersion;GetAssemblyAttributes">

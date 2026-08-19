@@ -61,6 +61,16 @@
                 </StackPanel>
             </GroupBox>
 
+            <!-- 软件更新 -->
+            <GroupBox Header="软件更新" Margin="0,0,0,12" Padding="10">
+                <StackPanel>
+                    <CheckBox Content="启动时自动检查更新"
+                              IsChecked="{Binding AutoCheckUpdateEnabled}" Margin="0,0,0,4"/>
+                    <TextBlock Text="每天最多检查一次，需要连接互联网。此项修改后立即生效，无需点击保存。"
+                               FontSize="11" Foreground="#888" TextWrapping="Wrap"/>
+                </StackPanel>
+            </GroupBox>
+
             <!-- 操作按钮 -->
             <StackPanel Orientation="Horizontal" Margin="0,10,0,10">
                 <Button Content="保存设置" Command="{Binding SaveSettingsCommand}" Padding="15,6" Margin="0,0,10,0"/>

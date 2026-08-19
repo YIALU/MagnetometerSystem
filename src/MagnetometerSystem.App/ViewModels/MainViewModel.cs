@@ -34,6 +34,17 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty]
     private bool _isInitialized = false;
 
+    /// <summary>
+    /// 检查更新发现的可用新版本号（如 "0.4.0"），无更新时为 null。
+    /// 驱动状态栏的"有新版本"角标。
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasUpdate))]
+    private string? _availableUpdateVersion;
+
+    /// <summary>是否有可用更新。</summary>
+    public bool HasUpdate => !string.IsNullOrEmpty(AvailableUpdateVersion);
+
     public ConnectionViewModel ConnectionVM { get; }
     public RealtimeChartViewModel RealtimeChartVM { get; }
     public SessionListViewModel SessionListVM { get; }
