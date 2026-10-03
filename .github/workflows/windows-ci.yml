@@ -38,7 +38,7 @@ jobs:
       - name: Select the installed .NET 8 SDK
         env:
           DOTNET_SDK_VERSION: ${{ steps.setup-dotnet.outputs.dotnet-version }}
-        run: dotnet new globaljson --sdk-version "$env:DOTNET_SDK_VERSION" --roll-forward disable
+        run: dotnet new globaljson --sdk-version "$env:DOTNET_SDK_VERSION" --roll-forward disable --output (Split-Path -Parent $env:GITHUB_WORKSPACE)
 
       - name: Restore dependencies
         run: dotnet restore MagnetometerSystem.sln
