@@ -231,12 +231,30 @@ public class Ctmbs3X2000Parser : IDataParser, IParserDiagnostics
             || channelCount != 4
             || tokens.Skip(5).Take(4).Any(code => !IsAsciiDigits(code)))
             return PayloadKind.Invalid;
+        // §6 identifies D/H/Z/T by measurement code, not wire position.
+        // Require each known component exactly once before associating any value with a channel.
+        Span<int> channelIndices = stackalloc int[4];
+        int seenChannels = 0;
+        for (int i = 0; i < channelIndices.Length; i++)
+        {
+            int channel = tokens[5 + i] switch
+            {
+                "3125" => 0, // D
+                "3124" => 1, // H
+                "3123" => 2, // Z
+                "3129" => 3, // T
+                _ => -1
+            };
+            if (channel < 0 || (seenChannels & (1 << channel)) != 0) return PayloadKind.Invalid;
+            seenChannels |= 1 << channel;
+            channelIndices[i] = channel;
+        }
         var values = new double[4];
         for (int i = 9; i < tokens.Length; i++)
         {
             if (!double.TryParse(tokens[i], NumberStyles.Float, CultureInfo.InvariantCulture, out double value)
                 || !double.IsFinite(value)) return PayloadKind.Invalid;
-            if (i < 13) values[i - 9] = value;
+            if (i < 13) values[channelIndices[i - 9]] = value;
         }
         // §5.1 dat+5 可以在同一头部后包含多组四通道值。这是合法批量响应，不是实时单帧。
         if (tokens.Length > 13) return PayloadKind.OtherResponse;

@@ -220,11 +220,63 @@ public class Ctmbs3X2000ParserTests
     }
 
     [Theory]
+    [InlineData("3125 3124 3123 3129", "1.23 2.34 3.45 4.56")]
+    [InlineData("3124 3125 3123 3129", "2.34 1.23 3.45 4.56")]
+    [InlineData("3129 3123 3124 3125", "4.56 3.45 2.34 1.23")]
+    public void Parse_KnownChannelCodes_MapWireValuesToCanonicalChannels(string codes, string values)
+    {
+        string payload = $" 120000 SC01 X122PWZK0000 07 4 {codes} {values}";
+        var parser = new Ctmbs3X2000Parser(ProtocolConfig.CreateCtmbs3X2000());
+
+        // A valid multi-sample response uses the same code identities but must not publish a live reading.
+        byte[] batch = Frame(payload + " " + values);
+        parser.Feed(batch, 0, batch.Length);
+        Assert.False(parser.TryParse(out var historical));
+        Assert.Null(historical);
+        Assert.Equal(0, parser.RejectedFrameCount);
+
+        byte[] frame = Frame(payload);
+        for (int i = 0; i < frame.Length - 1; i++)
+        {
+            parser.Feed(frame, i, 1);
+            Assert.False(parser.TryParse(out _));
+        }
+        parser.Feed(frame, frame.Length - 1, 1);
+        Assert.True(parser.TryParse(out var reading));
+        Assert.Equal(new[] { 1.23, 2.34, 3.45, 4.56 }, reading!.ChannelValues);
+        Assert.False(parser.TryParse(out _));
+        Assert.Equal(0, parser.RejectedFrameCount);
+        Assert.Null(parser.LastError);
+    }
+
+    [Theory]
+    [InlineData("3125 3125 3123 3129")]
+    [InlineData("3125 3124 3123 3125")]
+    [InlineData("3125 3124 3123 9999")]
+    [InlineData("4001 4002 4003 4004")]
+    public void Parse_UnknownOrDuplicateChannelCodes_RejectsLiveAndBatchBeforeNextMeasurement(string codes)
+    {
+        foreach (bool batch in new[] { false, true })
+        {
+            string payload = $" 120000 SC01 X122PWZK0000 07 4 {codes} 1.23 2.34 3.45 4.56";
+            if (batch) payload += " 10 20 30 40";
+            byte[] stream = [.. Frame(payload), .. Frame()];
+            var parser = new Ctmbs3X2000Parser(ProtocolConfig.CreateCtmbs3X2000());
+            parser.Feed(stream, 0, stream.Length);
+            Assert.True(parser.TryParse(out var reading));
+            Assert.Equal(new[] { 1.23, 2.34, 3.45, 4.56 }, reading!.ChannelValues);
+            Assert.Equal(1, parser.RejectedFrameCount);
+            Assert.NotNull(parser.LastError);
+            Assert.False(parser.TryParse(out _));
+        }
+    }
+
+    [Theory]
     [InlineData("Site-device_A")]
     [InlineData("123450001")]
     public void Parse_ValidConfiguredIdentifiersRateCodesAndNumericNotation_AreNotHardCoded(string deviceCode)
     {
-        byte[] bytes = Frame($" 235959 51001 {deviceCode} 04 04 4001 4002 4003 4004 -1.2e3 +2.5 0 2E-2");
+        byte[] bytes = Frame($" 235959 51001 {deviceCode} 04 04 3125 3124 3123 3129 -1.2e3 +2.5 0 2E-2");
         var parser = new Ctmbs3X2000Parser(ProtocolConfig.CreateCtmbs3X2000());
         parser.Feed(bytes, 0, bytes.Length);
         Assert.True(parser.TryParse(out var reading));

@@ -39,6 +39,8 @@ A separate device-storage download workflow is not implemented. The ZDZ Read Sto
 
 Historical batch corrections are saved as separate versions identified by both profile IDs, channel mappings, fitting units, and a fingerprint of the calculation parameters. Editing parameters under the same profile ID preserves earlier results. Select a saved correction version when exporting; the CSV `CorrectionVersion` column contains its full identifier. Legacy single-profile IDs remain selectable, and original readings are unchanged.
 
+Orthogonality **fitting collection/session import** currently requires exactly three magnetic channels in X/Y/Z order, or six in X1/Y1/Z1/X2/Y2/Z2 order, all with the same explicit unit. Arbitrary fitting channel selection is not implemented. Sources with temperature, extra channels, or incomplete metadata are rejected instead of silently taking a prefix; prepare a CSV with explicit axis columns for these sources. This restriction does not apply to ordinary capture, plotting, or correction with explicit channel mappings.
+
 Orthogonality profiles require matching measurement units (`uT`, `µT`, and `μT` are equivalent); offsets are not converted automatically. Legacy profiles without fitting units remain unknown and require refitting or importing an explicitly unit-tagged profile before application. Live/session fitting uses recorded units, and imported CSV samples require an explicit unit declaration. Ordinary capture does not require a correction profile.
 
 **Written locally, acknowledged, and executed are different states.** A successful send call confirms a local write. Device acceptance and execution must be established using the protocol response or observed device behavior.

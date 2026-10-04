@@ -57,13 +57,13 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         OnPropertyChanged(nameof(ReferenceUnit));
     }
 
-    private static string SourceUnit(IReadOnlyList<string> units, int requiredChannels)
+    private static string SourceUnit(IReadOnlyList<string> units, int requiredChannels, int? channelCount = null)
     {
-        if (units.Count < requiredChannels)
-            throw new ArgumentException("所选拟合通道缺少单位，不能确认拟合数据含义。");
-        var selected = units.Take(requiredChannels).Select(OrthogonalityParams.CanonicalUnit).ToArray();
+        if (units.Count != requiredChannels || (channelCount.HasValue && channelCount.Value != requiredChannels))
+            throw new ArgumentException($"当前拟合模式要求恰好 {requiredChannels} 个磁场通道，且读数与单位元数据一致。其他布局请按格式说明整理为明确三轴 CSV。");
+        var selected = units.Select(OrthogonalityParams.CanonicalUnit).ToArray();
         if (selected.Any(u => u.Length == 0) || selected.Distinct().Count() != 1)
-            throw new ArgumentException("拟合通道必须具有相同且明确的磁场单位，不能包含温度等通道。");
+            throw new ArgumentException("拟合通道必须具有相同且明确的磁场单位；含温度或其他单位的布局请按格式说明整理为明确三轴 CSV。");
         return selected[0];
     }
 
@@ -329,7 +329,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
             if (generation != _collectedGeneration || !IsCollecting) return;
             try
             {
-                if (SourceUnit(sourceUnits, _collectedChannelCount) != _collectedUnit)
+                if (SourceUnit(sourceUnits, _collectedChannelCount, reading.ChannelValues.Length) != _collectedUnit)
                     throw new ArgumentException("连接通道单位已改变，请重新开始拟合数据采集。");
             }
             catch (Exception ex)
@@ -338,7 +338,6 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
                 CollectionStatus = ex.Message;
                 return;
             }
-            if (reading.ChannelValues.Length < _collectedChannelCount) return;
             if (_recentReadings.Count >= RecentBufferSize) _recentReadings.Dequeue();
             _recentReadings.Enqueue(reading);
             if (SelectedMode == CalibrationCollectionMode.Manual48)
@@ -447,7 +446,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         DateTime lastTs = DateTime.Now;
         foreach (var r in _recentReadings)
         {
-            if (r.ChannelValues.Length < n) continue;
+            if (r.ChannelValues.Length != n) continue;
             for (int i = 0; i < n; i++) sums[i] += r.ChannelValues[i];
             validCount++;
             lastTs = r.Timestamp;
@@ -1149,13 +1148,16 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
             Owner = System.Windows.Application.Current?.MainWindow
         };
         if (picker.ShowDialog() != true || picker.SelectedSession == null) return;
+        await LoadSessionDataAsync(picker.SelectedSession);
+    }
 
-        var session = picker.SelectedSession;
+    private async Task LoadSessionDataAsync(SessionInfo session)
+    {
         try
         {
             bool dual = SelectedSensorType == SensorType.DualTriaxialFluxgate;
             int requiredCols = dual ? 6 : 3;
-            var sourceUnit = SourceUnit(session.ChannelUnits, requiredCols);
+            var sourceUnit = SourceUnit(session.ChannelUnits, requiredCols, session.ChannelCount);
             var readings = await _storageService.GetReadingsAsync(session.Id);
             if (readings.Count == 0)
             {
@@ -1165,21 +1167,14 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
 
             var importedData = new List<double[]>();
             var importedDataSecond = new List<double[]>();
-            int skipped = 0;
-
             foreach (var r in readings)
             {
                 var v = r.ChannelValues;
-                if (v.Length < requiredCols) { skipped++; continue; }
+                if (v.Length != requiredCols)
+                    throw new ArgumentException("会话读数与通道元数据不一致，未加载拟合数据。请按格式说明整理为明确三轴 CSV。");
                 importedData.Add(new[] { v[0], v[1], v[2] });
-                if (dual && v.Length >= 6)
+                if (dual)
                     importedDataSecond.Add(new[] { v[3], v[4], v[5] });
-            }
-
-            if (importedData.Count == 0)
-            {
-                CollectionStatus = $"会话 '{session.Name}' 通道数不足（需要至少 {requiredCols} 通道）";
-                return;
             }
 
             if (IsCollecting) StopCollecting();
@@ -1193,8 +1188,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
 
             CollectedSampleCount = _collectedData.Count;
             IsCollecting = false;
-            string skipInfo = skipped > 0 ? $"（跳过 {skipped} 条）" : "";
-            CollectionStatus = $"已从会话 '{session.Name}' 加载 {importedData.Count} 个样本{skipInfo}";
+            CollectionStatus = $"已从会话 '{session.Name}' 加载 {importedData.Count} 个样本";
 
             UpdateCoverageEstimate();
             RunDataValidation();

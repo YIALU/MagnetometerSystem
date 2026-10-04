@@ -82,21 +82,23 @@ dotnet test MagnetometerSystem.sln --no-build --no-restore -m:1 --verbosity mini
 
 ```powershell
 dotnet build MagnetometerSystem.sln -c Debug --no-restore --disable-build-servers -m:1 -nr:false -p:UseSharedCompilation=false -p:BuildInParallel=false
-dotnet test MagnetometerSystem.sln -c Debug --no-build --no-restore -m:1 --verbosity minimal --logger trx --results-directory .codex_tmp/TestResults-v050-ctmbs
+dotnet test MagnetometerSystem.sln -c Debug --no-build --no-restore -m:1 --verbosity minimal --logger trx --results-directory .codex_tmp/TestResults-v050-layout
 ```
 
 | 项目 | 通过 | 跳过 | 失败 | TRX 时间 |
 | --- | ---: | ---: | ---: | --- |
-| Core | 407 | 1 | 0 | 21_39_59 |
-| Infrastructure | 113 | 0 | 0 | 21_40_00 |
-| App | 78 | 0 | 0 | 21_40_09 |
-| 合计 | **598** | **1** | **0** | 2026-10-04，本机 `.codex_tmp/TestResults-v050-ctmbs` |
+| Core | 414 | 1 | 0 | 22_02_34 |
+| Infrastructure | 113 | 0 | 0 | 22_02_35 |
+| App | 85 | 0 | 0 | 22_02_42 |
+| 合计 | **612** | **1** | **0** | 2026-10-04，本机 `.codex_tmp/TestResults-v050-layout` |
 
 发布前图表性能回归补充 7 例：活动刷新只从环形缓冲区复制显示与统计窗口的并集，保留总点数；暂停时一次性冻结完整历史，支持扩窗。测试覆盖显示/统计独立窗口、零窗口语义、隐藏来源计算、100,000 点环绕及暂停后继续来数。65 通道在相同短窗口下比较 1,000 与 100,000 点历史的实际刷新分配量，验证不会因全部保留历史增长而每帧复制全量；分配测试没有连接绘图控件，不代表完整绘制耗时或设备长时间吞吐已通过。
 
 串口回调补充 3 例：生产接收边界在 I/O 锁内读取、锁外通知；受控阻塞订阅者时，并发断开或释放可先取得锁并完成。测试还验证读取异常通知及抛错订阅者隔离，后续有效字节仍可分发。这些测试未打开端口，只验证托管锁边界；不能替代实际 SerialPort 驱动关闭、尾包和硬件验收。
 
 CTMBS 简单响应再补充 3 例：11 种未知或损坏响应遍历全部分割位置，错误只计一次且后续测量仍可解析；四种完整合法 token 逐字节输入不报错。登录 ACK 后的仪器 ID、clock 和标准带长度响应保留原规则。
+
+通道身份补充 7 项 Core 回归：按协议通道码映射 D/H/Z/T，交换和逆序逐字节输入仍得到相同通道值；未知或重复码拒绝一次后恢复，合法多组历史响应仍不生成实时读数。拟合保护补充 7 项 WPF/真实 SQLite 回归：只接受完整同单位三轴/双三轴数据源，拒绝额外、混合或不一致布局；标准连续/手动采集保持可用，运行中布局变化只停止拟合，历史导入拒绝时保留原数据集和原始库。任意拟合通道选择尚未实现，该保护不代表支持任意协议布局直接拟合；需先整理为明确三轴 CSV。
 
 新增证据包括：默认采集/改正失败时真实 TCP 同时到达 SQLite 与图表；CTMBS 状态响应不入测量库、坏长头即时恢复；变长载荷的动态校验与帧尾；单位迁移、回放与异单位轴范围；真实 SQLite 写入失败后的安装阻止、恢复重试、正常关闭尾帧。`InstallerHandoffTests` 的三个真实进程测试验证应用及互斥锁退出后才启动替身安装器、超时不启动、失效进程不能完成交接。
 

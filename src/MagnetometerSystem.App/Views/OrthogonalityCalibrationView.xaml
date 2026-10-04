@@ -117,6 +117,8 @@
                     <ComboBox ItemsSource="{Binding AvailableSensorTypes}"
                               SelectedItem="{Binding SelectedSensorType}"
                               Margin="0,0,0,15" Padding="5,4"/>
+                    <TextBlock Text="实时或会话直接拟合：三轴模式要求恰好 3 通道，顺序 X/Y/Z；双三轴模式要求恰好 6 通道，顺序 X1/Y1/Z1/X2/Y2/Z2。全部通道须使用相同的明确磁场单位。"
+                               TextWrapping="Wrap" Foreground="Gray" FontSize="11" Margin="0,0,0,10"/>
 
                     <TextBlock Text="传感器序列号（可选）" FontWeight="SemiBold" Margin="0,0,0,5"/>
                     <TextBox Text="{Binding SensorSerial, UpdateSourceTrigger=PropertyChanged}"
@@ -148,6 +150,8 @@
                 <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Width="500">
                     <TextBlock Text="采集校正数据" FontSize="20" FontWeight="Bold" Margin="0,0,0,10"/>
                     <TextBlock Text="方式一：实时采集 — 缓慢旋转传感器覆盖尽可能多的方位。&#x0a;方式二：导入文件 — 从 CSV/TXT 文件导入已有的三轴数据（Bx,By,Bz）。"
+                               Foreground="Gray" TextWrapping="Wrap" Margin="0,0,0,12"/>
+                    <TextBlock Text="直接拟合暂不支持任意通道映射。请确认完整布局为 X/Y/Z（3 通道）或 X1/Y1/Z1/X2/Y2/Z2（6 通道）；含额外通道或其他顺序时，请按格式说明整理为明确三轴 CSV 后导入。"
                                Foreground="Gray" TextWrapping="Wrap" Margin="0,0,0,12"/>
 
                     <!-- 采集模式选择 -->
