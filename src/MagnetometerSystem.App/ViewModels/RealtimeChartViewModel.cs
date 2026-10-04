@@ -89,6 +89,9 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
     private string _statisticsText = "";
 
     [ObservableProperty]
+    private string _computationError = "";
+
+    [ObservableProperty]
     private long _dataPointCount;
 
     // 每通道显示配置（偏移、颜色、可见性）
@@ -270,6 +273,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
     {
         int channelCount = config.ChannelCount;
         string[] channelNames = config.ChannelNames;
+        bool unitsChanged = !_channelUnits.SequenceEqual(config.ChannelUnits);
         _startTime = DateTime.Now;
         _isAcquiring = true;
 
@@ -293,7 +297,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
             IsPaused = false;
 
             // 初始化通道显示配置：仅当通道数量或名称发生变化时才重建，否则保留现有 Visible 等用户配置
-            bool channelLayoutChanged =
+            bool channelLayoutChanged = unitsChanged ||
                 ChannelConfigs.Count != _channelCount ||
                 !Enumerable.Range(0, _channelCount).All(i =>
                     i < ChannelConfigs.Count &&
@@ -885,6 +889,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private void StartAddTotalField()
     {
+        ComputationError = "";
         BuildWizardRawSources();
         WizardSourceA = 0;
         WizardSourceB = Math.Min(1, WizardRawSources.Count - 1);
@@ -896,6 +901,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private void ConfirmAddTotalField()
     {
+        ComputationError = "";
         if (WizardSourceA < 0 || WizardSourceA >= WizardRawSources.Count
             || WizardSourceB < 0 || WizardSourceB >= WizardRawSources.Count
             || WizardSourceC < 0 || WizardSourceC >= WizardRawSources.Count)
@@ -906,7 +912,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
 
         var sources = new[] { WizardRawSources[WizardSourceA], WizardRawSources[WizardSourceB], WizardRawSources[WizardSourceC] };
         if (sources.Select(s => s.FormulaExpr).Distinct().Count() != 3 || !HaveSameMagneticUnit(sources))
-        { StatisticsText = "总场需要三个不同通道，且使用相同的磁场单位。"; return; }
+        { ComputationError = "总场需要三个不同通道，且使用相同的磁场单位。"; return; }
         var a = WizardRawSources[WizardSourceA].FormulaExpr;
         var b = WizardRawSources[WizardSourceB].FormulaExpr;
         var c = WizardRawSources[WizardSourceC].FormulaExpr;
@@ -931,6 +937,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private void StartAddGradient()
     {
+        ComputationError = "";
         BuildWizardGradientSources();
         WizardSourceA = 0;
         WizardSourceB = Math.Min(1, WizardGradientSources.Count - 1);
@@ -941,6 +948,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private void ConfirmAddGradient()
     {
+        ComputationError = "";
         if (WizardSourceA < 0 || WizardSourceA >= WizardGradientSources.Count
             || WizardSourceB < 0 || WizardSourceB >= WizardGradientSources.Count)
         {
@@ -950,11 +958,11 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
 
         var sources = new[] { WizardGradientSources[WizardSourceA], WizardGradientSources[WizardSourceB] };
         if (sources[0].FormulaExpr == sources[1].FormulaExpr || !HaveSameMagneticUnit(sources))
-        { StatisticsText = "磁场梯度需要两个不同来源，且使用相同的磁场单位。"; return; }
+        { ComputationError = "磁场梯度需要两个不同来源，且使用相同的磁场单位。"; return; }
         var a = WizardGradientSources[WizardSourceA].FormulaExpr;
         var b = WizardGradientSources[WizardSourceB].FormulaExpr;
         if (!double.IsFinite(GradientBaselineDistance) || GradientBaselineDistance <= 0)
-        { StatisticsText = "梯度基线距离必须为有限正数。"; return; }
+        { ComputationError = "梯度基线距离必须为有限正数。"; return; }
         var formula = GradientBaselineDistance != 1.0
             ? $"(({a}) - ({b})) / {GradientBaselineDistance.ToString("R", CultureInfo.InvariantCulture)}"
             : $"({a}) - ({b})";
@@ -975,6 +983,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private void CancelAddWizard()
     {
+        ComputationError = "";
         IsAddingTotalField = false;
         IsAddingGradient = false;
     }

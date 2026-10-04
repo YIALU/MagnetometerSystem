@@ -320,7 +320,7 @@
                                                     <TextBox Width="65" FontSize="11" VerticalAlignment="Center"
                                                              Text="{Binding DisplayOffset, UpdateSourceTrigger=LostFocus}"/>
                                                     <TextBlock Text="单位:" VerticalAlignment="Center" FontSize="11" Margin="8,0,3,0"/>
-                                                    <TextBox Width="65" FontSize="11" Text="{Binding Unit, UpdateSourceTrigger=LostFocus}" ToolTip="计算结果的单位，用于分配纵轴"/>
+                                                    <TextBox Width="65" FontSize="11" Text="{Binding Unit, UpdateSourceTrigger=LostFocus}" ToolTip="按公式含义填写单位；修改标签不会换算数值，用于分配纵轴"/>
                                                     <Button Content="自动" FontSize="10" Padding="4,1" VerticalAlignment="Center"
                                                             ToolTip="根据计算通道平均值自动设置偏移，使数据趋近于 0"
                                                             Command="{Binding DataContext.AutoOffsetComputedChannelCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
@@ -332,6 +332,7 @@
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
 
+                            <TextBlock Text="{Binding ComputationError}" Foreground="Firebrick" TextWrapping="Wrap" Margin="0,4,0,0"/>
                             <!-- 添加按钮行 -->
                             <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
                                 <Button Content="+ 总场" FontSize="11" Padding="6,2" Margin="0,0,4,0"

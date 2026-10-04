@@ -32,6 +32,7 @@ public class ShutdownUpdateTests
         {
             await fixture.Main.ConnectionVM.ConnectCommand.ExecuteAsync(null);
             fixture.Connection.Feed("1,2,3\n");
+            fixture.Connection.DisconnectFrame = "7,8,9\n";
             fixture.ClickUpdate();
             await stopping.Task.WaitAsync(TimeSpan.FromSeconds(3));
             Assert.Equal(0, fixture.Updates.ApplyCalls);
@@ -42,7 +43,9 @@ public class ShutdownUpdateTests
             Assert.Equal(0, fixture.Updates.ApplyCalls);
             var session = Assert.Single(await fixture.Storage.GetSessionsAsync());
             Assert.NotNull(session.EndedAt);
-            Assert.Single(await fixture.Storage.GetReadingsAsync(session.Id));
+            var saved = await fixture.Storage.GetReadingsAsync(session.Id);
+            Assert.Equal(2, saved.Count);
+            Assert.Equal(7, saved[1].ChannelValues[0]);
             if (cancel) ((Button)fixture.Dialog.FindName("CancelDownloadButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             fixture.Settings.ReleaseSave.TrySetResult();
             await WaitForAsync(() => fixture.Window.IsEnabled);
@@ -80,6 +83,81 @@ public class ShutdownUpdateTests
             Assert.Contains("测试安装器未启动", fixture.Status);
         }
         finally { fail = false; }
+    });
+
+    [Fact]
+    public Task ActualSqliteWriteFailurePreventsInstallerAndPreservesSessionForRetry() => WpfTestHost.RunAsync(async () =>
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        fixture.Settings.ReleaseSave.TrySetResult();
+        await fixture.Main.ConnectionVM.ConnectCommand.ExecuteAsync(null);
+        await using var database = new SqliteConnection($"Data Source={fixture.DatabasePath}");
+        await database.OpenAsync();
+        async Task Execute(string sql)
+        {
+            await using var command = database.CreateCommand();
+            command.CommandText = sql;
+            await command.ExecuteNonQueryAsync();
+        }
+        bool renamed = false;
+        try
+        {
+            await Execute("ALTER TABLE readings RENAME TO temporarily_unavailable_readings");
+            renamed = true;
+            fixture.Connection.Feed("4,5,6\n");
+            fixture.ClickUpdate();
+            await WaitForAsync(() => fixture.Main.SessionListVM.StorageError != null && fixture.Window.IsEnabled);
+            Assert.Equal(0, fixture.Updates.ApplyCalls);
+            Assert.False(fixture.Settings.SaveEntered.Task.IsCompleted);
+            Assert.NotNull(fixture.Main.SessionListVM.ActiveSessionId);
+            await Execute("ALTER TABLE temporarily_unavailable_readings RENAME TO readings");
+            renamed = false;
+            // The workbench exposes an explicit retry command; WaitForPendingWrites never hides a prior failure.
+            await fixture.Main.SessionListVM.RetryStorageCommand.ExecuteAsync(null);
+            Assert.Equal(0, fixture.Storage.WriteStatus.PendingReadings);
+            fixture.ClickUpdate();
+            await WaitForAsync(() => fixture.Updates.ApplyCalls == 1 && fixture.Window.IsEnabled);
+            var session = Assert.Single(await fixture.Storage.GetSessionsAsync());
+            Assert.Single(await fixture.Storage.GetReadingsAsync(session.Id));
+            Assert.NotNull(session.EndedAt);
+        }
+        finally
+        {
+            if (renamed)
+            {
+                await Execute("ALTER TABLE temporarily_unavailable_readings RENAME TO readings");
+                await fixture.Main.SessionListVM.RetryStorageCommand.ExecuteAsync(null);
+            }
+        }
+    });
+
+    [Fact]
+    public Task NormalWindowCloseWaitsForTailAndSettings() => WpfTestHost.RunAsync(async () =>
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        fixture.Main.CurrentView = null; // Keep the connection page from loading personal saved protocols in this UI test.
+        fixture.Window.ShowInTaskbar = false;
+        fixture.Window.ShowActivated = false;
+        fixture.Window.Left = -10000;
+        fixture.Window.Top = -10000;
+        fixture.Window.Show();
+        await fixture.Main.ConnectionVM.ConnectCommand.ExecuteAsync(null);
+        fixture.Connection.Feed("1,2,3\n");
+        fixture.Connection.DisconnectFrame = "7,8,9\n";
+        fixture.Window.Close();
+        try
+        {
+            await fixture.Settings.SaveEntered.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            Assert.True(fixture.Window.IsVisible);
+            Assert.False(fixture.Window.IsEnabled);
+            var session = Assert.Single(await fixture.Storage.GetSessionsAsync());
+            Assert.NotNull(session.EndedAt);
+            Assert.Equal(2, (await fixture.Storage.GetReadingsAsync(session.Id)).Count);
+            fixture.Settings.ReleaseSave.TrySetResult();
+            await WaitForAsync(() => !fixture.Window.IsVisible);
+            Assert.Equal(0, fixture.Updates.ApplyCalls);
+        }
+        finally { fixture.Settings.ReleaseSave.TrySetResult(); }
     });
 
     private static TaskCompletionSource NewCompletion() => new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -193,7 +271,8 @@ public class ShutdownUpdateTests
         public bool IsConnected { get; private set; }
         public ConnectionConfig Config { get; } = new();
         public Task ConnectAsync(CancellationToken ct = default) { IsConnected = true; ConnectionStateChanged?.Invoke(this, true); return Task.CompletedTask; }
-        public Task DisconnectAsync() { IsConnected = false; ConnectionStateChanged?.Invoke(this, false); return Task.CompletedTask; }
+        public string? DisconnectFrame { get; set; }
+        public Task DisconnectAsync() { if (DisconnectFrame is { } frame) Feed(frame); DisconnectFrame = null; IsConnected = false; ConnectionStateChanged?.Invoke(this, false); return Task.CompletedTask; }
         public Task SendAsync(byte[] data, CancellationToken ct = default) => Task.CompletedTask;
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
         public void Feed(string text) => DataReceived?.Invoke(this, Encoding.ASCII.GetBytes(text));

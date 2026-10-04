@@ -17,6 +17,8 @@ The protocol defines channel count, names, and units. Sampling rates are not con
 
 An **original reading** is a channel value after protocol parsing and before correction, including protocol-defined scaling or unit conversion. The received-byte viewer is a debugging aid; the database is not a recording of the complete wire byte stream.
 
+The two ZDZ_C08 presets block acquisition until their unconfirmed CRC parameters are configured using firmware-confirmed values. See [protocol checksums and channel units](docs/协议校验与单位.md) for setup steps, checks for older protocol JSON files, and variable-length frame rules.
+
 ## Features
 
 | Area | Capabilities |

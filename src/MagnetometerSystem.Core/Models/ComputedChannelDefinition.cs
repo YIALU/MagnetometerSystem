@@ -43,11 +43,17 @@ public class ComputedChannelDefinition : INotifyPropertyChanged
         get => _name;
         set { if (_name == value) return; _name = value; Notify(nameof(Name)); }
     }
-    private string _unit = "nT";
+    private string _unit = "";
     public string Unit
     {
         get => _unit;
-        set { if (_unit == value) return; _unit = value; Notify(nameof(Unit)); }
+        set
+        {
+            value = value?.Trim() ?? "";
+            if (_unit == value) return;
+            _unit = value;
+            Notify(nameof(Unit));
+        }
     }
 
     /// <summary>计算通道类型（仅作为元数据记录）</summary>

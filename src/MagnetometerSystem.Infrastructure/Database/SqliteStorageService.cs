@@ -659,6 +659,12 @@ public class SqliteStorageService : IDataStorageService, IDisposable
             channelNames = JsonSerializer.Deserialize<string[]>(namesJson) ?? [];
         }
 
+        int channelCount = (int)(long)row.channel_count;
+        string[] savedUnits = row.channel_units is string unitsJson && !string.IsNullOrWhiteSpace(unitsJson)
+            ? JsonSerializer.Deserialize<string[]>(unitsJson) ?? [] : [];
+        // Missing historical units are unknown, not implicitly nT or dimensionless.
+        string[] channelUnits = Enumerable.Range(0, channelCount)
+            .Select(i => i < savedUnits.Length ? savedUnits[i] ?? "未知单位" : "未知单位").ToArray();
         _ = Enum.TryParse<SensorType>((string)row.sensor_type, out var sensorType);
         _ = Enum.TryParse<ConnectionType>((string?)row.connection_type ?? "", out var connectionType);
 
@@ -674,8 +680,7 @@ public class SqliteStorageService : IDataStorageService, IDisposable
             SampleRate = (double)row.sample_rate,
             ChannelCount = (int)(long)row.channel_count,
             ChannelNames = channelNames,
-            ChannelUnits = row.channel_units is string unitsJson
-                ? JsonSerializer.Deserialize<string[]>(unitsJson) ?? [] : [],
+            ChannelUnits = channelUnits,
             LegacyDataTable = row.legacy_data_table as string,
             DeviceInfo = row.device_info as string,
             ConnectionType = connectionType,

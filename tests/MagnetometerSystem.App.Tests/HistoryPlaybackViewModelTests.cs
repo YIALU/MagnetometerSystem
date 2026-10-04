@@ -232,7 +232,7 @@ public class HistoryPlaybackViewModelTests
             vm.SeekTo(0);
 
             Assert.NotNull(chartConfig);
-            Assert.Equal(new[] { "", "", "", "" }, chartConfig.ChannelUnits);
+            Assert.Equal(new[] { "未知单位", "未知单位", "未知单位", "未知单位" }, chartConfig.ChannelUnits);
             var displayed = 0;
             fixture.Bus.ProcessedReadingReceived += _ => displayed++;
             vm.IsOrthogonalityCorrectionEnabled = true;
@@ -240,7 +240,7 @@ public class HistoryPlaybackViewModelTests
             vm.FirstChannelIndices = "1,2,3";
             vm.SeekTo(0.5);
             Assert.Equal(0, displayed);
-            Assert.Contains("缺少有效单位", vm.StatusMessage);
+            Assert.Contains("磁场单位", vm.StatusMessage);
         });
 
     private sealed class PlaybackFixture : IDisposable

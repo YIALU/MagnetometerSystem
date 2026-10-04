@@ -512,7 +512,7 @@ public partial class HistoryPlaybackViewModel : ObservableObject, IDisposable
             ChannelNamesOverride = Enumerable.Range(0, count)
                 .Select(i => i < session.ChannelNames.Length ? session.ChannelNames[i] : $"CH{i}").ToArray(),
             ChannelUnitsOverride = Enumerable.Range(0, count)
-                .Select(i => i < session.ChannelUnits.Length ? session.ChannelUnits[i] : "").ToArray(),
+                .Select(i => i < session.ChannelUnits.Length ? session.ChannelUnits[i] : "未知单位").ToArray(),
         };
     }
 
