@@ -553,9 +553,42 @@ public class Ctmbs3X2000ParserTests
         Assert.Equal(1.23, reading!.ChannelValues[0]);
     }
 
+    [Fact]
+    public void Parse_UnknownSimpleResponseAtEverySplit_RejectsOnceAndPreservesNextMeasurement()
+    {
+        string[] responses =
+        [
+            "$garbage\n", "$ackjunk\n", "$err extra\n", "$start_pushX\n", "$stop_pushX\n",
+            "$ACK\n", "$ERR\n", "$\n", "$ack\r\n", "$ack \n", "$ ack\n"
+        ];
+        foreach (string response in responses)
+        {
+            byte[] invalid = Ascii(response);
+            for (int split = 0; split <= invalid.Length; split++)
+            {
+                var parser = new Ctmbs3X2000Parser(ProtocolConfig.CreateCtmbs3X2000());
+                parser.Feed(invalid, 0, split);
+                Assert.False(parser.TryParse(out var before));
+                Assert.Null(before);
+                Assert.Equal(split == invalid.Length ? 1 : 0, parser.RejectedFrameCount);
+
+                byte[] rest = [.. invalid[split..], .. Frame()];
+                parser.Feed(rest, 0, rest.Length);
+                Assert.True(parser.TryParse(out var reading));
+                Assert.Equal(new[] { 1.23, 2.34, 3.45, 4.56 }, reading!.ChannelValues);
+                Assert.Equal(1, parser.RejectedFrameCount);
+                Assert.Contains("未知简单响应", parser.LastError);
+                Assert.False(parser.TryParse(out _));
+                Assert.Equal(1, parser.RejectedFrameCount);
+            }
+        }
+    }
+
     [Theory]
     [InlineData("$ack\n")]
     [InlineData("$err\n")]
+    [InlineData("$start_push\n")]
+    [InlineData("$stop_push\n")]
     public void Parse_ValidSimpleResponseSplitAtEveryByte_DoesNotRejectNextMeasurement(string response)
     {
         byte[] stream = [.. Ascii(response), .. Frame()];
@@ -568,6 +601,8 @@ public class Ctmbs3X2000ParserTests
         parser.Feed(stream, stream.Length - 1, 1);
         Assert.True(parser.TryParse(out _));
         Assert.Equal(0, parser.RejectedFrameCount);
+        Assert.Null(parser.LastError);
+        Assert.False(parser.TryParse(out _));
     }
 
     [Theory]

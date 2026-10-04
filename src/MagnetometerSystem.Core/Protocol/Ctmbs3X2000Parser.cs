@@ -129,7 +129,7 @@ public class Ctmbs3X2000Parser : IDataParser, IParserDiagnostics
         // 仪器 ID 作为 '$' 前垃圾在下一轮被 Skip 丢弃。
         if (_ring.Count < 2) return false;
         byte second = _ring.Peek(1);
-        // 第二字节非数字 → 不是 $<L> 帧，按简单响应处理
+        // 第二字节非数字 → 不是 $<L> 帧，但仍须完整匹配已定义的简单响应。
         if (second is >= (byte)'0' and <= (byte)'9') return false;
 
         // 简单响应中不会包含 '$'。先遇到新的帧头说明前一响应损坏，
@@ -144,7 +144,10 @@ public class Ctmbs3X2000Parser : IDataParser, IParserDiagnostics
             }
             if (_ring.Peek(i) == (byte)'\n')
             {
+                var response = _ring.PeekString(i + 1);
                 _ring.Skip(i + 1);
+                if (response is not ("$ack\n" or "$err\n" or "$start_push\n" or "$stop_push\n"))
+                    Reject("CTMBS 未知简单响应，已重新同步");
                 return true;
             }
         }
