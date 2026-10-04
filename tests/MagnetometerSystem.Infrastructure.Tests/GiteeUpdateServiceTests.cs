@@ -1,10 +1,12 @@
+using System.Net;
+using System.Security.Cryptography;
 using MagnetometerSystem.Core.Services;
 using MagnetometerSystem.Infrastructure.Update;
 
 namespace MagnetometerSystem.Infrastructure.Tests;
 
 /// <summary>
-/// 覆盖 GiteeUpdateService 里两个纯解析方法。全部用固定字符串喂进去，不联网。
+/// 覆盖解析和经过 HttpMessageHandler 的实际下载/文件校验流程，不访问外网。
 /// </summary>
 public class GiteeUpdateServiceTests
 {
@@ -131,7 +133,7 @@ public class GiteeUpdateServiceTests
     }
 
     [Fact]
-    public void ParseLatestRelease_缺少校验文件_仍可下载()
+    public void ParseLatestRelease_缺少校验文件_保留附件信息供下载阶段拒绝()
     {
         var noSums = Release(assets: """
             [{"name":"MagnetometerSystem-v0.5.0-setup.exe","browser_download_url":"https://gitee.com/dl/setup.exe"}]
@@ -241,6 +243,160 @@ public class GiteeUpdateServiceTests
     public void ParseChecksums_内容异常_返回null而不是抛异常(string content)
     {
         Assert.Null(GiteeUpdateService.ParseChecksums(content, "MagnetometerSystem-v0.5.0-setup.exe"));
+    }
+
+    [Theory]
+    [InlineData(63, 'a')]
+    [InlineData(65, 'a')]
+    [InlineData(64, 'g')]
+    public void ParseChecksums_OnlyAcceptsExactly64HexDigits(int length, char character)
+    {
+        Assert.Null(GiteeUpdateService.ParseChecksums($"{new string(character, length)}  setup.exe", "setup.exe"));
+    }
+
+    public static IEnumerable<object[]> UnverifiableDownloads()
+    {
+        foreach (var failure in new[] { "absent", "unavailable", "network", "short", "nonhex", "missing-target" })
+            foreach (var cached in new[] { false, true })
+                yield return new object[] { failure, cached };
+    }
+
+    [Theory]
+    [MemberData(nameof(UnverifiableDownloads))]
+    public async Task DownloadAsync_WithoutValidTargetChecksumNeverAcceptsCacheOrDownloadsPackage(string failure, bool cached)
+    {
+        using var files = new DownloadFiles();
+        byte[] cachedBytes = "unverified cached installer"u8.ToArray();
+        if (cached) await File.WriteAllBytesAsync(files.TargetPath, cachedBytes);
+        await File.WriteAllTextAsync(files.TargetPath + ".part", "old partial download");
+        string unrelated = Path.Combine(files.DirectoryPath, "keep.txt");
+        await File.WriteAllTextAsync(unrelated, "unrelated file");
+        var handler = new DownloadHandler(request =>
+        {
+            if (request.RequestUri!.AbsolutePath != "/SHA256SUMS.txt")
+                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(cachedBytes) };
+            if (failure == "network") throw new HttpRequestException("checksum network unavailable");
+            return new HttpResponseMessage(failure == "unavailable" ? HttpStatusCode.NotFound : HttpStatusCode.OK)
+            {
+                Content = new StringContent(failure switch
+                {
+                    "short" => $"abc123  {DownloadFiles.FileName}",
+                    "nonhex" => $"{new string('g', 64)}  {DownloadFiles.FileName}",
+                    "missing-target" => $"{new string('a', 64)}  different-installer.exe",
+                    _ => "unavailable",
+                }),
+            };
+        });
+        using var service = new GiteeUpdateService(files.Options, handler);
+        var info = files.Info with { ChecksumsUrl = failure == "absent" ? null : files.Info.ChecksumsUrl };
+
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() => service.DownloadAsync(info, null));
+
+        Assert.Contains("SHA256", error.Message);
+        Assert.Contains("发行版页面", error.Message);
+        Assert.Equal(failure == "absent" ? 0 : 1, handler.Paths.Count);
+        Assert.All(handler.Paths, path => Assert.Equal("/SHA256SUMS.txt", path));
+        Assert.False(File.Exists(files.TargetPath + ".part"));
+        Assert.Equal(cached, File.Exists(files.TargetPath));
+        if (cached) Assert.Equal(cachedBytes, await File.ReadAllBytesAsync(files.TargetPath));
+        Assert.Equal("unrelated file", await File.ReadAllTextAsync(unrelated));
+    }
+
+    [Theory]
+    [InlineData("none")]
+    [InlineData("valid")]
+    [InlineData("corrupt")]
+    public async Task DownloadAsync_ValidChecksumVerifiesNewAndCachedBytes(string cache)
+    {
+        using var files = new DownloadFiles();
+        byte[] package = "verified package bytes, not an executable"u8.ToArray();
+        if (cache != "none")
+            await File.WriteAllBytesAsync(files.TargetPath, cache == "valid" ? package : "corrupt cache"u8.ToArray());
+        string checksum = Convert.ToHexString(SHA256.HashData(package));
+        var handler = new DownloadHandler(request => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = request.RequestUri!.AbsolutePath == "/SHA256SUMS.txt"
+                ? new StringContent($"{checksum} *{DownloadFiles.FileName}\r\n")
+                : new ByteArrayContent(package),
+        });
+        using var service = new GiteeUpdateService(files.Options, handler);
+
+        string result = await service.DownloadAsync(files.Info, null);
+
+        Assert.Equal(files.TargetPath, result);
+        Assert.Equal(package, await File.ReadAllBytesAsync(result));
+        Assert.False(File.Exists(files.TargetPath + ".part"));
+        Assert.Equal(cache == "valid" ? new[] { "/SHA256SUMS.txt" } : new[] { "/SHA256SUMS.txt", "/setup.exe" }, handler.Paths);
+    }
+
+    [Fact]
+    public async Task DownloadAsync_MismatchedPackageHashDeletesPartWithoutPromoting()
+    {
+        using var files = new DownloadFiles();
+        var handler = new DownloadHandler(request => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = request.RequestUri!.AbsolutePath == "/SHA256SUMS.txt"
+                ? new StringContent($"{Convert.ToHexString(SHA256.HashData("expected package"u8))}  {DownloadFiles.FileName}")
+                : new ByteArrayContent("corrupted package"u8.ToArray()),
+        });
+        using var service = new GiteeUpdateService(files.Options, handler);
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => service.DownloadAsync(files.Info, null));
+
+        Assert.Equal(new[] { "/SHA256SUMS.txt", "/setup.exe" }, handler.Paths);
+        Assert.False(File.Exists(files.TargetPath));
+        Assert.False(File.Exists(files.TargetPath + ".part"));
+    }
+
+    [Fact]
+    public async Task DownloadAsync_CanceledChecksumRequestPropagatesCancellationAndDeletesPart()
+    {
+        using var files = new DownloadFiles();
+        await File.WriteAllTextAsync(files.TargetPath + ".part", "old partial download");
+        using var cancellation = new CancellationTokenSource();
+        var handler = new DownloadHandler(_ =>
+        {
+            cancellation.Cancel();
+            throw new OperationCanceledException(cancellation.Token);
+        });
+        using var service = new GiteeUpdateService(files.Options, handler);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => service.DownloadAsync(files.Info, null, cancellation.Token));
+
+        Assert.Equal(new[] { "/SHA256SUMS.txt" }, handler.Paths);
+        Assert.False(File.Exists(files.TargetPath));
+        Assert.False(File.Exists(files.TargetPath + ".part"));
+    }
+
+    private sealed class DownloadHandler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler
+    {
+        public List<string> Paths { get; } = [];
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Paths.Add(request.RequestUri!.AbsolutePath);
+            return Task.FromResult(respond(request));
+        }
+    }
+
+    private sealed class DownloadFiles : IDisposable
+    {
+        public const string FileName = "MagnetometerSystem-v0.5.0-setup.exe";
+        public string DirectoryPath { get; } = Path.Combine(Path.GetTempPath(), $"update-checksum-{Guid.NewGuid():N}");
+        public string TargetPath => Path.Combine(DirectoryPath, FileName);
+        public UpdateOptions Options => new() { CurrentVersion = Current, PackageKind = AppPackageKind.Installer, DownloadDirectory = DirectoryPath };
+        public UpdateInfo Info => new()
+        {
+            Version = "0.5.0", TagName = "v0.5.0", HtmlUrl = "https://updates.test/releases/v0.5.0",
+            DownloadUrl = "https://updates.test/setup.exe", FileName = FileName,
+            ChecksumsUrl = "https://updates.test/SHA256SUMS.txt",
+        };
+        public DownloadFiles() => Directory.CreateDirectory(DirectoryPath);
+        public void Dispose()
+        {
+            foreach (var path in Directory.EnumerateFiles(DirectoryPath)) File.Delete(path);
+            Directory.Delete(DirectoryPath);
+        }
     }
 
     // ---------------------------------------------------------- 版本解析
