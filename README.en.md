@@ -16,7 +16,7 @@ MagnetometerSystem is a professional WPF desktop application for magnetometer da
 
 ### 2. Real-Time Chart Display
 - Toggle between single-chart and multi-chart modes
-- Supports display of up to 8 channels
+- Multi-channel display (configurable protocols support up to 64 channels)
 - Calculated channels (total field strength, gradient computation)
 - Data filtering (moving average, median filter)
 - Statistical information display

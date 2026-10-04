@@ -24,8 +24,11 @@ public class SqliteStorageService : IDataStorageService, IDisposable
     private readonly CancellationTokenSource _cts = new();
     private bool _disposed;
 
-    // 消费循环是否处于空闲（队列空、阻塞等待中）。配合队列计数判断"已全部落库"。
-    private volatile bool _writerIdle;
+    private readonly object _writerStateLock = new();
+    private readonly SemaphoreSlim _retryWrite = new(0, 1);
+    private Exception? _writeFailure;
+    private long _pendingWriteCount;
+    public long PendingWriteCount => Interlocked.Read(ref _pendingWriteCount);
 
     // 缓存 session_id -> 通道名（一个会话不会变）
     private readonly Dictionary<string, string[]> _channelNamesCache = new();
@@ -55,9 +58,9 @@ public class SqliteStorageService : IDataStorageService, IDisposable
 
         const string sql = """
             INSERT INTO sessions (id, name, started_at, sensor_type, sample_rate,
-                channel_count, channel_names, device_info, connection_type)
+                channel_count, channel_names, channel_units, device_info, connection_type)
             VALUES (@Id, @Name, @StartedAt, @SensorType, @SampleRate,
-                @ChannelCount, @ChannelNames, @DeviceInfo, @ConnectionType)
+                @ChannelCount, @ChannelNames, @ChannelUnits, @DeviceInfo, @ConnectionType)
             """;
 
         await conn.ExecuteAsync(sql, new
@@ -69,6 +72,7 @@ public class SqliteStorageService : IDataStorageService, IDisposable
             SampleRate = sensorConfig.SampleRate,
             ChannelCount = sensorConfig.ChannelCount,
             ChannelNames = JsonSerializer.Serialize(channelNames),
+            ChannelUnits = JsonSerializer.Serialize(sensorConfig.ChannelUnits),
             DeviceInfo = sensorConfig.SerialNumber,
             ConnectionType = connectionConfig.Type.ToString(),
         });
@@ -85,6 +89,7 @@ public class SqliteStorageService : IDataStorageService, IDisposable
     /// <inheritdoc />
     public async Task EndSessionAsync(string sessionId)
     {
+        await WaitForPendingWritesAsync();
         using var conn = new SqliteConnection(_dbInit.ConnectionString);
         await conn.OpenAsync();
 
@@ -111,9 +116,16 @@ public class SqliteStorageService : IDataStorageService, IDisposable
     /// <inheritdoc />
     public Task SaveReadingsAsync(IEnumerable<MagnetometerReading> readings)
     {
+        ObjectDisposedException.ThrowIf(_disposed, this);
         foreach (var reading in readings)
         {
-            _writeChannel.Writer.TryWrite(reading);
+            // Count before enqueue: a concurrent consumer cannot make a pending write invisible.
+            Interlocked.Increment(ref _pendingWriteCount);
+            if (!_writeChannel.Writer.TryWrite(reading))
+            {
+                Interlocked.Decrement(ref _pendingWriteCount);
+                throw new InvalidOperationException("保存队列已关闭，读数未入队。");
+            }
         }
         return Task.CompletedTask;
     }
@@ -121,19 +133,39 @@ public class SqliteStorageService : IDataStorageService, IDisposable
     /// <inheritdoc />
     public async Task WaitForPendingWritesAsync(int timeoutMs = 5000)
     {
-        // 当队列计数为 0 且消费循环处于空闲（阻塞等待）时，说明此前入队的读数已全部落库。
-        // 调用方应先把缓冲 flush（入队）再调用本方法，再统计会话总数。
-        int waited = 0;
-        const int step = 15;
-        while (waited < timeoutMs)
+        ArgumentOutOfRangeException.ThrowIfNegative(timeoutMs);
+        long started = Environment.TickCount64;
+        while (true)
         {
-            if (_writeChannel.Reader.Count == 0 && _writerIdle)
-                return;
-            await Task.Delay(step);
-            waited += step;
+            lock (_writerStateLock)
+            {
+                if (_writeFailure != null)
+                    throw new InvalidOperationException(
+                        "保存失败，未写入批次仍保留在内存中。采集已停止，请修复原因后点击“重试保存”。", _writeFailure);
+            }
+            if (PendingWriteCount == 0) return;
+            if (_consumerTask.IsFaulted)
+                throw new InvalidOperationException("后台保存任务已失败，仍有读数未写入。", _consumerTask.Exception);
+            long remaining = timeoutMs - (Environment.TickCount64 - started);
+            if (remaining <= 0)
+                throw new TimeoutException($"等待保存超时（{timeoutMs}ms），仍有 {PendingWriteCount} 条读数未确认落库。");
+            await Task.Delay((int)Math.Min(15, remaining));
         }
-        System.Diagnostics.Trace.TraceWarning(
-            $"WaitForPendingWritesAsync 超时（{timeoutMs}ms），会话总数计数可能偏少");
+    }
+
+    /// <inheritdoc />
+    public async Task RetryPendingWritesAsync()
+    {
+        // Only a deliberate user retry releases the retained failed batch.
+        lock (_writerStateLock)
+        {
+            if (_writeFailure != null)
+            {
+                _writeFailure = null;
+                _retryWrite.Release();
+            }
+        }
+        await WaitForPendingWritesAsync();
     }
 
     /// <inheritdoc />
@@ -144,7 +176,7 @@ public class SqliteStorageService : IDataStorageService, IDisposable
 
         const string sql = """
             SELECT id, name, started_at, ended_at, sensor_type, sample_rate,
-                   channel_count, channel_names, device_info, connection_type,
+                   channel_count, channel_names, channel_units, device_info, connection_type,
                    notes, total_readings
             FROM sessions
             ORDER BY started_at DESC
@@ -324,48 +356,37 @@ public class SqliteStorageService : IDataStorageService, IDisposable
     {
         var batch = new List<MagnetometerReading>(BatchSize);
         var reader = _writeChannel.Reader;
-
         try
         {
-            while (true)
+            while (await reader.WaitToReadAsync(_cts.Token))
             {
-                // 队列空、即将阻塞等待 → 标记空闲。WaitForPendingWritesAsync 据此判断已排空。
-                _writerIdle = true;
-                bool hasMore;
-                try { hasMore = await reader.WaitToReadAsync(_cts.Token); }
-                finally { _writerIdle = false; }
-                if (!hasMore) break;
-
                 batch.Clear();
-                while (batch.Count < BatchSize && reader.TryRead(out var item))
+                while (batch.Count < BatchSize && reader.TryRead(out var item)) batch.Add(item);
+                if (batch.Count == 0) continue;
+                while (true)
                 {
-                    batch.Add(item);
-                }
-
-                if (batch.Count > 0)
-                {
-                    await WriteBatchAsync(batch);
+                    try
+                    {
+                        await WriteBatchAsync(batch);
+                        Interlocked.Add(ref _pendingWriteCount, -batch.Count);
+                        break;
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        // Keep this exact batch and the remaining queue until an explicit retry.
+                        // WriteBatchOnceAsync uses a transaction, so a failed attempt cannot partially commit.
+                        lock (_writerStateLock) _writeFailure = ex;
+                        _dataBus.PublishAcquisitionFault(ex);
+                        System.Diagnostics.Trace.TraceError(
+                            $"后台保存失败，保留 {batch.Count} 条读数等待重试: {ex.Message}");
+                        await _retryWrite.WaitAsync(_cts.Token);
+                    }
                 }
             }
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (_cts.IsCancellationRequested)
         {
-        }
-
-        batch.Clear();
-        while (reader.TryRead(out var remaining))
-        {
-            batch.Add(remaining);
-            if (batch.Count >= BatchSize)
-            {
-                await WriteBatchAsync(batch);
-                batch.Clear();
-            }
-        }
-
-        if (batch.Count > 0)
-        {
-            await WriteBatchAsync(batch);
+            System.Diagnostics.Trace.TraceError($"保存任务被取消，仍有 {PendingWriteCount} 条未写入读数。");
         }
     }
 
@@ -394,10 +415,10 @@ public class SqliteStorageService : IDataStorageService, IDisposable
             }
             catch (Exception ex)
             {
-                // 非瞬时错误，或重试耗尽：记录并放弃该批（已确认不做落盘）
+                // 非瞬时错误或重试耗尽：向消费者传播，保留批次并阻止成功退出。
                 System.Diagnostics.Trace.TraceError(
                     $"SqliteStorageService.WriteBatchAsync failed ({batch.Count} readings, attempt {attempt}): {ex.Message}");
-                return;
+                throw;
             }
         }
     }
@@ -581,6 +602,13 @@ public class SqliteStorageService : IDataStorageService, IDisposable
             channelNames = JsonSerializer.Deserialize<string[]>(namesJson) ?? [];
         }
 
+        int channelCount = (int)(long)row.channel_count;
+        string[] savedUnits = row.channel_units is string unitsJson && !string.IsNullOrWhiteSpace(unitsJson)
+            ? JsonSerializer.Deserialize<string[]>(unitsJson) ?? [] : [];
+        // A missing old unit is unknown; guessing nT would mislabel mixed-unit recordings.
+        string[] channelUnits = Enumerable.Range(0, channelCount)
+            .Select(i => i < savedUnits.Length ? savedUnits[i] ?? "未知单位" : "未知单位").ToArray();
+
         _ = Enum.TryParse<SensorType>((string)row.sensor_type, out var sensorType);
         _ = Enum.TryParse<ConnectionType>((string?)row.connection_type ?? "", out var connectionType);
 
@@ -596,6 +624,7 @@ public class SqliteStorageService : IDataStorageService, IDisposable
             SampleRate = (double)row.sample_rate,
             ChannelCount = (int)(long)row.channel_count,
             ChannelNames = channelNames,
+            ChannelUnits = channelUnits,
             DeviceInfo = row.device_info as string,
             ConnectionType = connectionType,
             Notes = row.notes as string,

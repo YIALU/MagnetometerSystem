@@ -69,6 +69,14 @@ public class FrameSegment : INotifyPropertyChanged
     // ---- Header/Tail/Padding 专用 ----
 
     /// <summary>
+    /// Padding 段的 FixedHexValue 是否参与帧校验。
+    /// Header/Tail 的固定值本来就参与同步判定；Padding 默认只占位不校验。
+    /// 对信息 ID、固定长度字段这类"值恒定但不属于帧头帧尾"的段打开它，
+    /// 可在载荷内偶然出现帧头字节时提供额外锚点，显著降低误锁帧。
+    /// </summary>
+    public bool ValidateFixedValue { get; set; } = false;
+
+    /// <summary>
     /// 固定字节值（Hex），如 "AA55"。
     /// setter 自动：转大写、去除非法字符、按 ByteCount 截断或补零。
     /// </summary>
@@ -101,6 +109,9 @@ public class FrameSegment : INotifyPropertyChanged
     }
 
     // ---- DataField 专用 ----
+
+    /// <summary>通道物理单位。</summary>
+    public string Unit { get; set; } = "nT";
 
     /// <summary>数据类型</summary>
     private FieldDataType _dataType = FieldDataType.Float;

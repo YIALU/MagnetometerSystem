@@ -64,7 +64,8 @@
                           SelectedItem="{Binding TimeWindowSeconds}" IsEditable="True"/>
                 <TextBlock Text="s" VerticalAlignment="Center" Margin="3,0,15,6"/>
 
-                <CheckBox Content="Y轴自适应" VerticalAlignment="Center" Margin="0,0,10,6"
+                <CheckBox Content="主Y轴自适应" VerticalAlignment="Center" Margin="0,0,10,6"
+                          ToolTip="手动范围控制每个图的左侧主轴；单图中的其他单位轴始终按各自数据自适应。"
                           IsChecked="{Binding AutoScaleY}"/>
 
                 <StackPanel Orientation="Horizontal" Margin="0,0,15,6">
@@ -78,7 +79,7 @@
                             </Style.Triggers>
                         </Style>
                     </StackPanel.Style>
-                    <TextBlock Text="Y:" VerticalAlignment="Center" Margin="0,0,3,0"/>
+                    <TextBlock Text="主Y轴:" VerticalAlignment="Center" Margin="0,0,3,0"/>
                     <TextBox Width="70" Text="{Binding YMin, UpdateSourceTrigger=LostFocus}" VerticalAlignment="Center"/>
                     <TextBlock Text="~" VerticalAlignment="Center" Margin="3,0,3,0"/>
                     <TextBox Width="70" Text="{Binding YMax, UpdateSourceTrigger=LostFocus}" VerticalAlignment="Center"/>
@@ -262,7 +263,7 @@
                                                     <TextBlock Text="偏移:" VerticalAlignment="Center" FontSize="11" Margin="0,0,3,0"/>
                                                     <TextBox Width="65" FontSize="11" VerticalAlignment="Center"
                                                              Text="{Binding DisplayOffset, UpdateSourceTrigger=LostFocus}"/>
-                                                    <TextBlock Text="nT" VerticalAlignment="Center" FontSize="11" Margin="3,0,3,0" Foreground="Gray"/>
+                                                    <TextBlock Text="{Binding Unit}" VerticalAlignment="Center" FontSize="11" Margin="3,0,3,0" Foreground="Gray"/>
                                                     <Button Content="自动" FontSize="10" Padding="4,1" VerticalAlignment="Center"
                                                             ToolTip="根据通道平均值自动设置偏移，使数据趋近于 0"
                                                             Command="{Binding DataContext.AutoOffsetChannelCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
@@ -311,12 +312,17 @@
                                                 <TextBox FontSize="11" Margin="20,2,0,0"
                                                          Text="{Binding Formula, UpdateSourceTrigger=LostFocus}"
                                                          ToolTip="公式: CH0~CH7, +,-,*,/, sqrt(), abs(), pow()"/>
+                                                <StackPanel Orientation="Horizontal" Margin="20,2,0,0">
+                                                    <TextBlock Text="单位:" VerticalAlignment="Center" FontSize="11" Margin="0,0,3,0"/>
+                                                    <TextBox Width="80" FontSize="11" Text="{Binding Unit, UpdateSourceTrigger=LostFocus}"
+                                                             ToolTip="按公式含义填写单位；留空表示无量纲。修改单位不会换算数值。"/>
+                                                </StackPanel>
                                                 <!-- 偏移 + 自动偏移 -->
                                                 <StackPanel Orientation="Horizontal" Margin="20,2,0,0">
                                                     <TextBlock Text="偏移:" VerticalAlignment="Center" FontSize="11" Margin="0,0,3,0"/>
                                                     <TextBox Width="65" FontSize="11" VerticalAlignment="Center"
                                                              Text="{Binding DisplayOffset, UpdateSourceTrigger=LostFocus}"/>
-                                                    <TextBlock Text="nT" VerticalAlignment="Center" FontSize="11" Margin="3,0,3,0" Foreground="Gray"/>
+                                                    <TextBlock Text="{Binding Unit}" VerticalAlignment="Center" FontSize="11" Margin="3,0,3,0" Foreground="Gray"/>
                                                     <Button Content="自动" FontSize="10" Padding="4,1" VerticalAlignment="Center"
                                                             ToolTip="根据计算通道平均值自动设置偏移，使数据趋近于 0"
                                                             Command="{Binding DataContext.AutoOffsetComputedChannelCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
@@ -328,6 +334,7 @@
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
 
+                            <TextBlock Text="{Binding ComputationError}" Foreground="Firebrick" TextWrapping="Wrap" Margin="0,4,0,0"/>
                             <!-- 添加按钮行 -->
                             <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
                                 <Button Content="+ 总场" FontSize="11" Padding="6,2" Margin="0,0,4,0"

@@ -57,15 +57,26 @@
                 </TextBlock>
             </StatusBarItem>
             <StatusBarItem HorizontalAlignment="Right">
-                <Button x:Name="AboutButton" Click="ShowAbout_Click"
-                        BorderThickness="0" Background="Transparent" Padding="8,0"
-                        Cursor="Hand"
-                        ToolTip="点击查看详细版本信息">
-                    <TextBlock>
-                        <Run Text="版本 "/>
-                        <Run Text="{x:Static local:AppVersion.Display}" Foreground="#0078D4"/>
-                    </TextBlock>
-                </Button>
+                <StackPanel Orientation="Horizontal">
+                    <Button x:Name="UpdateBadgeButton" Click="ShowUpdate_Click"
+                            BorderThickness="0" Background="Transparent" Padding="8,0"
+                            Cursor="Hand"
+                            ToolTip="点击查看新版本详情"
+                            Visibility="{Binding HasUpdate, Converter={StaticResource BoolToVisibilityConverter}}">
+                        <TextBlock Foreground="#E67E22" FontWeight="Bold">
+                            <Run Text="● 有新版本 v"/><Run Text="{Binding AvailableUpdateVersion, Mode=OneWay}"/>
+                        </TextBlock>
+                    </Button>
+                    <Button x:Name="AboutButton" Click="ShowAbout_Click"
+                            BorderThickness="0" Background="Transparent" Padding="8,0"
+                            Cursor="Hand"
+                            ToolTip="点击查看详细版本信息">
+                        <TextBlock>
+                            <Run Text="版本 "/>
+                            <Run Text="{x:Static local:AppVersion.Display}" Foreground="#0078D4"/>
+                        </TextBlock>
+                    </Button>
+                </StackPanel>
             </StatusBarItem>
         </StatusBar>
 

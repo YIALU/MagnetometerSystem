@@ -18,9 +18,12 @@ public interface IDataStorageService
 
     /// <summary>
     /// 等待后台写入队列把当前已入队的读数全部落库（用于结束会话前确保计数准确）。
-    /// 超时后返回，不阻塞退出。
+    /// 写入失败或超时会抛出异常，不能继续宣称已保存；等待本身不会重试失败批次。
     /// </summary>
     Task WaitForPendingWritesAsync(int timeoutMs = 5000);
+
+    /// <summary>用户修复故障后，显式重试保留的批次并等待落库。</summary>
+    Task RetryPendingWritesAsync();
 
     /// <summary>获取所有会话列表</summary>
     Task<IReadOnlyList<SessionInfo>> GetSessionsAsync();
@@ -61,9 +64,11 @@ public class SessionInfo
     public DateTime StartedAt { get; set; }
     public DateTime? EndedAt { get; set; }
     public SensorType SensorType { get; set; }
+    /// <summary>连接时记录的标称采样率，不代表设备实际输出频率；回放使用读数时间戳。</summary>
     public double SampleRate { get; set; }
     public int ChannelCount { get; set; }
     public string[] ChannelNames { get; set; } = [];
+    public string[] ChannelUnits { get; set; } = [];
     public string? DeviceInfo { get; set; }
     public ConnectionType ConnectionType { get; set; }
     public string? Notes { get; set; }

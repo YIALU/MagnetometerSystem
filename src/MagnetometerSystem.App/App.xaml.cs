@@ -8,6 +8,7 @@ using MagnetometerSystem.Infrastructure.Configuration;
 using MagnetometerSystem.Infrastructure.Database;
 using MagnetometerSystem.Infrastructure.Export;
 using MagnetometerSystem.Infrastructure.Services;
+using MagnetometerSystem.Infrastructure.Update;
 using MagnetometerSystem.App.Services;
 using MagnetometerSystem.App.Helpers;
 using MagnetometerSystem.App.ViewModels;
@@ -18,12 +19,23 @@ public partial class App : Application
 {
     public static IServiceProvider Services { get; private set; } = null!;
 
+    /// <summary>
+    /// 供 Inno Setup 安装包检测运行中实例（installer\MagnetometerSystem.iss 的 AppMutex）。
+    /// 改名必须两边同步，否则安装时不会提示关闭程序，会出现文件占用。
+    /// 这里只是持有 mutex 让安装器看得见，不阻止多开。
+    /// </summary>
+    private const string SingleInstanceMutexName = "MagnetometerSystem.SingleInstance";
+
+    private Mutex? _singleInstanceMutex;
+
     private void OnStartup(object sender, StartupEventArgs e)
     {
         try
         {
             ChartFontHelper.ApplyToAll();
             GlobalErrorHandler.Initialize(this);
+
+            TryCreateSingleInstanceMutex();
 
             var services = new ServiceCollection();
 
@@ -48,6 +60,14 @@ public partial class App : Application
 
             services.AddSingleton<IAppConfigService, AppConfigService>();
             services.AddSingleton<Infrastructure.Services.IUserPreferencesService, Infrastructure.Services.UserPreferencesService>();
+
+            services.AddSingleton(new UpdateOptions
+            {
+                CurrentVersion = AppVersion.Number,
+                PackageKind = AppVersion.PackageKind
+            });
+            services.AddSingleton<IUpdateService, GiteeUpdateService>();
+            services.AddSingleton<UpdateCoordinator>();
 
             services.AddTransient<SensorCalibrationViewModel>();
             services.AddTransient<SettingsViewModel>();
@@ -107,6 +127,9 @@ public partial class App : Application
 
             // 默认显示的连接页面数据延迟到窗口渲染完成后再加载
             _ = mainVm.ConnectionVM.EnsureLoadedAsync();
+
+            // 检查更新完全独立于主流程，失败也不影响使用
+            _ = RunStartupUpdateCheckAsync(mainVm);
         }
         catch (Exception ex)
         {
@@ -115,30 +138,62 @@ public partial class App : Application
         }
     }
 
-    private void OnExit(object sender, ExitEventArgs e)
+    /// <summary>
+    /// 启动后在后台检查更新。发现新版本时弹一次提示窗，同时在状态栏挂上常驻角标，
+    /// 用户点"稍后提醒"关掉后仍能随时点角标回来。
+    /// </summary>
+    private static async Task RunStartupUpdateCheckAsync(MainViewModel mainVm)
+    {
+        var coordinator = Services.GetRequiredService<UpdateCoordinator>();
+
+        await coordinator.RunStartupCheckAsync(async info =>
+        {
+            await Current.Dispatcher.InvokeAsync(() => mainVm.AvailableUpdateVersion = info.Version);
+            await Current.Dispatcher.Invoke(() => coordinator.ShowUpdateDialogAsync(Current.MainWindow, info));
+        });
+    }
+
+    /// <summary>
+    /// 创建供安装包检测的命名 mutex。失败不影响运行，只是安装时可能提示不到关闭程序。
+    /// </summary>
+    private void TryCreateSingleInstanceMutex()
     {
         try
         {
-            var configService = Services.GetRequiredService<IAppConfigService>();
-
-            if (MainWindow?.DataContext is MainViewModel mainVm)
-            {
-                var settings = new AppSettings
-                {
-                    ChartRefreshRate = mainVm.RealtimeChartVM.RefreshRate,
-                    DefaultPortName = mainVm.ConnectionVM.SelectedPort,
-                    DefaultBaudRate = mainVm.ConnectionVM.BaudRate,
-                    DefaultIpAddress = mainVm.ConnectionVM.IpAddress,
-                    DefaultPort = mainVm.ConnectionVM.Port,
-                };
-
-                configService.SaveSettingsAsync(settings).GetAwaiter().GetResult();
-            }
+            _singleInstanceMutex = new Mutex(initiallyOwned: false, SingleInstanceMutexName, out _);
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Trace.TraceError($"保存配置失败: {ex.Message}");
+            System.Diagnostics.Trace.TraceWarning($"创建单实例 mutex 失败: {ex.Message}");
         }
+    }
+
+    internal static async Task SaveCurrentSettingsAsync(MainViewModel mainVm, IAppConfigService? configService = null)
+    {
+        configService ??= Services.GetRequiredService<IAppConfigService>();
+        var settings = await configService.LoadSettingsAsync();
+        settings.ChartRefreshRate = mainVm.RealtimeChartVM.RefreshRate;
+        settings.DefaultPortName = mainVm.ConnectionVM.SelectedPort;
+        settings.DefaultBaudRate = mainVm.ConnectionVM.BaudRate;
+        settings.DefaultIpAddress = mainVm.ConnectionVM.IpAddress;
+        settings.DefaultPort = mainVm.ConnectionVM.Port;
+        await configService.SaveSettingsAsync(settings);
+    }
+
+    /// <summary>所有正常退出入口都先等待物理连接停止、会话提交和设置保存。</summary>
+    public static async Task PrepareForExitAsync(MainViewModel mainVm, IAppConfigService? configService = null)
+    {
+        await mainVm.ConnectionVM.StopAcquisitionAsync();
+        // Stop 已等待真实存储任务；异步刷新的错误文字/计数不能作为提交凭据。
+        if (mainVm.SessionListVM.ActiveSessionId != null)
+            throw new InvalidOperationException("当前会话尚未完成保存，请重试写入后再退出。");
+        await SaveCurrentSettingsAsync(mainVm, configService);
+    }
+
+    private void OnExit(object sender, ExitEventArgs e)
+    {
+        _singleInstanceMutex?.Dispose();
+        _singleInstanceMutex = null;
 
         GlobalErrorHandler.Shutdown();
     }

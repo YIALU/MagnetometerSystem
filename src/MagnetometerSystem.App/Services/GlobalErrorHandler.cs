@@ -20,7 +20,7 @@ public static class GlobalErrorHandler
         Log.Logger = new LoggerConfiguration()
             .MinimumLevel.Information()
             .WriteTo.File(
-                Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "logs", "app-.log"),
+                Path.Combine(ResolveLogDirectory(), "app-.log"),
                 rollingInterval: RollingInterval.Day,
                 retainedFileCountLimit: 30,
                 outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] {Message:lj}{NewLine}{Exception}")
@@ -32,6 +32,35 @@ public static class GlobalErrorHandler
         AppDomain.CurrentDomain.UnhandledException += OnDomainUnhandledException;
 
         Log.Information("应用程序启动");
+    }
+
+    /// <summary>
+    /// 决定日志写在哪。
+    /// 优先程序目录下的 logs\（便携版就地留日志，方便用户打包发回来排查）；
+    /// 目录不可写时回退到 %LOCALAPPDATA%\MagnetometerSystem\logs——
+    /// 万一程序被放进 Program Files，写同目录会被 UAC 虚拟化或直接失败。
+    /// </summary>
+    private static string ResolveLogDirectory()
+    {
+        var appDir = Path.Combine(AppContext.BaseDirectory, "logs");
+        try
+        {
+            Directory.CreateDirectory(appDir);
+
+            var probe = Path.Combine(appDir, $".write-probe-{Environment.ProcessId}");
+            File.WriteAllText(probe, string.Empty);
+            File.Delete(probe);
+
+            return appDir;
+        }
+        catch
+        {
+            var fallback = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "MagnetometerSystem", "logs");
+            Directory.CreateDirectory(fallback);
+            return fallback;
+        }
     }
 
     /// <summary>

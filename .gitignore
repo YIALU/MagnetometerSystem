@@ -66,3 +66,14 @@ desktop.ini
 
 publish/
 publish*.zip
+
+## 打包产物（build.ps1 输出）
+artifacts/
+
+## Inno Setup 编译产物（installer/ 下只保留 .iss 源文件，不放 setup.exe）
+installer/*.exe
+installer/*.log
+installer/*.bin
+
+## Python 辅助工具（不入版本库）
+python_tools/

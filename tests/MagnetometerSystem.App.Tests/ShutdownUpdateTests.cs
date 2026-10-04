@@ -1,0 +1,368 @@
+using System.IO;
+using System.Text;
+using System.Windows;
+using System.Windows.Controls;
+using MagnetometerSystem.App.Services;
+using MagnetometerSystem.App.ViewModels;
+using MagnetometerSystem.App.Views.Dialogs;
+using MagnetometerSystem.Core.Calibration;
+using MagnetometerSystem.Core.Communication;
+using MagnetometerSystem.Core.Models;
+using MagnetometerSystem.Core.Services;
+using MagnetometerSystem.Infrastructure.Configuration;
+using MagnetometerSystem.Infrastructure.Database;
+using MagnetometerSystem.Infrastructure.Export;
+using Microsoft.Data.Sqlite;
+using AppSettings = MagnetometerSystem.Infrastructure.Configuration.AppSettings;
+
+namespace MagnetometerSystem.App.Tests;
+
+public class ShutdownUpdateTests
+{
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public Task UpdateWaitsForStorageAndSettingsBeforeInstallerAndHonorsCancellation(bool cancel) => WpfTestHost.RunAsync(async () =>
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var stopping = NewCompletion();
+        var releaseStorage = NewCompletion();
+        fixture.Bus.AcquisitionStopping += async () => { stopping.TrySetResult(); await releaseStorage.Task; };
+        try
+        {
+            await fixture.Main.ConnectionVM.ConnectCommand.ExecuteAsync(null);
+            fixture.Connection.Feed("1,2,3\n");
+            fixture.Connection.DisconnectFrame = "7,8,9\n";
+            fixture.ClickUpdate();
+            await stopping.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            Assert.Equal(0, fixture.Updates.ApplyCalls);
+            Assert.False(fixture.Window.IsEnabled);
+            Assert.False(fixture.Connection.IsConnected);
+            releaseStorage.TrySetResult();
+            await fixture.Settings.SaveEntered.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            Assert.Equal(0, fixture.Updates.ApplyCalls);
+            var session = Assert.Single(await fixture.Storage.GetSessionsAsync());
+            Assert.NotNull(session.EndedAt);
+            var saved = await fixture.Storage.GetReadingsAsync(session.Id);
+            Assert.Equal(2, saved.Count);
+            Assert.Equal(7, saved[1].ChannelValues[0]);
+            if (cancel) ((Button)fixture.Dialog.FindName("CancelDownloadButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            fixture.Settings.ReleaseSave.TrySetResult();
+            await WaitForAsync(() => fixture.Window.IsEnabled);
+            Assert.Equal(cancel ? 0 : 1, fixture.Updates.ApplyCalls);
+            Assert.Contains(cancel ? "已取消" : "测试安装器未启动", fixture.Status);
+            Assert.False(fixture.Main.ConnectionVM.IsAcquiring);
+        }
+        finally { releaseStorage.TrySetResult(); fixture.Settings.ReleaseSave.TrySetResult(); }
+    });
+
+    [Fact]
+    public Task StorageFailureBlocksInstallerAndRetryCanFinishDespiteOldUiError() => WpfTestHost.RunAsync(async () =>
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        bool fail = true;
+        fixture.Settings.ReleaseSave.TrySetResult();
+        fixture.Bus.AcquisitionStopping += () => fail
+            ? Task.FromException(new IOException("测试落库失败")) : Task.CompletedTask;
+        try
+        {
+            await fixture.Main.ConnectionVM.ConnectCommand.ExecuteAsync(null);
+            fixture.Connection.Feed("4,5,6\n");
+            fixture.ClickUpdate();
+            await WaitForAsync(() => fixture.Status.Contains("测试落库失败"));
+            Assert.Equal(0, fixture.Updates.ApplyCalls);
+            Assert.False(fixture.Settings.SaveEntered.Task.IsCompleted);
+            Assert.True(fixture.Window.IsEnabled);
+            Assert.True(fixture.Main.ConnectionVM.IsAcquiring);
+            fail = false;
+            fixture.Main.SessionListVM.StorageError = "旧的界面错误文本";
+            fixture.ClickUpdate();
+            await WaitForAsync(() => fixture.Updates.ApplyCalls == 1 && fixture.Window.IsEnabled);
+            Assert.False(fixture.Main.ConnectionVM.IsAcquiring);
+            Assert.Null(fixture.Main.SessionListVM.ActiveSessionId);
+            Assert.Contains("测试安装器未启动", fixture.Status);
+        }
+        finally { fail = false; }
+    });
+
+    [Fact]
+    public Task ActualSqliteWriteFailurePreventsInstallerAndPreservesSessionForRetry() => WpfTestHost.RunAsync(async () =>
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        fixture.Settings.ReleaseSave.TrySetResult();
+        await fixture.Main.ConnectionVM.ConnectCommand.ExecuteAsync(null);
+        await using var database = new SqliteConnection($"Data Source={fixture.DatabasePath}");
+        await database.OpenAsync();
+        async Task Execute(string sql)
+        {
+            await using var command = database.CreateCommand();
+            command.CommandText = sql;
+            await command.ExecuteNonQueryAsync();
+        }
+        bool renamed = false;
+        try
+        {
+            await Execute("ALTER TABLE readings RENAME TO temporarily_unavailable_readings");
+            renamed = true;
+            fixture.Connection.Feed("4,5,6\n");
+            fixture.ClickUpdate();
+            await WaitForAsync(() => fixture.Status.Contains("保存失败") && fixture.Window.IsEnabled);
+            Assert.Equal(0, fixture.Updates.ApplyCalls);
+            Assert.False(fixture.Settings.SaveEntered.Task.IsCompleted);
+            Assert.NotNull(fixture.Main.SessionListVM.ActiveSessionId);
+            await Execute("ALTER TABLE temporarily_unavailable_readings RENAME TO readings");
+            renamed = false;
+            await fixture.Main.SessionListVM.RetryStorageCommand.ExecuteAsync(null);
+            fixture.ClickUpdate();
+            await WaitForAsync(() => fixture.Updates.ApplyCalls == 1 && fixture.Window.IsEnabled);
+            var session = Assert.Single(await fixture.Storage.GetSessionsAsync());
+            Assert.Single(await fixture.Storage.GetReadingsAsync(session.Id));
+            Assert.NotNull(session.EndedAt);
+        }
+        finally
+        {
+            if (renamed) await Execute("ALTER TABLE temporarily_unavailable_readings RENAME TO readings");
+            await fixture.Main.SessionListVM.RetryStorageCommand.ExecuteAsync(null);
+        }
+    });
+
+    [Fact]
+    public Task SqliteFaultStopsReceivingWithoutUiAndManualRetryPreservesEveryAcceptedReading() => WpfTestHost.RunAsync(async () =>
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        fixture.Settings.ReleaseSave.TrySetResult();
+        await fixture.Main.ConnectionVM.ConnectCommand.ExecuteAsync(null);
+        var sessions = fixture.Main.SessionListVM;
+        string sessionId = Assert.IsType<string>(sessions.ActiveSessionId);
+        await using var database = new SqliteConnection($"Data Source={fixture.DatabasePath}");
+        await database.OpenAsync();
+        async Task Execute(string sql)
+        {
+            await using var command = database.CreateCommand();
+            command.CommandText = sql;
+            await command.ExecuteNonQueryAsync();
+        }
+        await Execute("CREATE TRIGGER fail_live_save BEFORE INSERT ON readings BEGIN SELECT RAISE(FAIL, 'test live disk failure'); END;");
+        using var faultObserved = new ManualResetEventSlim();
+        int faults = 0;
+        int stopped = 0;
+        fixture.Bus.AcquisitionStopped += () => stopped++;
+        fixture.Bus.AcquisitionFaulted += _ => throw new IOException("isolated observer error");
+        fixture.Bus.AcquisitionFaulted += _ => { Interlocked.Increment(ref faults); faultObserved.Set(); };
+        bool triggerExists = true;
+        try
+        {
+            // Hold the real writer until all three frames have been accepted (one queued plus a tail).
+            using (var blocker = database.BeginTransaction())
+            {
+                fixture.Connection.Feed("1,2,3\n4,5,6\n7,8,9\n");
+                Assert.Equal(3, sessions.ActiveSessionReadingCount);
+                blocker.Rollback();
+            }
+
+            // Deliberately occupy the WPF dispatcher. Fault notification, receive refusal and physical
+            // disconnect must complete without it, even when another observer throws.
+            Assert.True(faultObserved.Wait(TimeSpan.FromSeconds(3)), "writer fault depended on the dispatcher");
+            long pendingAtFault = fixture.Storage.PendingWriteCount;
+            for (int i = 0; i < 2000; i++) fixture.Connection.Feed("10,11,12\n13,14,15\n");
+            Assert.Equal(3, sessions.ActiveSessionReadingCount);
+            Assert.Equal(pendingAtFault, fixture.Storage.PendingWriteCount);
+            Assert.True(fixture.Connection.Disconnected.Wait(TimeSpan.FromSeconds(3)), "disconnect depended on the dispatcher");
+
+            await WaitForAsync(() => !fixture.Main.ConnectionVM.IsConnected && sessions.StorageError != null);
+            // Wait for the serialized stop attempt to finish moving the accepted tail into the retained queue.
+            await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Main.ConnectionVM.StopAcquisitionAsync());
+            Assert.False(sessions.IsRecording);
+            Assert.Contains("保存失败", sessions.StorageError);
+            Assert.Equal(3, fixture.Storage.PendingWriteCount);
+            Assert.Equal(1, Volatile.Read(ref faults));
+            Assert.Empty(await fixture.Storage.GetReadingsAsync(sessionId));
+            Assert.Null(Assert.Single(await fixture.Storage.GetSessionsAsync()).EndedAt);
+
+            await sessions.RetryStorageCommand.ExecuteAsync(null);
+            Assert.True(fixture.Main.ConnectionVM.IsAcquiring);
+            Assert.Equal(sessionId, sessions.ActiveSessionId);
+            Assert.NotNull(sessions.StorageError);
+            Assert.Equal(0, stopped);
+            Assert.Equal(3, fixture.Storage.PendingWriteCount);
+            Assert.Equal(2, Volatile.Read(ref faults));
+
+            await Execute("DROP TRIGGER fail_live_save;");
+            triggerExists = false;
+            // Passive waits never implicitly restart the writer, even after the cause has been repaired.
+            await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Storage.WaitForPendingWritesAsync());
+            Assert.Equal(2, Volatile.Read(ref faults));
+            await sessions.RetryStorageCommand.ExecuteAsync(null);
+            Assert.False(fixture.Main.ConnectionVM.IsAcquiring);
+            Assert.Equal(1, stopped);
+            Assert.Null(sessions.StorageError);
+            Assert.Null(sessions.ActiveSessionId);
+            Assert.Equal(0, fixture.Storage.PendingWriteCount);
+            Assert.Equal(new[] { 1d, 4d, 7d }, (await fixture.Storage.GetReadingsAsync(sessionId)).Select(r => r.ChannelValues[0]));
+            Assert.Equal(3, Assert.Single(await fixture.Storage.GetSessionsAsync()).TotalReadings);
+
+            // A subsequent session opens a fresh receive generation and is unaffected by the old fault.
+            await fixture.Main.ConnectionVM.ConnectCommand.ExecuteAsync(null);
+            fixture.Connection.Feed("16,17,18\n");
+            string newSessionId = Assert.IsType<string>(sessions.ActiveSessionId);
+            Assert.NotEqual(sessionId, newSessionId);
+            Assert.True(fixture.Main.ConnectionVM.IsAcquiring);
+            Assert.True(fixture.Connection.IsConnected);
+            await fixture.Main.ConnectionVM.StopAcquisitionAsync();
+            Assert.Equal(2, stopped);
+            Assert.Equal(16d, Assert.Single(await fixture.Storage.GetReadingsAsync(newSessionId)).ChannelValues[0]);
+        }
+        finally
+        {
+            if (triggerExists) await Execute("DROP TRIGGER fail_live_save;");
+            await sessions.RetryStorageCommand.ExecuteAsync(null);
+        }
+    });
+
+    [Fact]
+    public Task NormalWindowCloseWaitsForTailAndSettings() => WpfTestHost.RunAsync(async () =>
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        fixture.Main.CurrentView = null; // Keep the connection page from loading personal saved protocols in this UI test.
+        fixture.Window.ShowInTaskbar = false;
+        fixture.Window.ShowActivated = false;
+        fixture.Window.Left = -10000;
+        fixture.Window.Top = -10000;
+        fixture.Window.Show();
+        await fixture.Main.ConnectionVM.ConnectCommand.ExecuteAsync(null);
+        fixture.Connection.Feed("1,2,3\n");
+        fixture.Connection.DisconnectFrame = "7,8,9\n";
+        fixture.Window.Close();
+        try
+        {
+            await fixture.Settings.SaveEntered.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            Assert.True(fixture.Window.IsVisible);
+            Assert.False(fixture.Window.IsEnabled);
+            var session = Assert.Single(await fixture.Storage.GetSessionsAsync());
+            Assert.NotNull(session.EndedAt);
+            Assert.Equal(2, (await fixture.Storage.GetReadingsAsync(session.Id)).Count);
+            fixture.Settings.ReleaseSave.TrySetResult();
+            await WaitForAsync(() => !fixture.Window.IsVisible);
+            Assert.Equal(0, fixture.Updates.ApplyCalls);
+        }
+        finally { fixture.Settings.ReleaseSave.TrySetResult(); }
+    });
+
+    private static TaskCompletionSource NewCompletion() => new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private static async Task WaitForAsync(Func<bool> predicate)
+    {
+        var until = DateTime.UtcNow.AddSeconds(3);
+        while (!predicate() && DateTime.UtcNow < until) await Task.Delay(10);
+        Assert.True(predicate(), "等待更新/退出界面状态超时");
+    }
+
+    private sealed class Fixture : IAsyncDisposable
+    {
+        public required DataBus Bus { get; init; }
+        public required MainViewModel Main { get; init; }
+        public required MainWindow Window { get; init; }
+        public required UpdateDialog Dialog { get; init; }
+        public required SqliteStorageService Storage { get; init; }
+        public required TestConnection Connection { get; init; }
+        public required DelayedSettings Settings { get; init; }
+        public required RecordingUpdateService Updates { get; init; }
+        public required string DatabasePath { get; init; }
+        public Window? PreviousMainWindow { get; init; }
+        public string Status => ((TextBlock)Dialog.FindName("StatusText")).Text;
+        public void ClickUpdate() => ((Button)Dialog.FindName("UpdateButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+
+        public static async Task<Fixture> CreateAsync()
+        {
+            string path = Path.Combine(Path.GetTempPath(), $"shutdown_{Guid.NewGuid():N}.db");
+            var database = new DatabaseInitializer(path);
+            await database.InitializeAsync();
+            var bus = new DataBus();
+            var storage = new SqliteStorageService(database, bus);
+            var profiles = new SqliteCalibrationRepository(database);
+            var corrector = new OrthogonalityCorrector();
+            var settings = new DelayedSettings();
+            var updates = new RecordingUpdateService();
+            var connection = new TestConnection();
+            var connectionVm = new ConnectionViewModel(new TestConnectionFactory(connection), bus, corrector, profiles);
+            var sessions = new SessionListViewModel(storage, new CsvExporter(storage), bus, corrector, profiles);
+            var chart = new RealtimeChartViewModel(bus);
+            var history = new HistoryPlaybackViewModel(storage, bus, corrector, profiles);
+            var ortho = new OrthogonalityCalibrationViewModel(new OrthogonalityCalculator(), profiles, bus, storage);
+            var commands = new DeviceCommandViewModel(bus, settings);
+            var settingsVm = new SettingsViewModel(settings, new UpdateCoordinator(updates, new MagnetometerSystem.Infrastructure.Services.UserPreferencesService(database)));
+            var main = new MainViewModel(connectionVm, chart, sessions, history, ortho, new SensorCalibrationViewModel(profiles), settingsVm, commands, bus);
+            var previous = Application.Current.MainWindow;
+            var window = new MainWindow(settings) { DataContext = main };
+            Application.Current.MainWindow = window;
+            var dialog = new UpdateDialog(updates, new UpdateInfo
+            {
+                Version = "2.0.0", TagName = "v2.0.0", HtmlUrl = "https://example.invalid/release",
+                DownloadUrl = "https://example.invalid/setup.exe", FileName = "setup.exe",
+            });
+            return new Fixture
+            {
+                Bus = bus, Main = main, Window = window, Dialog = dialog, Storage = storage,
+                Connection = connection, Settings = settings, Updates = updates, DatabasePath = path,
+                PreviousMainWindow = previous,
+            };
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            Settings.ReleaseSave.TrySetResult();
+            await Main.ConnectionVM.StopAcquisitionAsync();
+            Dialog.Close();
+            Window.DataContext = null;
+            Window.Close();
+            Application.Current.MainWindow = PreviousMainWindow;
+            Main.OrthoCalibVM.Cleanup();
+            Main.RealtimeChartVM.Dispose();
+            Storage.Dispose();
+            Connection.Disconnected.Dispose();
+            SqliteConnection.ClearAllPools();
+            foreach (var suffix in new[] { "", "-wal", "-shm" }) File.Delete(DatabasePath + suffix);
+        }
+    }
+
+    private sealed class DelayedSettings : IAppConfigService
+    {
+        public TaskCompletionSource SaveEntered { get; } = NewCompletion();
+        public TaskCompletionSource ReleaseSave { get; } = NewCompletion();
+        public Task<T?> GetAsync<T>(string key) => Task.FromResult(default(T));
+        public Task SetAsync<T>(string key, T value) => Task.CompletedTask;
+        public Task<AppSettings> LoadSettingsAsync() => Task.FromResult(new AppSettings());
+        public async Task SaveSettingsAsync(AppSettings settings) { SaveEntered.TrySetResult(); await ReleaseSave.Task; }
+    }
+
+    private sealed class RecordingUpdateService : IUpdateService
+    {
+        public int ApplyCalls { get; private set; }
+        public UpdateOptions Options { get; } = new() { CurrentVersion = "1.0.0", PackageKind = AppPackageKind.Installer };
+        public Task<UpdateCheckResult> CheckForUpdateAsync(CancellationToken ct = default) => Task.FromResult(UpdateCheckResult.UpToDate());
+        public Task<string> DownloadAsync(UpdateInfo info, IProgress<DownloadProgress>? progress, CancellationToken ct = default) => Task.FromResult("unused-test-installer.exe");
+        public bool TryApplyUpdate(UpdateInfo info, string localFilePath) { ApplyCalls++; throw new IOException("测试安装器未启动"); }
+        public void OpenReleasePage(UpdateInfo? info = null) { }
+        public void CleanupDownloads() { }
+    }
+
+    private sealed class TestConnectionFactory(TestConnection connection) : IConnectionFactory
+    {
+        public IDeviceConnection Create(ConnectionConfig config) => connection;
+    }
+
+    private sealed class TestConnection : IDeviceConnection
+    {
+        public event EventHandler<byte[]>? DataReceived;
+        public event EventHandler<string>? ErrorOccurred { add { } remove { } }
+        public event EventHandler<bool>? ConnectionStateChanged;
+        public bool IsConnected { get; private set; }
+        public ConnectionConfig Config { get; } = new();
+        public ManualResetEventSlim Disconnected { get; } = new();
+        public Task ConnectAsync(CancellationToken ct = default) { Disconnected.Reset(); IsConnected = true; ConnectionStateChanged?.Invoke(this, true); return Task.CompletedTask; }
+        public string? DisconnectFrame { get; set; }
+        public Task DisconnectAsync() { if (DisconnectFrame is { } frame) Feed(frame); DisconnectFrame = null; IsConnected = false; ConnectionStateChanged?.Invoke(this, false); Disconnected.Set(); return Task.CompletedTask; }
+        public Task SendAsync(byte[] data, CancellationToken ct = default) => Task.CompletedTask;
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        public void Feed(string text) => DataReceived?.Invoke(this, Encoding.ASCII.GetBytes(text));
+    }
+}

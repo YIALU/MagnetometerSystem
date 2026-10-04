@@ -22,9 +22,13 @@ public class ConfigurableBinaryParser : IDataParser
     private readonly FrameSegment? _checksumSegment;
     private readonly int _segmentFrameLength;
 
+    /// <summary>启用了 ValidateFixedValue 的 Padding 段：(帧内偏移, 期望字节)</summary>
+    private readonly List<(int Offset, byte[] Expected)> _constantChecks = [];
+
     public ConfigurableBinaryParser(ProtocolConfig config)
     {
         _config = config ?? throw new ArgumentNullException(nameof(config));
+        config.ValidateRequiredChecksum();
         _useSegments = config.UsesSegments;
 
         if (_useSegments)
@@ -45,6 +49,18 @@ public class ConfigurableBinaryParser : IDataParser
             _checksumSegment = config.Segments.FirstOrDefault(s => s.Type == SegmentType.Checksum);
             _dataSegments = config.Segments.Where(s => s.Type == SegmentType.DataField).ToList();
             _segmentFrameLength = config.TotalFrameLength;
+
+            // 收集需要参与校验的固定值段（信息 ID、固定长度字段等）
+            foreach (var seg in config.Segments)
+            {
+                if (seg.Type != SegmentType.Padding || !seg.ValidateFixedValue)
+                    continue;
+                if (string.IsNullOrEmpty(seg.FixedHexValue))
+                    continue;
+                var expected = ProtocolConfig.HexToBytes(seg.FixedHexValue);
+                if (expected.Length == seg.ByteCount)
+                    _constantChecks.Add((seg.ComputedOffset, expected));
+            }
         }
         else
         {
@@ -62,7 +78,14 @@ public class ConfigurableBinaryParser : IDataParser
 
     public bool TryParse(out MagnetometerReading? reading)
     {
-        return _useSegments ? TryParseSegments(out reading) : TryParseLegacy(out reading);
+        // false 仅表示当前缓冲已无可输出读数。坏候选消耗字节后应继续找帧，
+        // 否则调用方的 while (TryParse(...)) 会把同一包内后续好帧留到下次 Feed。
+        while (true)
+        {
+            int before = _ringBuffer.Count;
+            if (_useSegments ? TryParseSegments(out reading) : TryParseLegacy(out reading)) return true;
+            if (_ringBuffer.Count == 0 || _ringBuffer.Count == before) return false;
+        }
     }
 
     public void Reset()
@@ -141,7 +164,22 @@ public class ConfigurableBinaryParser : IDataParser
             {
                 if (_ringBuffer.Peek(tailOffset + i) != _tailBytes[i])
                 {
-                    _ringBuffer.Skip(_headerBytes.Length);
+                    _ringBuffer.Skip(1);
+                    return false;
+                }
+            }
+        }
+
+        // 验证固定值段（信息 ID 等）：载荷里偶然出现帧头时，这些锚点能挡掉误锁
+        foreach (var (offset, expected) in _constantChecks)
+        {
+            if (offset + expected.Length > frameLen)
+                continue;
+            for (int i = 0; i < expected.Length; i++)
+            {
+                if (_ringBuffer.Peek(offset + i) != expected[i])
+                {
+                    _ringBuffer.Skip(1);
                     return false;
                 }
             }
@@ -298,7 +336,7 @@ public class ConfigurableBinaryParser : IDataParser
             {
                 if (_ringBuffer.Peek(frameLen - tailLen + i) != _tailBytes[i])
                 {
-                    _ringBuffer.Skip(headerLen);
+                    _ringBuffer.Skip(1);
                     return false;
                 }
             }

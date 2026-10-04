@@ -27,6 +27,8 @@ public partial class SessionListViewModel : ObservableObject
     // ---- 读数缓冲 ----
     private readonly List<MagnetometerReading> _readingBuffer = new(500);
     private readonly object _bufferLock = new();
+    private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
+    private bool _acceptingReadings;
     private DateTime _lastFlushTime = DateTime.MinValue;
     private const int FlushBatchSize = 500;
     private const int FlushIntervalMs = 200;
@@ -68,6 +70,9 @@ public partial class SessionListViewModel : ObservableObject
     /// </summary>
     [ObservableProperty]
     private long _activeSessionReadingCount;
+
+    [ObservableProperty]
+    private string? _storageError;
 
     // ---- 批量校正 ----
     [ObservableProperty]
@@ -114,8 +119,9 @@ public partial class SessionListViewModel : ObservableObject
         // 会话创建走 AcquisitionStarting（连接打开前 await 完成），保证第一条数据到达时
         // ActiveSessionId 已就绪，消除启动丢数据窗口。
         _dataBus.AcquisitionStarting += OnAcquisitionStartingAsync;
-        _dataBus.AcquisitionStopped += OnAcquisitionStopped;
+        _dataBus.AcquisitionStopping += OnAcquisitionStoppingAsync;
         _dataBus.ReadingReceived += OnReadingReceived;
+        _dataBus.AcquisitionFaulted += OnAcquisitionFaulted;
 
         // 会话列表延迟加载：等用户首次导航到此页面时再加载
     }
@@ -137,79 +143,118 @@ public partial class SessionListViewModel : ObservableObject
     /// </summary>
     private async Task OnAcquisitionStartingAsync(SensorConfig config)
     {
-        if (_dataBus.IsPlaybackMode) return;
-        _currentSensorConfig = config;
-
-        var name = $"采集_{DateTime.Now:yyyy-MM-dd_HH:mm:ss}";
-
-        // 创建一个默认的 ConnectionConfig 用于会话记录
-        var connectionConfig = new ConnectionConfig();
-
+        await _lifecycleGate.WaitAsync();
         try
         {
-            var sessionId = await _storageService.StartSessionAsync(name, config, connectionConfig);
-
-            Application.Current?.Dispatcher.Invoke(() =>
+            if (_dataBus.IsPlaybackMode)
+                throw new InvalidOperationException("请先停止历史回放，再开始实时采集。");
+            if (ActiveSessionId != null)
+                throw new InvalidOperationException("上一个会话尚未完成保存，请先重试停止采集。");
+            _currentSensorConfig = config;
+            var name = $"采集_{DateTime.Now:yyyy-MM-dd_HH:mm:ss}";
+            var sessionId = await _storageService.StartSessionAsync(name, config, new ConnectionConfig());
+            OnUi(() =>
             {
                 ActiveSessionId = sessionId;
                 IsRecording = true;
                 ActiveSessionReadingCount = 0;
+                StorageError = null;
             });
-
+            lock (_bufferLock) _acceptingReadings = true;
             _dataBus.PublishSessionStarted(sessionId);
             await RefreshSessionsAsync();
         }
-        catch (Exception ex)
-        {
-            System.Diagnostics.Trace.TraceError($"创建会话失败: {ex.Message}");
-            // 重新抛出：让连接流程在打开端口之前中止。否则数据库不可用时仍会打开连接，
-            // 而 ActiveSessionId 为 null 导致读数被静默丢弃。
-            throw;
-        }
+        finally { _lifecycleGate.Release(); }
     }
 
-    private async void OnAcquisitionStopped()
+    private async Task OnAcquisitionStoppingAsync()
     {
-        // 先 flush 剩余缓冲数据（入队），再等待后台写入队列把已入队读数全部落库，
-        // 否则 EndSessionAsync 的 COUNT(*) 会早于落库执行，导致 total_readings 少计。
+        await _lifecycleGate.WaitAsync();
+        try
+        {
+            lock (_bufferLock) _acceptingReadings = false;
+            OnUi(() => IsRecording = false);
+            await CompleteSessionAsync();
+        }
+        catch (Exception ex)
+        {
+            OnUi(() => StorageError = ex.Message);
+            throw;
+        }
+        finally { _lifecycleGate.Release(); }
+    }
+
+    private async Task CompleteSessionAsync()
+    {
+        if (ActiveSessionId is not { } sessionId) return;
         await FlushBufferAsync();
         await _storageService.WaitForPendingWritesAsync();
-
-        var sessionId = ActiveSessionId;
-        if (sessionId != null)
-        {
-            try
-            {
-                await _storageService.EndSessionAsync(sessionId);
-                _dataBus.PublishSessionEnded(sessionId);
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Trace.TraceError($"结束会话失败: {ex.Message}");
-            }
-
-            Application.Current?.Dispatcher.Invoke(() =>
-            {
-                ActiveSessionId = null;
-                IsRecording = false;
-            });
-
-            await RefreshSessionsAsync();
-        }
-
+        await _storageService.EndSessionAsync(sessionId);
+        _dataBus.PublishSessionEnded(sessionId);
+        OnUi(() => { ActiveSessionId = null; StorageError = null; });
         _currentSensorConfig = null;
+        await RefreshSessionsAsync();
+    }
+
+    private void OnAcquisitionFaulted(Exception error)
+    {
+        string? sessionId;
+        lock (_bufferLock)
+        {
+            _acceptingReadings = false;
+            sessionId = ActiveSessionId;
+        }
+        if (sessionId == null) return;
+        void Report()
+        {
+            if (ActiveSessionId != sessionId) return;
+            IsRecording = false;
+            StorageError = $"保存失败，采集已停止: {error.Message}；未保存读数仍在内存中，修复原因后点击“重试保存”。";
+        }
+        // Never block the writer's fault notification on a busy dispatcher.
+        if (Application.Current?.Dispatcher is { } dispatcher && !dispatcher.CheckAccess())
+            dispatcher.BeginInvoke(Report);
+        else Report();
+    }
+
+    [RelayCommand]
+    private async Task RetryStorageAsync()
+    {
+        string? recoveredSessionId = null;
+        await _lifecycleGate.WaitAsync();
+        try
+        {
+            lock (_bufferLock)
+            {
+                if (_acceptingReadings) return;
+            }
+            await _storageService.RetryPendingWritesAsync();
+            var sessionId = ActiveSessionId;
+            await CompleteSessionAsync();
+            recoveredSessionId = sessionId;
+        }
+        catch (Exception ex) { OnUi(() => StorageError = ex.Message); }
+        finally { _lifecycleGate.Release(); }
+
+        if (recoveredSessionId == null) return;
+        // Connection stop takes its gate before the session gate, so never notify while holding ours.
+        try { await _dataBus.PublishAcquisitionRecoveryCompletedAsync(recoveredSessionId); }
+        catch (Exception ex) { OnUi(() => StorageError = ex.Message); }
+    }
+
+    private static void OnUi(Action action)
+    {
+        if (Application.Current?.Dispatcher is { } dispatcher && !dispatcher.CheckAccess()) dispatcher.Invoke(action);
+        else action();
     }
 
     private void OnReadingReceived(MagnetometerReading reading)
     {
-        if (ActiveSessionId == null || _dataBus.IsPlaybackMode) return;
-
-        // 设置会话 ID
-        reading.SessionId = ActiveSessionId;
-        ActiveSessionReadingCount++;
-
         lock (_bufferLock)
         {
+            if (!_acceptingReadings || ActiveSessionId == null || _dataBus.IsPlaybackMode) return;
+            reading.SessionId = ActiveSessionId;
+            ActiveSessionReadingCount++;
             _readingBuffer.Add(reading);
 
             if (_readingBuffer.Count >= FlushBatchSize ||

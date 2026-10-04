@@ -39,10 +39,10 @@
                     Command="{Binding AddGroupCommand}"/>
             <Button Grid.Column="3" Content="改名" Padding="8,4" Margin="3,0,0,0"
                     Command="{Binding RenameGroupCommand}"
-                    IsEnabled="{Binding SelectedGroup, Converter={StaticResource B2V}}"/>
+                    IsEnabled="{Binding CanEditSelectedGroup}"/>
             <Button Grid.Column="4" Content="删组" Padding="8,4" Margin="3,0,12,0"
                     Command="{Binding DeleteGroupCommand}"
-                    IsEnabled="{Binding SelectedGroup, Converter={StaticResource B2V}}"/>
+                    IsEnabled="{Binding CanEditSelectedGroup}"/>
             <Button Grid.Column="5" Content="导入Catalog" Padding="8,4" Margin="0,0,4,0"
                     Command="{Binding ImportCatalogCommand}"/>
             <Button Grid.Column="6" Content="导出Catalog" Padding="8,4" HorizontalAlignment="Left"
@@ -78,13 +78,19 @@
                 <DockPanel>
                     <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,4,0,0">
                         <Button Content="+新建" Padding="8,3"
-                                Command="{Binding AddCommandCommand}"/>
+                                Command="{Binding AddCommandCommand}"
+                                IsEnabled="{Binding CanEditSelectedGroup}"/>
                         <Button Content="编辑" Padding="8,3" Margin="4,0,0,0"
                                 Command="{Binding EditCommandCommand}"
+                                IsEnabled="{Binding CanEditSelectedGroup}"
                                 CommandParameter="{Binding SelectedCommand}"/>
                         <Button Content="删除" Padding="8,3" Margin="4,0,0,0"
                                 Command="{Binding DeleteCommandCommand}"
+                                IsEnabled="{Binding CanEditSelectedGroup}"
                                 CommandParameter="{Binding SelectedCommand}"/>
+                        <TextBlock Text="内置组只读" VerticalAlignment="Center" Margin="8,0,0,0"
+                                   Foreground="Gray" FontSize="11"
+                                   Visibility="{Binding SelectedGroupIsBuiltIn, Converter={StaticResource B2V}}"/>
                     </StackPanel>
                     <ListBox ItemsSource="{Binding CurrentCommands}"
                              SelectedItem="{Binding SelectedCommand}">
@@ -146,7 +152,12 @@
                                                 <Run Text=":"/>
                                             </TextBlock>
                                             <TextBox Grid.Column="1" Padding="4"
+                                                     Visibility="{Binding IsFreeText, Converter={StaticResource B2V}}"
                                                      Text="{Binding Value, UpdateSourceTrigger=PropertyChanged}"/>
+                                            <ComboBox Grid.Column="1" Padding="4"
+                                                      Visibility="{Binding IsChoice, Converter={StaticResource B2V}}"
+                                                      ItemsSource="{Binding Choices}"
+                                                      SelectedItem="{Binding Value}"/>
                                             <TextBlock Grid.Column="2" Margin="6,0,0,0"
                                                        VerticalAlignment="Center" Foreground="Gray"
                                                        Text="{Binding Definition.Unit, Mode=OneWay}"/>

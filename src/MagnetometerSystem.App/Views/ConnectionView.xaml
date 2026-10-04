@@ -237,12 +237,20 @@
                     </WrapPanel>
 
                     <!-- 帧段列表 -->
+                    <TextBlock Text="{Binding ProtocolConfig.Notes}" TextWrapping="Wrap" Foreground="#8A4B00" Margin="0,0,0,6"/>
                     <ListView ItemsSource="{Binding ProtocolSegments}" MaxHeight="280"
                               ScrollViewer.VerticalScrollBarVisibility="Auto"
                               ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                               BorderThickness="1" BorderBrush="#CCC">
                         <ListView.View>
                             <GridView>
+                                <GridViewColumn Header="单位" Width="70">
+                                    <GridViewColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <TextBox Text="{Binding Unit, UpdateSourceTrigger=LostFocus}" Width="58" FontSize="11"/>
+                                        </DataTemplate>
+                                    </GridViewColumn.CellTemplate>
+                                </GridViewColumn>
                                 <GridViewColumn Header="类型" Width="65">
                                     <GridViewColumn.CellTemplate>
                                         <DataTemplate>
@@ -318,7 +326,7 @@
                                         </DataTemplate>
                                     </GridViewColumn.CellTemplate>
                                 </GridViewColumn>
-                                <GridViewColumn Header="详情" Width="280">
+                                <GridViewColumn Header="详情" Width="340">
                                     <GridViewColumn.CellTemplate>
                                         <DataTemplate>
                                             <StackPanel Orientation="Horizontal">
@@ -343,6 +351,22 @@
                                                         </Style>
                                                     </TextBox.Style>
                                                 </TextBox>
+
+                                                <!-- Padding: 固定值是否参与帧同步校验 -->
+                                                <CheckBox Content="校验" IsChecked="{Binding ValidateFixedValue}"
+                                                          VerticalAlignment="Center" FontSize="11" Margin="0,0,5,0"
+                                                          ToolTip="勾选后该段固定值参与帧同步判定。适用于信息ID、固定长度字段等恒定值，可降低载荷内偶现帧头造成的误锁帧">
+                                                    <CheckBox.Style>
+                                                        <Style TargetType="CheckBox">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding Type}" Value="{x:Static models:SegmentType.Padding}">
+                                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </CheckBox.Style>
+                                                </CheckBox>
 
                                                 <!-- DataField: 数据类型 + 大端序 + 通道 + 缩放 + 偏移 -->
                                                 <StackPanel Orientation="Horizontal">
@@ -415,6 +439,22 @@
                                                         </Style>
                                                     </ComboBox.Style>
                                                 </ComboBox>
+
+                                                <StackPanel Orientation="Horizontal" Margin="4,0,0,0">
+                                                    <StackPanel.Style>
+                                                        <Style TargetType="StackPanel">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding Type}" Value="{x:Static models:SegmentType.Checksum}">
+                                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </StackPanel.Style>
+                                                    <TextBlock Text="起始段" VerticalAlignment="Center" FontSize="11"/>
+                                                    <TextBox Text="{Binding ChecksumStartIndex, UpdateSourceTrigger=LostFocus}" Width="30" FontSize="11"
+                                                             ToolTip="校验计算起始段的索引，从 0 开始；范围至校验段之前。须按固件协议确认。"/>
+                                                </StackPanel>
 
                                                 <!-- Checksum: CRC16 校验值字节序（仅 CRC16 算法时显示） -->
                                                 <CheckBox Content="大端" VerticalAlignment="Center" FontSize="11"
@@ -489,6 +529,7 @@
                                   FontSize="12">
                             <DataGrid.Columns>
                                 <DataGridTextColumn Header="名称" Binding="{Binding Name}" Width="60"/>
+                                <DataGridTextColumn Header="单位" Binding="{Binding Unit}" Width="60"/>
                                 <DataGridTextColumn Header="通道" Binding="{Binding ChannelIndex}" Width="50"/>
                                 <DataGridTextColumn Header="偏移" Binding="{Binding ByteOffset}" Width="50"/>
                                 <DataGridComboBoxColumn Header="数据类型" Width="80"
@@ -514,7 +555,7 @@
                     <Style TargetType="Button">
                         <Setter Property="Content" Value="开始"/>
                         <Style.Triggers>
-                            <DataTrigger Binding="{Binding IsConnected}" Value="True">
+                            <DataTrigger Binding="{Binding IsAcquiring}" Value="True">
                                 <Setter Property="Content" Value="停止"/>
                             </DataTrigger>
                         </Style.Triggers>

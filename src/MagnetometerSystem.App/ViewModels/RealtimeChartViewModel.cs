@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Globalization;
 using System.Text;
 using System.Windows;
 using System.Windows.Threading;
@@ -35,10 +36,20 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
     private readonly CircularBuffer<double> _timeBuffer = new(100000);
     private CircularBuffer<double>[] _channelBuffers;
     private readonly object _dataLock = new();
-    private const int MaxChannels = 16;
+
+    /// <summary>
+    /// 通道缓冲上限。仅作为异常配置的兜底防线（每通道缓冲 100000×8B≈800KB，
+    /// 无节制分配会吃掉大量内存），实际缓冲按协议通道数惰性增长，不预分配到上限。
+    /// </summary>
+    private const int MaxChannels = 64;
+
+    /// <summary>每通道环形缓冲的容量（点数）</summary>
+    private const int ChannelBufferCapacity = 100000;
 
     private int _channelCount;
     private string[] _channelNames = [];
+    private string[] _channelUnits = [];
+    private readonly Dictionary<string, ScottPlot.IYAxis> _unitAxes = new();
     private DateTime _startTime;
     private bool _isAcquiring;
     private bool _disposed;
@@ -73,6 +84,9 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
 
     [ObservableProperty]
     private string _statisticsText = "";
+
+    [ObservableProperty]
+    private string _computationError = "";
 
     [ObservableProperty]
     private long _dataPointCount;
@@ -204,10 +218,9 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
         _dataBus = dataBus;
         _preferencesService = preferencesService;
 
-        // 预创建通道缓冲
-        _channelBuffers = new CircularBuffer<double>[MaxChannels];
-        for (int i = 0; i < MaxChannels; i++)
-            _channelBuffers[i] = new CircularBuffer<double>(100000);
+        // 通道缓冲按实际协议通道数惰性分配（见 EnsureChannelBuffers），
+        // 这里先建一个最小实例，避免其余代码面对 null。
+        _channelBuffers = [];
 
         _dataBus.ReadingReceived += OnReadingReceived;
         _dataBus.AcquisitionStarted += OnAcquisitionStarted;
@@ -226,10 +239,30 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
             _renderTimer.Interval = TimeSpan.FromMilliseconds(1000.0 / value);
     }
 
+    /// <summary>
+    /// 确保通道缓冲至少覆盖 <paramref name="required"/> 个通道。
+    /// 已有缓冲原样保留（避免丢掉正在显示的数据），只补齐缺少的部分。
+    /// 调用方需持有 _dataLock。
+    /// </summary>
+    private void EnsureChannelBuffers(int required)
+    {
+        if (required <= _channelBuffers.Length)
+            return;
+
+        var grown = new CircularBuffer<double>[required];
+        Array.Copy(_channelBuffers, grown, _channelBuffers.Length);
+        for (int i = _channelBuffers.Length; i < required; i++)
+            grown[i] = new CircularBuffer<double>(ChannelBufferCapacity);
+        _channelBuffers = grown;
+    }
+
     private void OnAcquisitionStarted(SensorConfig config)
     {
         int channelCount = Math.Min(config.ChannelCount, MaxChannels);
         string[] channelNames = config.ChannelNames;
+        string[] configUnits = config.ChannelUnits;
+        bool unitsChanged = !_channelUnits.SequenceEqual(configUnits);
+        _channelUnits = configUnits.ToArray();
         _startTime = DateTime.Now;
         _isAcquiring = true;
 
@@ -237,6 +270,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
         {
             _channelCount = channelCount;
             _channelNames = channelNames;
+            EnsureChannelBuffers(channelCount);
             _timeBuffer.Clear();
             for (int i = 0; i < _channelBuffers.Length; i++)
                 _channelBuffers[i].Clear();
@@ -248,7 +282,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
             IsPaused = false;
 
             // 初始化通道显示配置：仅当通道数量或名称发生变化时才重建，否则保留现有 Visible 等用户配置
-            bool channelLayoutChanged =
+            bool channelLayoutChanged = unitsChanged ||
                 ChannelConfigs.Count != _channelCount ||
                 !Enumerable.Range(0, _channelCount).All(i =>
                     i < ChannelConfigs.Count &&
@@ -271,6 +305,9 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
                 // 通道布局未变，仅清空公式缓存以便下一 session 重新求值
                 _formulaCache.Clear();
             }
+
+            foreach (var channelConfig in ChannelConfigs)
+                channelConfig.Unit = channelConfig.ChannelIndex < configUnits.Length ? configUnits[channelConfig.ChannelIndex] : "nT";
 
             // 关闭向导面板
             IsAddingTotalField = false;
@@ -301,6 +338,19 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
 
         lock (_dataLock)
         {
+            // 正常路径下缓冲已由 OnAcquisitionStarted 按协议通道数备好。
+            // 这里兜住"读数先于采集开始事件到达"或"实际通道数多于配置"的情况：
+            // 补齐缓冲，并把新缓冲填到与时间轴等长，避免通道间错位。
+            int needed = Math.Min(reading.ChannelValues.Length, MaxChannels);
+            if (needed > _channelBuffers.Length)
+            {
+                int previous = _channelBuffers.Length;
+                EnsureChannelBuffers(needed);
+                for (int i = previous; i < needed; i++)
+                    for (int pad = 0; pad < _timeBuffer.Count; pad++)
+                        _channelBuffers[i].Add(double.NaN);
+            }
+
             _timeBuffer.Add(elapsed);
             for (int i = 0; i < Math.Min(reading.ChannelValues.Length, _channelBuffers.Length); i++)
             {
@@ -367,10 +417,12 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
         var plot = PlotControl.Plot;
         plot.Clear();
 
+        ConfigureUnitAxes(plot);
+
         // 绘制各通道
         for (int ch = 0; ch < _channelCount; ch++)
         {
-            var config = ch < ChannelConfigs.Count ? ChannelConfigs[ch] : null;
+            var config = ChannelConfigs.FirstOrDefault(c => c.ChannelIndex == ch);
             if (config != null && !config.Visible)
                 continue;
 
@@ -398,14 +450,36 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
             }
 
             sig.LineWidth = 1.5f;
-            sig.LegendText = config?.Name ?? (ch < _channelNames.Length ? _channelNames[ch] : $"CH{ch}");
+            sig.LegendText = (config?.Name ?? (ch < _channelNames.Length ? _channelNames[ch] : $"CH{ch}")) + $" ({config?.Unit})";
+            if (config is not null && _unitAxes.TryGetValue(config.Unit, out var axis)) sig.Axes.YAxis = axis;
         }
 
         // 绘制计算通道
         RenderComputedChannels(plot, windowTimes, channelData, startIdx, count);
 
         ConfigurePlotAxes(plot, xMin, xMax);
+        // The parameterless AutoScaleY above affects only the left axis.
+        foreach (var axis in _unitAxes.Values.Where(a => !ReferenceEquals(a, plot.Axes.Left)))
+            plot.Axes.AutoScaleY(axis);
+        plot.ShowLegend();
         PlotControl.Refresh();
+    }
+
+    private void ConfigureUnitAxes(ScottPlot.Plot plot)
+    {
+        foreach (var old in _unitAxes.Values.Where(a => !ReferenceEquals(a, plot.Axes.Left)))
+            plot.Axes.Remove(old);
+        _unitAxes.Clear();
+        var units = ChannelConfigs.Where(c => c.Visible).Select(c => c.Unit)
+            .Concat(ComputedChannels.Where(c => c.Enabled).Select(c => c.Unit))
+            .Distinct().OrderBy(u => u is "°C" or "℃" ? 1 : 0).ToArray();
+        plot.Axes.Left.Label.Text = units.FirstOrDefault() ?? "数值";
+        foreach (var unit in units)
+        {
+            ScottPlot.IYAxis axis = _unitAxes.Count == 0 ? plot.Axes.Left : plot.Axes.AddRightAxis();
+            axis.Label.Text = unit;
+            _unitAxes.Add(unit, axis);
+        }
     }
 
     private void RenderMultiPlot(double[] windowTimes, double[][] channelData,
@@ -454,7 +528,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
                 ann.LabelBorderWidth = 1;
             }
 
-            plot.Axes.Left.Label.Text = config.Name;
+            plot.Axes.Left.Label.Text = $"{config.Name} ({config.Unit})";
             ConfigurePlotAxes(plot, xMin, xMax);
             plotCtrl.Refresh();
             plotIdx++;
@@ -510,7 +584,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
             compAnn.LabelBorderColor = new ScottPlot.Color(200, 200, 200, 255);
             compAnn.LabelBorderWidth = 1;
 
-            plot.Axes.Left.Label.Text = computed.Name;
+            plot.Axes.Left.Label.Text = $"{computed.Name} ({computed.Unit})";
             ConfigurePlotAxes(plot, xMin, xMax);
             plotCtrl.Refresh();
             plotIdx++;
@@ -555,7 +629,8 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
             var (ca, cr, cg, cb) = new ChannelDisplayConfig { ColorHex = computed.ColorHex }.ParseColor();
             compSig.Color = new ScottPlot.Color(cr, cg, cb, ca);
             compSig.LineWidth = computed.LineWidth;
-            compSig.LegendText = computed.Name;
+            compSig.LegendText = $"{computed.Name} ({computed.Unit})";
+            if (_unitAxes.TryGetValue(computed.Unit, out var axis)) compSig.Axes.YAxis = axis;
         }
     }
 
@@ -657,7 +732,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
         var plot = PlotControl.Plot;
         plot.Clear();
         plot.Axes.Bottom.Label.Text = "时间 (s)";
-        plot.Axes.Left.Label.Text = "磁场 (nT)";
+        plot.Axes.Left.Label.Text = "数值";
         PlotControl.Refresh();
     }
 
@@ -728,11 +803,12 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private void AddComputedChannel()
     {
-        string defaultFormula = _channelNames.Length > 0 ? _channelNames[0] : "CH0";
+        string defaultFormula = "CH0";
         ComputedChannels.Add(new ComputedChannelDefinition
         {
             Name = $"Calc{ComputedChannels.Count}",
             Formula = defaultFormula,
+            Unit = _channelUnits.FirstOrDefault() ?? "",
             ChannelType = ComputedChannelType.Custom,
             ColorHex = "#FF000000",
         });
@@ -755,6 +831,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private void StartAddTotalField()
     {
+        ComputationError = "";
         BuildWizardRawSources();
         WizardSourceA = 0;
         WizardSourceB = Math.Min(1, WizardRawSources.Count - 1);
@@ -766,6 +843,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private void ConfirmAddTotalField()
     {
+        ComputationError = "";
         if (WizardSourceA < 0 || WizardSourceA >= WizardRawSources.Count
             || WizardSourceB < 0 || WizardSourceB >= WizardRawSources.Count
             || WizardSourceC < 0 || WizardSourceC >= WizardRawSources.Count)
@@ -774,6 +852,9 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
             return;
         }
 
+        var sources = new[] { WizardRawSources[WizardSourceA], WizardRawSources[WizardSourceB], WizardRawSources[WizardSourceC] };
+        if (sources.Select(s => s.FormulaExpr).Distinct().Count() != 3 || !HaveSameMagneticUnit(sources))
+        { ComputationError = "总场需要三个不同通道，且使用相同的磁场单位。"; return; }
         var a = WizardRawSources[WizardSourceA].FormulaExpr;
         var b = WizardRawSources[WizardSourceB].FormulaExpr;
         var c = WizardRawSources[WizardSourceC].FormulaExpr;
@@ -783,6 +864,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
         ComputedChannels.Add(new ComputedChannelDefinition
         {
             Name = $"Total{totalCount}",
+            Unit = sources[0].Unit,
             Formula = formula,
             ChannelType = ComputedChannelType.TotalField,
             ColorHex = "#FF000000",
@@ -797,6 +879,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private void StartAddGradient()
     {
+        ComputationError = "";
         BuildWizardGradientSources();
         WizardSourceA = 0;
         WizardSourceB = Math.Min(1, WizardGradientSources.Count - 1);
@@ -807,6 +890,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private void ConfirmAddGradient()
     {
+        ComputationError = "";
         if (WizardSourceA < 0 || WizardSourceA >= WizardGradientSources.Count
             || WizardSourceB < 0 || WizardSourceB >= WizardGradientSources.Count)
         {
@@ -814,16 +898,22 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
             return;
         }
 
+        var sources = new[] { WizardGradientSources[WizardSourceA], WizardGradientSources[WizardSourceB] };
+        if (sources[0].FormulaExpr == sources[1].FormulaExpr || !HaveSameMagneticUnit(sources))
+        { ComputationError = "磁场梯度需要两个不同来源，且使用相同的磁场单位。"; return; }
         var a = WizardGradientSources[WizardSourceA].FormulaExpr;
         var b = WizardGradientSources[WizardSourceB].FormulaExpr;
-        var formula = GradientBaselineDistance != 0 && GradientBaselineDistance != 1.0
-            ? $"(({a}) - ({b})) / {GradientBaselineDistance:R}"
+        if (!double.IsFinite(GradientBaselineDistance) || GradientBaselineDistance <= 0)
+        { ComputationError = "梯度基线距离必须为有限正数。"; return; }
+        var formula = GradientBaselineDistance != 1.0
+            ? $"(({a}) - ({b})) / {GradientBaselineDistance.ToString("R", CultureInfo.InvariantCulture)}"
             : $"({a}) - ({b})";
 
         int gradCount = ComputedChannels.Count(ch => ch.ChannelType == ComputedChannelType.Gradient) + 1;
         ComputedChannels.Add(new ComputedChannelDefinition
         {
             Name = $"Grad{gradCount}",
+            Unit = sources[0].Unit + "/m",
             Formula = formula,
             ChannelType = ComputedChannelType.Gradient,
             ColorHex = "#FF808080",
@@ -835,9 +925,14 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private void CancelAddWizard()
     {
+        ComputationError = "";
         IsAddingTotalField = false;
         IsAddingGradient = false;
     }
+
+    private static bool HaveSameMagneticUnit(SourceOption[] sources) =>
+        sources.Select(s => s.Unit).Distinct().Count() == 1
+        && sources[0].Unit is "nT" or "uT" or "µT" or "μT" or "mT" or "T";
 
     /// <summary>
     /// 构建向导可选的原始通道列表
@@ -848,7 +943,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
         for (int i = 0; i < _channelCount; i++)
         {
             var label = i < _channelNames.Length ? _channelNames[i] : $"CH{i}";
-            WizardRawSources.Add(new SourceOption { Label = label, FormulaExpr = $"CH{i}" });
+            WizardRawSources.Add(new SourceOption { Label = label, FormulaExpr = $"CH{i}", Unit = _channelUnits.ElementAtOrDefault(i) ?? "" });
         }
     }
 
@@ -863,7 +958,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
         for (int i = 0; i < _channelCount; i++)
         {
             var label = i < _channelNames.Length ? _channelNames[i] : $"CH{i}";
-            WizardGradientSources.Add(new SourceOption { Label = label, FormulaExpr = $"CH{i}" });
+            WizardGradientSources.Add(new SourceOption { Label = label, FormulaExpr = $"CH{i}", Unit = _channelUnits.ElementAtOrDefault(i) ?? "" });
         }
 
         // 已有计算通道（内联其公式）
@@ -875,6 +970,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
                 {
                     Label = comp.Name,
                     FormulaExpr = comp.Formula,
+                    Unit = comp.Unit,
                 });
             }
         }

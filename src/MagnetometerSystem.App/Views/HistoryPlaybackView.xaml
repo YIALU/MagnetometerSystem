@@ -27,6 +27,8 @@
             </StackPanel>
         </StackPanel>
 
+        <TextBlock DockPanel.Dock="Top" Text="{Binding StatusMessage}" TextWrapping="Wrap" Foreground="DarkOrange" Margin="0,0,0,8"/>
+
         <!-- 会话信息区 -->
         <Border DockPanel.Dock="Top" Background="#F5F5F5" Padding="10,6" Margin="0,0,0,10" CornerRadius="3">
             <Border.Style>
@@ -45,7 +47,7 @@
                     <Run Text="{Binding SelectedSession.SensorType, Mode=OneWay}"/>
                 </TextBlock>
                 <TextBlock Margin="0,0,20,0">
-                    <Run Text="采样率: " FontWeight="SemiBold"/>
+                    <Run Text="标称采样率: " FontWeight="SemiBold"/>
                     <Run Text="{Binding SelectedSession.SampleRate, Mode=OneWay, StringFormat={}{0} Hz}"/>
                 </TextBlock>
                 <TextBlock Margin="0,0,20,0">

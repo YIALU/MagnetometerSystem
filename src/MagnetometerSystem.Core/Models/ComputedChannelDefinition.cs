@@ -24,6 +24,7 @@ public class SourceOption
 {
     public string Label { get; set; } = "";
     public string FormulaExpr { get; set; } = "";
+    public string Unit { get; set; } = "";
     public override string ToString() => Label;
 }
 
@@ -37,6 +38,19 @@ public class ComputedChannelDefinition : INotifyPropertyChanged
 
     /// <summary>显示名称</summary>
     public string Name { get; set; } = "Computed";
+
+    private string _unit = "";
+    public string Unit
+    {
+        get => _unit;
+        set
+        {
+            value = value?.Trim() ?? "";
+            if (_unit == value) return;
+            _unit = value;
+            Notify(nameof(Unit));
+        }
+    }
 
     /// <summary>计算通道类型（仅作为元数据记录）</summary>
     public ComputedChannelType ChannelType { get; set; } = ComputedChannelType.Custom;
