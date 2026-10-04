@@ -16,8 +16,10 @@ namespace MagnetometerSystem.App.Tests;
 
 public class ProtocolFlowTests
 {
-    [Fact]
-    public Task ConnectionVm_RealTcpAndSessionVmSaveFirstLowRateAndFinalReadings() => WpfTestHost.RunAsync(async () =>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public Task ConnectionVm_RealTcpAndSessionVmSaveFirstLowRateAndFinalReadings(bool invalidCorrection) => WpfTestHost.RunAsync(async () =>
     {
         string path = Path.Combine(Path.GetTempPath(), $"magnetometer_vm_{Guid.NewGuid():N}.db");
         var database = new DatabaseInitializer(path);
@@ -27,12 +29,16 @@ public class ProtocolFlowTests
         var corrector = new OrthogonalityCorrector();
         var profiles = new SqliteCalibrationRepository(database);
         var sessions = new SessionListViewModel(storage, new CsvExporter(storage), bus, corrector, profiles);
+        using var chart = new RealtimeChartViewModel(bus);
+        var displayReadings = new System.Collections.Concurrent.ConcurrentQueue<MagnetometerReading>();
+        bus.ProcessedReadingReceived += displayReadings.Enqueue;
         var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
         var vm = new ConnectionViewModel(new ConnectionFactory(), bus, corrector, profiles)
         {
             SelectedConnectionType = ConnectionType.Tcp, IpAddress = "127.0.0.1",
             Port = ((IPEndPoint)listener.LocalEndpoint).Port, SampleRate = 1000000,
+            IsOrthogonalityCorrectionEnabled = invalidCorrection,
             ProtocolConfig = new ProtocolConfig
             {
                 FieldMappings = Enumerable.Range(0, 21).Select(i => new FieldMapping
@@ -69,6 +75,13 @@ public class ProtocolFlowTests
             Assert.Equal(Enumerable.Range(0, 21).Select(i => (double)i), saved[0].ChannelValues);
             Assert.Equal(Enumerable.Range(2, 21).Select(i => (double)i), saved[2].ChannelValues);
             Assert.All(saved, reading => Assert.False(reading.IsOrthogonalityCorrected));
+            await WpfTestHost.PumpAsync();
+            chart.RefreshPlot();
+            Assert.Equal(3, chart.DataPointCount);
+            Assert.Equal(3, displayReadings.Count);
+            Assert.Equal(saved[2].ChannelValues, displayReadings.Last().ChannelValues);
+            Assert.All(displayReadings, reading => Assert.False(reading.IsOrthogonalityCorrected));
+            if (invalidCorrection) Assert.Contains("改正未应用", vm.LastError);
             Assert.Null(sessions.ActiveSessionId);
             Assert.Equal(0, storage.WriteStatus.PendingReadings);
         }

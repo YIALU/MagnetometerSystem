@@ -23,6 +23,9 @@ public class ConfigurableBinaryParser : IDataParser, IParserDiagnostics
     private readonly FrameSegment? _lengthSegment;
     private readonly FrameSegment? _checksumSegment;
     private readonly int _segmentFrameLength;
+    private readonly int _payloadStart;
+    private readonly int _payloadEnd;
+    private readonly int _requiredPayloadLength;
 
     /// <summary>启用了 ValidateFixedValue 的 Padding 段：(帧内偏移, 期望字节)</summary>
     private readonly List<(int Offset, byte[] Expected)> _constantChecks = [];
@@ -50,6 +53,19 @@ public class ConfigurableBinaryParser : IDataParser, IParserDiagnostics
             _checksumSegment = config.Segments.FirstOrDefault(s => s.Type == SegmentType.Checksum);
             _dataSegments = config.Segments.Where(s => s.Type == SegmentType.DataField).ToList();
             _segmentFrameLength = config.TotalFrameLength;
+            if (_lengthSegment != null)
+            {
+                // LengthField counts every payload byte, including Padding. Mapped fields
+                // describe a stable prefix; checksum/tail follow the actual payload length.
+                _payloadStart = _lengthSegment.ComputedOffset + _lengthSegment.ByteCount;
+                _payloadEnd = config.Segments
+                    .Where(s => s.ComputedOffset >= _payloadStart && s.Type is SegmentType.Checksum or SegmentType.Tail)
+                    .Select(s => s.ComputedOffset).DefaultIfEmpty(_segmentFrameLength).Min();
+                _requiredPayloadLength = config.Segments
+                    .Where(s => s.ComputedOffset >= _payloadStart && s.ComputedOffset < _payloadEnd
+                        && (s.Type == SegmentType.DataField || s.ValidateFixedValue))
+                    .Select(s => s.ComputedOffset + s.ByteCount - _payloadStart).DefaultIfEmpty(0).Max();
+            }
 
             // 收集需要参与校验的固定值段（信息 ID、固定长度字段等）
             foreach (var seg in config.Segments)
@@ -112,7 +128,6 @@ public class ConfigurableBinaryParser : IDataParser, IParserDiagnostics
         if (_lengthSegment != null)
         {
             // 有长度字段：需要先读出长度值来确定帧长
-            int headerLen = _headerBytes.Length;
             int lengthPos = _lengthSegment.ComputedOffset;
 
             if (_ringBuffer.Count < lengthPos + _lengthSegment.ByteCount)
@@ -140,10 +155,9 @@ public class ConfigurableBinaryParser : IDataParser, IParserDiagnostics
                     : b0 | (b1 << 8);
             }
 
-            // 计算非数据区部分的长度
-            int nonDataLen = _segmentFrameLength - _dataSegments.Sum(s => s.ByteCount);
+            int nonDataLen = _segmentFrameLength - (_payloadEnd - _payloadStart);
             frameLen = nonDataLen + dataLen;
-            if (frameLen != _segmentFrameLength)
+            if (dataLen < _requiredPayloadLength || frameLen <= 0 || frameLen > _ringBuffer.Capacity)
             {
                 _ringBuffer.Skip(1);
                 return false;
@@ -182,10 +196,14 @@ public class ConfigurableBinaryParser : IDataParser, IParserDiagnostics
         }
 
         // 验证固定值段（信息 ID 等）：载荷里偶然出现帧头时，这些锚点能挡掉误锁
-        foreach (var (offset, expected) in _constantChecks)
+        foreach (var (configuredOffset, expected) in _constantChecks)
         {
-            if (offset + expected.Length > frameLen)
-                continue;
+            int offset = GetSegmentOffset(configuredOffset, frameLen);
+            if (offset < 0 || offset + expected.Length > frameLen)
+            {
+                _ringBuffer.Skip(1);
+                return false;
+            }
             for (int i = 0; i < expected.Length; i++)
             {
                 if (_ringBuffer.Peek(offset + i) != expected[i])
@@ -199,13 +217,19 @@ public class ConfigurableBinaryParser : IDataParser, IParserDiagnostics
         // 验证校验
         if (_checksumSegment != null)
         {
-            int checksumPos = _checksumSegment.ComputedOffset;
+            int checksumPos = GetSegmentOffset(_checksumSegment.ComputedOffset, frameLen);
 
             // 计算校验起始位置
             int checksumStart = 0;
             if (_checksumSegment.ChecksumStartIndex > 0 && _checksumSegment.ChecksumStartIndex < _config.Segments.Count)
             {
-                checksumStart = _config.Segments[_checksumSegment.ChecksumStartIndex].ComputedOffset;
+                checksumStart = GetSegmentOffset(_config.Segments[_checksumSegment.ChecksumStartIndex].ComputedOffset, frameLen);
+            }
+            if (checksumStart < 0 || checksumStart > checksumPos
+                || checksumPos + _checksumSegment.ByteCount > frameLen)
+            {
+                _ringBuffer.Skip(1);
+                return false;
             }
 
             if (_checksumSegment.ChecksumAlgorithm == ChecksumAlgorithm.CRC16)
@@ -259,7 +283,7 @@ public class ConfigurableBinaryParser : IDataParser, IParserDiagnostics
 
         foreach (var seg in _dataSegments)
         {
-            int fieldStart = seg.ComputedOffset;
+            int fieldStart = GetSegmentOffset(seg.ComputedOffset, frameLen);
             if (fieldStart + seg.ByteCount > frame.Length)
                 continue;
 
@@ -279,6 +303,11 @@ public class ConfigurableBinaryParser : IDataParser, IParserDiagnostics
 
         return true;
     }
+
+    private int GetSegmentOffset(int configuredOffset, int frameLength) =>
+        _lengthSegment != null && configuredOffset >= _payloadEnd
+            ? configuredOffset + frameLength - _segmentFrameLength
+            : configuredOffset;
 
     private double ReadSegmentValue(byte[] frame, int offset, FrameSegment seg)
     {

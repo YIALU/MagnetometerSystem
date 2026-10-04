@@ -336,6 +336,7 @@ public partial class ConnectionViewModel : ObservableObject
                     _parsedCount++;
                     // 原始值先进入独立总线；任何可选改正失败均不能中断保存。
                     _dataBus.PublishReading(raw);
+                    var display = raw.DeepClone();
                     if (IsOrthogonalityCorrectionEnabled)
                     {
                         try
@@ -347,12 +348,13 @@ public partial class ConnectionViewModel : ObservableObject
                                 : ParseChannelSelection(SecondOrthogonalityChannelsText, raw.ChannelValues.Length);
                             ValidateCorrectionUnits(first);
                             if (second != null) ValidateCorrectionUnits(second);
-                            var corrected = _orthogonalityCorrector.ApplyToReading(
+                            display = _orthogonalityCorrector.ApplyToReading(
                                 ActiveOrthogonalityProfile, SecondOrthogonalityProfile, raw.DeepClone(), first, second);
-                            _dataBus.PublishProcessedReading(corrected);
                         }
                         catch (Exception ex) { ReportError("改正未应用，原始数据已保留: " + ex.Message); }
                     }
+                    // 默认采集和改正失败也必须绘图；显示只收到与原始流独立的快照。
+                    _dataBus.PublishProcessedReading(display);
                 }
                 if (_parser is IParserDiagnostics diagnostics)
                 {
