@@ -52,13 +52,15 @@ public class CsvExporter(IDataStorageService storageService) : IDataExporter
                     ct.ThrowIfCancellationRequested();
                     corrections.TryGetValue(readings[i].Id, out var corrected);
                     await writer.WriteLineAsync(BuildLine(readings[i], corrected, indices, options).AsMemory(), ct);
-                    if ((i + 1) % 1000 == 0) progress?.Report((double)(i + 1) / readings.Count);
+                    if ((i + 1) % 1000 == 0 && i + 1 < readings.Count)
+                        progress?.Report((double)(i + 1) / readings.Count);
                 }
                 await writer.FlushAsync(ct);
             }
             ct.ThrowIfCancellationRequested();
-            File.Move(tempPath, fullPath, overwrite: true);
             progress?.Report(1);
+            ct.ThrowIfCancellationRequested();
+            File.Move(tempPath, fullPath, overwrite: true);
         }
         finally
         {
