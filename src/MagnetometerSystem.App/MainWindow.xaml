@@ -8,7 +8,7 @@
         xmlns:vm="clr-namespace:MagnetometerSystem.App.ViewModels"
         xmlns:converters="clr-namespace:MagnetometerSystem.App.Converters"
         mc:Ignorable="d"
-        Title="磁力仪数据采集与分析系统" Height="750" Width="1200"
+        Title="磁力仪数据采集与分析系统" Height="900" Width="1440" MinWidth="1000" MinHeight="650"
         WindowStartupLocation="CenterScreen">
     <Window.Resources>
         <converters:InverseBoolToVisibilityConverter x:Key="InverseBoolToVisibilityConverter"/>
@@ -38,8 +38,8 @@
             <Separator/>
             <StatusBarItem>
                 <TextBlock>
-                    <Run Text="传感器: "/>
-                    <Run Text="{Binding SensorInfo, Mode=OneWay}"/>
+                    <Run Text="协议: "/>
+                    <Run Text="{Binding ProtocolInfo, Mode=OneWay}"/>
                 </TextBlock>
             </StatusBarItem>
             <Separator/>
@@ -128,16 +128,17 @@
                     </StackPanel>
                 </Border>
 
-                <Button Content="设备连接" Margin="3" Padding="8,6" HorizontalContentAlignment="Left"
-                        Command="{Binding NavigateToConnectionCommand}"/>
-                <Button Content="实时采集" Margin="3" Padding="8,6" HorizontalContentAlignment="Left"
+                <Button Content="采集工作台" Margin="3" Padding="8,6" HorizontalContentAlignment="Left"
                         Command="{Binding NavigateToRealtimeChartCommand}"/>
+                <Button Content="连接与协议" Margin="3" Padding="8,6" HorizontalContentAlignment="Left"
+                        Command="{Binding NavigateToConnectionCommand}"/>
                 <Button Content="设备命令" Margin="3" Padding="8,6" HorizontalContentAlignment="Left"
                         Command="{Binding NavigateToDeviceCommandCommand}"/>
                 <Button Content="数据管理" Margin="3" Padding="8,6" HorizontalContentAlignment="Left"
                         Command="{Binding NavigateToSessionListCommand}"/>
                 <Button Content="历史回放" Margin="3" Padding="8,6" HorizontalContentAlignment="Left"
                         Command="{Binding NavigateToHistoryPlaybackCommand}"/>
+                <TextBlock Text="扩展功能 · 按需使用" Margin="10,20,3,6" Foreground="#617086" FontSize="11"/>
                 <Button Content="正交度校正" Margin="3" Padding="8,6" HorizontalContentAlignment="Left"
                         Command="{Binding NavigateToOrthogonalityCalibrationCommand}"/>
                 <Button Content="传感器校准" Margin="3" Padding="8,6" HorizontalContentAlignment="Left"
@@ -150,6 +151,9 @@
         <!-- 主内容区 -->
         <ContentControl Content="{Binding CurrentView}">
             <ContentControl.Resources>
+                <DataTemplate DataType="{x:Type vm:MainViewModel}">
+                    <views:AcquisitionWorkspaceView/>
+                </DataTemplate>
                 <DataTemplate DataType="{x:Type vm:ConnectionViewModel}">
                     <views:ConnectionView/>
                 </DataTemplate>

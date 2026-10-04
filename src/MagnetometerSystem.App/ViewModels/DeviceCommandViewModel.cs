@@ -53,11 +53,20 @@ public partial class CommandParameterBinding : ObservableObject
 /// 设备命令 ViewModel — 支持命令目录、命令组、参数化命令，
 /// 保留底部"自由发送"区兼容手动输入。
 /// </summary>
-public partial class DeviceCommandViewModel : ObservableObject
+public partial class DeviceCommandViewModel : ObservableObject, IDisposable
 {
     private readonly DataBus _dataBus;
     private readonly IAppConfigService _configService;
     private IDeviceConnection? _connection;
+    private readonly SemaphoreSlim _sendGate = new(1, 1);
+    private readonly object _responseGate = new();
+    private CancellationTokenSource? _responseCts;
+    private IDeviceConnection? _pendingConnection;
+    private byte[]? _expectedResponse;
+    private bool _pendingCtmbs;
+    private readonly List<byte> _responseBuffer = [];
+    private long _responseVersion;
+    private long _connectionVersion;
     private const int MaxLogLength = 50_000;
     private const string CatalogKey = "device.commandCatalog";
 
@@ -97,6 +106,19 @@ public partial class DeviceCommandViewModel : ObservableObject
     private bool _freeAppendNewline = true;
 
     [ObservableProperty]
+    private string _freeLineEnding = "CRLF";
+
+    public string[] FreeLineEndings { get; } = ["CRLF", "LF", "CR", "None"];
+
+    partial void OnFreeLineEndingChanged(string value) => FreeAppendNewline = value != "None";
+    partial void OnFreeAppendNewlineChanged(bool value)
+    {
+        if (!value) FreeLineEnding = "None";
+        else if (FreeLineEnding == "None") FreeLineEnding = "CRLF";
+    }
+    partial void OnFreeIsHexModeChanged(bool value) => FreeLineEnding = value ? "None" : "CRLF";
+
+    [ObservableProperty]
     private bool _showFreeSend;
 
     // ---- 日志 / 状态 ----
@@ -105,6 +127,12 @@ public partial class DeviceCommandViewModel : ObservableObject
 
     [ObservableProperty]
     private bool _isConnected;
+
+    [ObservableProperty] private bool _isSending;
+    [ObservableProperty] private string _writeStatus = "尚未发送";
+    [ObservableProperty] private string _responseStatus = "尚未等待响应";
+    [ObservableProperty] private int _lastSendByteCount;
+    [ObservableProperty] private int _responseTimeoutMs = 3000;
 
     [ObservableProperty]
     private bool _pauseAutoScroll;
@@ -119,9 +147,12 @@ public partial class DeviceCommandViewModel : ObservableObject
         _dataBus = dataBus;
         _configService = configService;
         _connection = dataBus.CurrentConnection;
-        IsConnected = _connection != null;
+        IsConnected = _connection?.IsConnected == true;
         if (_connection != null)
+        {
             _connection.DataReceived += OnDataReceived;
+            _connection.ConnectionStateChanged += OnConnectionStateChanged;
+        }
 
         _dataBus.ConnectionChanged += OnConnectionChanged;
 
@@ -146,7 +177,7 @@ public partial class DeviceCommandViewModel : ObservableObject
 
         catalog ??= CommandCatalog.CreateDefault();
 
-        Application.Current?.Dispatcher.Invoke(() =>
+        OnUi(() =>
         {
             _userGroups.Clear();
             foreach (var g in catalog.Groups)
@@ -270,6 +301,11 @@ public partial class DeviceCommandViewModel : ObservableObject
                 var rendered = CommandFrameBuilder.RenderAsciiTemplate(SelectedCommand, values);
                 PreviewText = SelectedCommand.AppendNewline ? rendered + "\\r\\n" : rendered;
             }
+            else if (SelectedCommand.Encoding == CommandEncoding.CtmbsRequest)
+            {
+                var rendered = Ctmbs3X2000FrameBuilder.RenderRequest(SelectedCommand, values);
+                PreviewText = rendered + (SelectedCommand.AppendNewline ? "\\n" : "");
+            }
             else
             {
                 var preview = CommandFrameBuilder.BuildBinaryFrame(SelectedCommand, values);
@@ -308,6 +344,7 @@ public partial class DeviceCommandViewModel : ObservableObject
         if (SelectedCommand == null) return;
         if (_connection == null)
         {
+            WriteStatus = "写出失败: 未连接设备";
             AppendToLog("[ERR] 未连接设备\n");
             return;
         }
@@ -324,17 +361,23 @@ public partial class DeviceCommandViewModel : ObservableObject
                 var rendered = CommandFrameBuilder.RenderAsciiTemplate(SelectedCommand, values);
                 display = rendered + (SelectedCommand.AppendNewline ? "\\r\\n" : "");
             }
+            else if (SelectedCommand.Encoding == CommandEncoding.CtmbsRequest)
+            {
+                data = Ctmbs3X2000FrameBuilder.BuildRequestBytes(SelectedCommand, values);
+                display = Ctmbs3X2000FrameBuilder.RenderRequest(SelectedCommand, values)
+                        + (SelectedCommand.AppendNewline ? "\\n" : "");
+            }
             else
             {
                 data = CommandFrameBuilder.BuildBinaryFrame(SelectedCommand, values).FullBytes;
                 display = CommandFrameBuilder.ToHexString(data);
             }
 
-            await _connection.SendAsync(data);
-            AppendToLog($"[TX {DateTime.Now:HH:mm:ss}] {display}\n");
+            await SendFrameAsync(data, display, SelectedCommand);
         }
         catch (Exception ex)
         {
+            WriteStatus = "写出失败: " + ex.Message;
             AppendToLog($"[ERR] 发送失败: {ex.Message}\n");
         }
     }
@@ -344,19 +387,18 @@ public partial class DeviceCommandViewModel : ObservableObject
     {
         if (_connection == null)
         {
+            WriteStatus = "写出失败: 未连接设备";
             AppendToLog("[ERR] 未连接设备\n");
             return;
         }
         if (string.IsNullOrEmpty(FreeCommandText)) return;
 
         try { await SendRawAsync(FreeCommandText, FreeIsHexMode, FreeAppendNewline); }
-        catch (Exception ex) { AppendToLog($"[ERR] 发送失败: {ex.Message}\n"); }
+        catch (Exception ex) { WriteStatus = "写出失败: " + ex.Message; AppendToLog($"[ERR] 发送失败: {ex.Message}\n"); }
     }
 
     private async Task SendRawAsync(string text, bool isHex, bool appendNewline)
     {
-        if (_connection == null) return;
-
         byte[] data;
         string display;
 
@@ -364,15 +406,9 @@ public partial class DeviceCommandViewModel : ObservableObject
         {
             var hex = Regex.Replace(text, @"[\s\-]", "");
             if (hex.Length == 0)
-            {
-                AppendToLog("[ERR] Hex 命令为空\n");
-                return;
-            }
+                throw new ArgumentException("Hex 命令为空");
             if (hex.Length % 2 != 0)
-            {
-                AppendToLog("[ERR] Hex 字符串长度不合法\n");
-                return;
-            }
+                throw new ArgumentException("Hex 字符串长度不合法");
             try
             {
                 data = Enumerable.Range(0, hex.Length / 2)
@@ -381,20 +417,121 @@ public partial class DeviceCommandViewModel : ObservableObject
             }
             catch (FormatException)
             {
-                AppendToLog("[ERR] Hex 字符串包含非法字符\n");
-                return;
+                throw new ArgumentException("Hex 字符串包含非法字符");
             }
             display = BitConverter.ToString(data).Replace("-", " ");
         }
         else
         {
-            var toSend = appendNewline ? text + "\r\n" : text;
-            data = Encoding.UTF8.GetBytes(toSend);
-            display = text + (appendNewline ? "\\r\\n" : "");
+            data = Encoding.UTF8.GetBytes(text);
+            display = text;
         }
 
-        await _connection.SendAsync(data);
-        AppendToLog($"[TX {DateTime.Now:HH:mm:ss}] {display}\n");
+        string ending = !appendNewline ? "" : FreeLineEnding switch
+        {
+            "CRLF" => "\r\n", "LF" => "\n", "CR" => "\r", "None" => "",
+            _ => throw new ArgumentException("请选择 CRLF、LF、CR 或 None 行尾"),
+        };
+        if (ending.Length > 0)
+        {
+            data = [.. data, .. Encoding.ASCII.GetBytes(ending)];
+            display += ending.Replace("\r", "\\r").Replace("\n", "\\n");
+        }
+
+        await SendFrameAsync(data, display);
+    }
+
+    private async Task SendFrameAsync(byte[] data, string display, DeviceCommand? command = null)
+    {
+        if (data.Length == 0) throw new ArgumentException("命令不能为空");
+        if (ResponseTimeoutMs <= 0) throw new ArgumentException("响应超时必须为正数");
+        byte[]? expected = string.IsNullOrEmpty(command?.ExpectedResponse) ? null
+            : command.ExpectedResponseIsHex ? CommandFrameBuilder.ParseHexBytes(command.ExpectedResponse)
+            : Encoding.UTF8.GetBytes(Regex.Unescape(command.ExpectedResponse));
+        var requestedConnection = _connection;
+        var requestedVersion = Interlocked.Read(ref _connectionVersion);
+        await _sendGate.WaitAsync();
+        IsSending = true;
+        try
+        {
+            var connection = _connection;
+            if (connection?.IsConnected != true || !ReferenceEquals(requestedConnection, connection)
+                || requestedVersion != Interlocked.Read(ref _connectionVersion))
+                throw new InvalidOperationException("设备未连接或连接已改变，命令未发送");
+            CancellationToken token;
+            long version;
+            lock (_responseGate)
+            {
+                version = ++_responseVersion;
+                _responseCts?.Cancel();
+                _responseCts?.Dispose();
+                _responseCts = new CancellationTokenSource();
+                token = _responseCts.Token;
+                _pendingConnection = connection;
+                _expectedResponse = expected;
+                _pendingCtmbs = command?.Encoding == CommandEncoding.CtmbsRequest;
+                _responseBuffer.Clear();
+            }
+            WriteStatus = "正在写出...";
+            ResponseStatus = expected is null && !_pendingCtmbs
+                ? "等待接收（未配置响应匹配，不能确认执行结果）" : "等待协议响应";
+            // 先登记响应，再写出，避免本机/高速设备应答早于 SendAsync continuation。
+            await connection.SendAsync(data);
+            LastSendByteCount = data.Length;
+            WriteStatus = $"已写出 {data.Length} 字节；不代表设备执行成功";
+            AppendToLog($"[TX {DateTime.Now:HH:mm:ss}] {display}\n");
+            _ = WaitForResponseAsync(token, ResponseTimeoutMs, version);
+        }
+        catch
+        {
+            CancelResponse("写出未完成，设备执行结果未知");
+            throw;
+        }
+        finally { IsSending = false; _sendGate.Release(); }
+    }
+
+    private async Task WaitForResponseAsync(CancellationToken token, int timeoutMs, long version)
+    {
+        try
+        {
+            await Task.Delay(timeoutMs, token).ConfigureAwait(false);
+            lock (_responseGate)
+            {
+                if (token.IsCancellationRequested || _pendingConnection is null || version != _responseVersion) return;
+                _pendingConnection = null;
+            }
+            SetResponseStatus(version, "等待响应超时；设备执行结果未知");
+            EnqueueLog($"[RX {DateTime.Now:HH:mm:ss}] 响应等待超时，未确认设备执行结果\n");
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    private void CancelResponse(string message)
+    {
+        long version;
+        lock (_responseGate)
+        {
+            version = ++_responseVersion;
+            _responseCts?.Cancel();
+            _pendingConnection = null;
+            _responseBuffer.Clear();
+        }
+        SetResponseStatus(version, message);
+    }
+
+    private void SetResponseStatus(long version, string message) => OnUi(() =>
+    {
+        lock (_responseGate)
+        {
+            if (version == _responseVersion) ResponseStatus = message;
+        }
+    });
+
+    private static void OnUi(Action action)
+    {
+        if (Application.Current?.Dispatcher is { } dispatcher && !dispatcher.CheckAccess())
+            dispatcher.BeginInvoke(action);
+        else action();
     }
 
     // ---- 目录管理 ----
@@ -574,24 +711,45 @@ public partial class DeviceCommandViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void ClearLog() => CommunicationLog = "";
+    private void ClearLog()
+    {
+        lock (_logBufferLock) _logBuffer.Clear();
+        CommunicationLog = "";
+    }
 
     // ---- 连接 / 接收 ----
 
     private void OnConnectionChanged(IDeviceConnection? connection)
     {
+        Interlocked.Increment(ref _connectionVersion);
         if (_connection != null)
+        {
             _connection.DataReceived -= OnDataReceived;
+            _connection.ConnectionStateChanged -= OnConnectionStateChanged;
+        }
 
         _connection = connection;
-        IsConnected = connection != null;
+        OnUi(() => { if (ReferenceEquals(connection, _connection)) IsConnected = connection?.IsConnected == true; });
+        CancelResponse(connection is null ? "连接已结束；未确认的命令执行结果未知" : "等待发送命令");
 
         if (_connection != null)
+        {
             _connection.DataReceived += OnDataReceived;
+            _connection.ConnectionStateChanged += OnConnectionStateChanged;
+        }
+    }
+
+    private void OnConnectionStateChanged(object? sender, bool connected)
+    {
+        if (!ReferenceEquals(sender, _connection)) return;
+        Interlocked.Increment(ref _connectionVersion);
+        OnUi(() => { if (ReferenceEquals(sender, _connection)) IsConnected = _connection?.IsConnected == true; });
+        if (!connected) CancelResponse("连接中断；设备执行结果未知");
     }
 
     private void OnDataReceived(object? sender, byte[] data)
     {
+        if (!ReferenceEquals(sender, _connection)) return;
         var timestamp = DateTime.Now.ToString("HH:mm:ss");
         bool isAscii = data.All(b => (b >= 0x20 && b <= 0x7E) || b == '\r' || b == '\n' || b == '\t');
         var display = isAscii
@@ -600,6 +758,27 @@ public partial class DeviceCommandViewModel : ObservableObject
 
         // 直接进缓冲区（线程安全），UI 由 _logFlushTimer 节拍刷新
         EnqueueLog($"[RX {timestamp}] {display}\n");
+        lock (_responseGate)
+        {
+            if (!ReferenceEquals(sender, _pendingConnection)) return;
+            _responseBuffer.AddRange(data);
+            if (_responseBuffer.Count > 65536) _responseBuffer.RemoveRange(0, _responseBuffer.Count - 65536);
+            var received = _responseBuffer.ToArray().AsSpan();
+            var rejected = _pendingCtmbs && received.IndexOf("$err\n"u8) >= 0;
+            var acknowledged = _pendingCtmbs && received.IndexOf("$ack\n"u8) >= 0;
+            var matched = _expectedResponse is { Length: > 0 } && received.IndexOf(_expectedResponse) >= 0;
+            if (rejected || acknowledged || matched)
+            {
+                _pendingConnection = null;
+                _responseCts?.Cancel();
+                var message = rejected ? "设备返回 ERR：命令被拒绝"
+                    : acknowledged ? "收到设备 ACK；执行结果以设备协议为准"
+                    : "收到匹配响应；执行结果以设备协议为准";
+                SetResponseStatus(_responseVersion, message);
+            }
+            else if (_responseBuffer.Count == data.Length)
+                SetResponseStatus(_responseVersion, "已收到数据，尚未匹配命令响应；执行结果未确认");
+        }
     }
 
     private void EnqueueLog(string line)
@@ -607,6 +786,8 @@ public partial class DeviceCommandViewModel : ObservableObject
         lock (_logBufferLock)
         {
             _logBuffer.Append(line);
+            if (_logBuffer.Length > MaxLogLength)
+                _logBuffer.Remove(0, _logBuffer.Length - MaxLogLength);
         }
     }
 
@@ -635,6 +816,25 @@ public partial class DeviceCommandViewModel : ObservableObject
     {
         // 同步 UI 线程调用（错误/状态信息），仍走缓冲以避免与 RX 流竞争抖动
         EnqueueLog(line);
+    }
+
+    public void Dispose()
+    {
+        _logFlushTimer.Stop();
+        _dataBus.ConnectionChanged -= OnConnectionChanged;
+        if (_connection != null)
+        {
+            _connection.DataReceived -= OnDataReceived;
+            _connection.ConnectionStateChanged -= OnConnectionStateChanged;
+        }
+        lock (_responseGate)
+        {
+            ++_responseVersion;
+            _responseCts?.Cancel();
+            _responseCts?.Dispose();
+            _responseCts = null;
+            _pendingConnection = null;
+        }
     }
 
     // ---- 辅助 ----

@@ -53,6 +53,8 @@ public partial class MainViewModel : ObservableObject
     public SensorCalibrationViewModel SensorCalibVM { get; }
     public SettingsViewModel SettingsVM { get; }
     public DeviceCommandViewModel DeviceCommandVM { get; }
+    public WorkspaceLayoutViewModel WorkspaceLayout => RealtimeChartVM.WorkspaceLayout;
+    public string ProtocolInfo => ConnectionVM.ProtocolConfig?.Name ?? "未选择协议";
 
     /// <summary>暴露 DataBus 给左侧导航栏触发"记录当前点"</summary>
     public DataBus DataBus { get; }
@@ -71,7 +73,7 @@ public partial class MainViewModel : ObservableObject
         SettingsVM = settingsVm;
         DeviceCommandVM = deviceCommandVm;
         DataBus = dataBus;
-        CurrentView = connectionVm;
+        CurrentView = this;
 
         // 订阅连接状态变化
         ConnectionVM.PropertyChanged += (s, e) =>
@@ -83,12 +85,8 @@ public partial class MainViewModel : ObservableObject
                 // 连接成功后自动切换到实时采集页面
                 if (ConnectionVM.IsConnected)
                 {
-                    CurrentView = RealtimeChartVM;
+                    CurrentView = this;
                 }
-            }
-            else if (e.PropertyName == nameof(ConnectionViewModel.SelectedSensorType))
-            {
-                SensorInfo = ConnectionVM.SelectedSensorType.ToString();
             }
             else if (e.PropertyName == nameof(ConnectionViewModel.SampleRate))
             {
@@ -98,6 +96,7 @@ public partial class MainViewModel : ObservableObject
             {
                 // 协议自带的命令组随协议切换：设备命令页只展示当前协议的指令
                 DeviceCommandVM.SetProtocolCommands(ConnectionVM.ProtocolConfig?.Commands);
+                OnPropertyChanged(nameof(ProtocolInfo));
             }
         };
 
@@ -115,17 +114,10 @@ public partial class MainViewModel : ObservableObject
         };
 
         // 订阅会话列表的回放请求，自动导航到回放页面并加载会话
-        SessionListVM.PlaybackRequested += sessionId =>
+        SessionListVM.PlaybackRequested += async sessionId =>
         {
             CurrentView = HistoryPlaybackVM;
-
-            // 在可用会话列表中选中对应会话，然后触发加载
-            var target = HistoryPlaybackVM.AvailableSessions.FirstOrDefault(s => s.Id == sessionId);
-            if (target != null)
-            {
-                HistoryPlaybackVM.SelectedSession = target;
-                HistoryPlaybackVM.LoadSessionCommand.Execute(null);
-            }
+            await HistoryPlaybackVM.LoadSessionByIdAsync(sessionId);
         };
 
         // 订阅会话列表的活跃会话变化，更新录制状态卡片显示名称
@@ -157,7 +149,7 @@ public partial class MainViewModel : ObservableObject
     [RelayCommand]
     private void NavigateToRealtimeChart()
     {
-        CurrentView = RealtimeChartVM;
+        CurrentView = this;
     }
 
     [RelayCommand]

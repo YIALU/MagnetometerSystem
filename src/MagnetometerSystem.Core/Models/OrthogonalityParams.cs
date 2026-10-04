@@ -45,6 +45,7 @@ public class OrthogonalityParams
     /// </summary>
     public Matrix<double> GetMatrix()
     {
+        Validate();
         return Matrix<double>.Build.DenseOfRowMajor(3, 3, CompensationMatrix);
     }
 
@@ -53,6 +54,7 @@ public class OrthogonalityParams
     /// </summary>
     public Vector<double> GetOffsetVector()
     {
+        Validate();
         return Vector<double>.Build.DenseOfArray(Offset);
     }
 
@@ -62,10 +64,34 @@ public class OrthogonalityParams
     /// </summary>
     public double[] Apply(double x, double y, double z)
     {
+        Validate();
+        if (!double.IsFinite(x) || !double.IsFinite(y) || !double.IsFinite(z))
+            throw new ArgumentException("正交度输入必须是有限数值。");
         var raw = Vector<double>.Build.DenseOfArray([x, y, z]);
         var offset = GetOffsetVector();
         var matrix = GetMatrix();
         var corrected = matrix * (raw - offset);
-        return corrected.ToArray();
+        var result = corrected.ToArray();
+        if (result.Any(v => !double.IsFinite(v)))
+            throw new ArithmeticException("正交度结果超出有限数值范围。");
+        return result;
+    }
+
+    /// <summary>拒绝缺失、非有限或不可逆参数，避免把无效改正结果送入显示或存储。</summary>
+    public void Validate()
+    {
+        if (Offset is not { Length: 3 } || CompensationMatrix is not { Length: 9 })
+            throw new ArgumentException("正交度参数必须包含 3 个偏移量和 9 个矩阵元素。");
+        if (Offset.Any(v => !double.IsFinite(v)) || CompensationMatrix.Any(v => !double.IsFinite(v)))
+            throw new ArgumentException("正交度参数不能包含 NaN 或无穷大。");
+        var scale = CompensationMatrix.Max(Math.Abs);
+        if (scale == 0)
+            throw new ArgumentException("正交度补偿矩阵不可逆。");
+        var m = CompensationMatrix.Select(v => v / scale).ToArray();
+        var determinant = m[0] * (m[4] * m[8] - m[5] * m[7])
+            - m[1] * (m[3] * m[8] - m[5] * m[6])
+            + m[2] * (m[3] * m[7] - m[4] * m[6]);
+        if (!double.IsFinite(determinant) || Math.Abs(determinant) < 1e-12)
+            throw new ArgumentException("正交度补偿矩阵不可逆或病态。");
     }
 }

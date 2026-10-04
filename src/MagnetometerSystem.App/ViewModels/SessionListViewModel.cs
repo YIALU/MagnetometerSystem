@@ -30,6 +30,25 @@ public partial class SessionListViewModel : ObservableObject
     private DateTime _lastFlushTime = DateTime.MinValue;
     private const int FlushBatchSize = 500;
     private const int FlushIntervalMs = 200;
+    private System.Threading.Timer? _flushTimer;
+    private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
+    private bool _acceptingReadings;
+    private long _savedBaseline;
+
+    [ObservableProperty] private string _storageStatus = "就绪";
+    [ObservableProperty] private string? _storageError;
+    [ObservableProperty] private long _pendingReadingCount;
+    [ObservableProperty] private long _savedReadingCount;
+    [ObservableProperty] private string _firstCorrectionChannels = "";
+    [ObservableProperty] private string _secondCorrectionChannels = "";
+    [ObservableProperty] private DateTime? _exportStartTime;
+    [ObservableProperty] private DateTime? _exportEndTime;
+    [ObservableProperty] private string _exportChannelIndices = "";
+    [ObservableProperty] private ExportDataSource _exportSource = ExportDataSource.Raw;
+    [ObservableProperty] private bool _exportIncludeUnits = true;
+    [ObservableProperty] private bool _exportIncludeHeader = true;
+    [ObservableProperty] private int? _exportDecimalPlaces;
+    public ExportDataSource[] ExportSources { get; } = Enum.GetValues<ExportDataSource>();
 
     // ---- 当前采集的传感器/连接配置（用于创建会话） ----
     private SensorConfig? _currentSensorConfig;
@@ -114,8 +133,9 @@ public partial class SessionListViewModel : ObservableObject
         // 会话创建走 AcquisitionStarting（连接打开前 await 完成），保证第一条数据到达时
         // ActiveSessionId 已就绪，消除启动丢数据窗口。
         _dataBus.AcquisitionStarting += OnAcquisitionStartingAsync;
-        _dataBus.AcquisitionStopped += OnAcquisitionStopped;
+        _dataBus.AcquisitionStopping += OnAcquisitionStoppingAsync;
         _dataBus.ReadingReceived += OnReadingReceived;
+        _storageService.WriteStatusChanged += OnStorageWriteStatusChanged;
 
         // 会话列表延迟加载：等用户首次导航到此页面时再加载
     }
@@ -137,26 +157,29 @@ public partial class SessionListViewModel : ObservableObject
     /// </summary>
     private async Task OnAcquisitionStartingAsync(SensorConfig config)
     {
-        if (_dataBus.IsPlaybackMode) return;
-        _currentSensorConfig = config;
-
-        var name = $"采集_{DateTime.Now:yyyy-MM-dd_HH:mm:ss}";
-
-        // 创建一个默认的 ConnectionConfig 用于会话记录
-        var connectionConfig = new ConnectionConfig();
-
+        await _lifecycleGate.WaitAsync();
         try
         {
+            if (ActiveSessionId != null)
+                throw new InvalidOperationException("上一个会话尚未完成保存，请先重试存储。");
+            _currentSensorConfig = config;
+            var name = $"采集_{DateTime.Now:yyyy-MM-dd_HH:mm:ss}";
+            var connectionConfig = _dataBus.AcquisitionConnectionConfig ?? new ConnectionConfig();
+            _savedBaseline = _storageService.WriteStatus.SavedReadings;
             var sessionId = await _storageService.StartSessionAsync(name, config, connectionConfig);
 
-            Application.Current?.Dispatcher.Invoke(() =>
+            OnUi(() =>
             {
                 ActiveSessionId = sessionId;
                 IsRecording = true;
                 ActiveSessionReadingCount = 0;
+                SavedReadingCount = 0;
+                StorageError = null;
+                StorageStatus = "自动保存中";
             });
-
-            _dataBus.PublishSessionStarted(sessionId);
+            lock (_bufferLock) _acceptingReadings = true;
+            _flushTimer = new System.Threading.Timer(_ => _ = ObserveWriteAsync(FlushBufferAsync),
+                null, FlushIntervalMs, FlushIntervalMs);
             await RefreshSessionsAsync();
         }
         catch (Exception ex)
@@ -166,51 +189,47 @@ public partial class SessionListViewModel : ObservableObject
             // 而 ActiveSessionId 为 null 导致读数被静默丢弃。
             throw;
         }
+        finally { _lifecycleGate.Release(); }
     }
 
-    private async void OnAcquisitionStopped()
+    private async Task OnAcquisitionStoppingAsync()
     {
-        // 先 flush 剩余缓冲数据（入队），再等待后台写入队列把已入队读数全部落库，
-        // 否则 EndSessionAsync 的 COUNT(*) 会早于落库执行，导致 total_readings 少计。
-        await FlushBufferAsync();
-        await _storageService.WaitForPendingWritesAsync();
-
-        var sessionId = ActiveSessionId;
-        if (sessionId != null)
+        await _lifecycleGate.WaitAsync();
+        try
         {
-            try
-            {
-                await _storageService.EndSessionAsync(sessionId);
-                _dataBus.PublishSessionEnded(sessionId);
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Trace.TraceError($"结束会话失败: {ex.Message}");
-            }
-
-            Application.Current?.Dispatcher.Invoke(() =>
+            lock (_bufferLock) _acceptingReadings = false;
+            if (_flushTimer != null) await _flushTimer.DisposeAsync();
+            _flushTimer = null;
+            OnUi(() => IsRecording = false);
+            if (ActiveSessionId is not { } sessionId) return;
+            await FlushBufferAsync();
+            await _storageService.WaitForPendingWritesAsync();
+            await _storageService.EndSessionAsync(sessionId);
+            OnUi(() =>
             {
                 ActiveSessionId = null;
-                IsRecording = false;
+                StorageStatus = "全部保存完成";
             });
-
+            _currentSensorConfig = null;
             await RefreshSessionsAsync();
         }
-
-        _currentSensorConfig = null;
+        catch (Exception ex)
+        {
+            ReportStorageError(ex);
+            throw;
+        }
+        finally { _lifecycleGate.Release(); }
     }
 
     private void OnReadingReceived(MagnetometerReading reading)
     {
-        if (ActiveSessionId == null || _dataBus.IsPlaybackMode) return;
-
-        // 设置会话 ID
-        reading.SessionId = ActiveSessionId;
-        ActiveSessionReadingCount++;
-
         lock (_bufferLock)
         {
-            _readingBuffer.Add(reading);
+            if (!_acceptingReadings || ActiveSessionId == null) return;
+            var snapshot = reading.DeepClone();
+            snapshot.SessionId = ActiveSessionId;
+            _readingBuffer.Add(snapshot);
+            ActiveSessionReadingCount++;
 
             if (_readingBuffer.Count >= FlushBatchSize ||
                 (DateTime.UtcNow - _lastFlushTime).TotalMilliseconds >= FlushIntervalMs)
@@ -220,7 +239,7 @@ public partial class SessionListViewModel : ObservableObject
                 _lastFlushTime = DateTime.UtcNow;
 
                 // 异步写入，不阻塞事件处理
-                _ = _storageService.SaveReadingsAsync(batch);
+                _ = ObserveWriteAsync(() => _storageService.SaveReadingsAsync(batch));
             }
         }
     }
@@ -238,6 +257,55 @@ public partial class SessionListViewModel : ObservableObject
         return _storageService.SaveReadingsAsync(batch);
     }
 
+    private static void OnUi(Action action)
+    {
+        if (Application.Current?.Dispatcher is { } dispatcher && !dispatcher.CheckAccess())
+            dispatcher.Invoke(action);
+        else action();
+    }
+
+    private async Task ObserveWriteAsync(Func<Task> write)
+    {
+        try { await write().ConfigureAwait(false); }
+        catch (Exception ex) { ReportStorageError(ex); }
+    }
+
+    private void ReportStorageError(Exception ex)
+    {
+        // 不同步阻塞后台写入线程：UI 可能正在等待停止/退出。
+        void Update() { StorageError = ex.Message; StorageStatus = "保存失败 · 数据待重试"; }
+        if (Application.Current?.Dispatcher is { } dispatcher) dispatcher.BeginInvoke(Update);
+        else Update();
+    }
+
+    private void OnStorageWriteStatusChanged(StorageWriteStatus ignored)
+    {
+        void Update()
+        {
+            var status = _storageService.WriteStatus;
+            SavedReadingCount = Math.Max(0, status.SavedReadings - _savedBaseline);
+            lock (_bufferLock) PendingReadingCount = status.PendingReadings + _readingBuffer.Count;
+            StorageError = status.LastError;
+            StorageStatus = status.LastError != null ? "保存失败 · 数据待重试"
+                : PendingReadingCount > 0 ? "正在保存" : IsRecording ? "自动保存中" : "全部保存完成";
+        }
+        if (Application.Current?.Dispatcher is { } dispatcher) dispatcher.BeginInvoke(Update);
+        else Update();
+    }
+
+    [RelayCommand]
+    private async Task RetryStorageAsync()
+    {
+        try
+        {
+            await _storageService.RetryPendingWritesAsync();
+            await FlushBufferAsync();
+            if (!IsRecording && ActiveSessionId != null) await OnAcquisitionStoppingAsync();
+            OnStorageWriteStatusChanged(_storageService.WriteStatus);
+        }
+        catch (Exception ex) { ReportStorageError(ex); }
+    }
+
     // ---- 命令 ----
 
     [RelayCommand]
@@ -247,7 +315,7 @@ public partial class SessionListViewModel : ObservableObject
         {
             var sessions = await _storageService.GetSessionsAsync();
 
-            Application.Current?.Dispatcher.Invoke(() =>
+            OnUi(() =>
             {
                 Sessions.Clear();
                 foreach (var session in sessions)
@@ -314,6 +382,11 @@ public partial class SessionListViewModel : ObservableObject
     private async Task DeleteSessionAsync(SessionInfo? session)
     {
         if (session == null) return;
+        if (session.Id == ActiveSessionId)
+        {
+            MessageBox.Show("该会话仍在采集或等待保存，请先断开连接并完成保存。", "无法删除", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
 
         var result = MessageBox.Show(
             $"确定要删除会话 '{session.Name}' 及其 {session.TotalReadings} 条数据吗？此操作不可恢复。",
@@ -365,8 +438,15 @@ public partial class SessionListViewModel : ObservableObject
         {
             var options = new ExportOptions
             {
-                IncludeHeader = true,
-                IncludeCalibratedData = false
+                IncludeHeader = ExportIncludeHeader,
+                IncludeCalibratedData = ExportSource != ExportDataSource.Raw,
+                IncludeUnits = ExportIncludeUnits,
+                Source = ExportSource,
+                CorrectionProfileId = SelectedCorrectionProfile?.Id,
+                StartTime = ExportStartTime,
+                EndTime = ExportEndTime,
+                DecimalPlaces = ExportDecimalPlaces,
+                ChannelIndices = string.IsNullOrWhiteSpace(ExportChannelIndices) ? null : ParseIndices(ExportChannelIndices)
             };
 
             await _dataExporter.ExportAsync(session.Id, dialog.FileName, options);
@@ -412,14 +492,17 @@ public partial class SessionListViewModel : ObservableObject
     {
         if (session == null || SelectedCorrectionProfile == null) return;
 
-        // 双三轴必须同时选第二组
-        bool isDual = session.ChannelCount >= 6;
-        if (isDual && SelectedCorrectionProfileSecond == null)
+        var isDual = SelectedCorrectionProfileSecond != null;
+        int[] firstChannels;
+        int[]? secondChannels;
+        try
         {
-            MessageBox.Show(
-                "该会话为双三轴（6 通道）数据，请同时选择第二组正交度配置。\n" +
-                "否则后 3 通道（X2/Y2/Z2）不会被校正。",
-                "缺少配置", MessageBoxButton.OK, MessageBoxImage.Warning);
+            firstChannels = CorrectionMapping(FirstCorrectionChannels, session, false);
+            secondChannels = isDual ? CorrectionMapping(SecondCorrectionChannels, session, true) : null;
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(ex.Message, "请确认改正通道", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
 
@@ -461,9 +544,6 @@ public partial class SessionListViewModel : ObservableObject
                 return;
             }
 
-            // 2. 删除此配置的旧校正结果
-            await _storageService.DeleteCorrectedReadingsAsync(session.Id, SelectedCorrectionProfile.Id);
-
             // 3. 批量应用校正（双三轴时传第二组）
             var progress = new Progress<int>(processed =>
             {
@@ -471,7 +551,8 @@ public partial class SessionListViewModel : ObservableObject
             });
 
             var batchResult = await _orthogonalityCorrector.ApplyBatchAsync(
-                SelectedCorrectionProfile, SelectedCorrectionProfileSecond, readings, progress);
+                SelectedCorrectionProfile, SelectedCorrectionProfileSecond, readings,
+                firstChannels, secondChannels, progress);
 
             // 4. 映射为 CorrectedReading 并保存
             var correctedReadings = new List<CorrectedReading>();
@@ -487,7 +568,13 @@ public partial class SessionListViewModel : ObservableObject
             await _storageService.SaveCorrectedReadingsAsync(correctedReadings);
 
             // 5. 导出 CSV 到用户选定的路径
-            await WriteCorrectedCsvAsync(csvDialog.FileName, session, batchResult.CorrectedReadings);
+            await _dataExporter.ExportAsync(session.Id, csvDialog.FileName, new ExportOptions
+            {
+                Source = ExportDataSource.Corrected,
+                CorrectionProfileId = SelectedCorrectionProfile.Id,
+                IncludeUnits = true,
+                IncludeCalibratedData = true
+            });
 
             CorrectionProgress = 100;
             MessageBox.Show(
@@ -508,34 +595,28 @@ public partial class SessionListViewModel : ObservableObject
         }
     }
 
-    private static async Task WriteCorrectedCsvAsync(
-        string path, SessionInfo session, IReadOnlyList<MagnetometerReading> corrected)
+    private static int[] ParseIndices(string value)
     {
-        using var stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None);
-        using var writer = new StreamWriter(stream, new System.Text.UTF8Encoding(true)) { NewLine = "\r\n" };
+        return value.Split([',', '，', ';', ' '], StringSplitOptions.RemoveEmptyEntries)
+            .Select(s => int.Parse(s, System.Globalization.CultureInfo.InvariantCulture)).ToArray();
+    }
 
-        // Header
-        var headerParts = new List<string> { "Timestamp" };
-        for (int i = 0; i < session.ChannelCount; i++)
+    private static int[] CorrectionMapping(string text, SessionInfo session, bool second)
+    {
+        int[] indices;
+        if (!string.IsNullOrWhiteSpace(text)) indices = ParseIndices(text);
+        else if (session.SensorType is SensorType.TriaxialFluxgate or SensorType.DualTriaxialFluxgate)
+            indices = second ? [3, 4, 5] : [0, 1, 2];
+        else throw new ArgumentException("请明确填写要改正的三个磁场通道索引，例如 0,1,2；不会自动把温度等辅助通道用于正交度改正。");
+        if (indices.Length != 3 || indices.Distinct().Count() != 3 || indices.Any(i => i < 0 || i >= session.ChannelCount))
+            throw new ArgumentException("正交度改正需要三个不重复且有效的通道索引。");
+        if (session.ChannelUnits.Length == session.ChannelCount)
         {
-            headerParts.Add(i < session.ChannelNames.Length ? session.ChannelNames[i] : $"CH{i}");
+            var units = indices.Select(i => session.ChannelUnits[i]).ToArray();
+            if (units.Distinct().Count() != 1 || !new[] { "nT", "uT", "µT", "μT", "mT", "T" }.Contains(units[0]))
+                throw new ArgumentException("所选三个通道必须使用相同的磁场单位，不能包含温度等辅助通道。");
         }
-        await writer.WriteLineAsync(string.Join(",", headerParts));
-
-        // Rows
-        foreach (var r in corrected)
-        {
-            var sb = new System.Text.StringBuilder();
-            sb.Append(r.Timestamp.ToString("yyyy-MM-dd HH:mm:ss.fff",
-                System.Globalization.CultureInfo.InvariantCulture));
-            for (int i = 0; i < session.ChannelCount && i < r.ChannelValues.Length; i++)
-            {
-                sb.Append(',');
-                sb.Append(r.ChannelValues[i].ToString("R",
-                    System.Globalization.CultureInfo.InvariantCulture));
-            }
-            await writer.WriteLineAsync(sb.ToString());
-        }
+        return indices;
     }
 
     // ---- 筛选 ----
@@ -546,7 +627,8 @@ public partial class SessionListViewModel : ObservableObject
 
         // 名称搜索
         if (!string.IsNullOrWhiteSpace(SearchText) &&
-            !session.Name.Contains(SearchText, StringComparison.OrdinalIgnoreCase))
+            !session.Name.Contains(SearchText, StringComparison.OrdinalIgnoreCase) &&
+            !(session.Notes?.Contains(SearchText, StringComparison.OrdinalIgnoreCase) ?? false))
             return false;
 
         // 日期范围

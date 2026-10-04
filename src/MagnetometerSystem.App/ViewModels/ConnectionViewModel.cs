@@ -26,11 +26,20 @@ public partial class ConnectionViewModel : ObservableObject
     private IDeviceConnection? _connection;
     private IDataParser? _parser;
     private ISensorAdapter? _sensorAdapter;
+    private readonly SemaphoreSlim _connectionGate = new(1, 1);
+    private readonly object _receiveGate = new();
+    private readonly Queue<string> _rawDisplayQueue = new();
+    private int _receiveUiPending;
+    private long _receivedBytes, _parsedCount, _parseErrors;
+    private long _lastParserRejectedCount;
+    private bool _sessionPrepared;
+    private string[] _activeChannelUnits = [];
+    private string? _lastReportedError;
 
     // ---- 传感器配置 ----
 
     [ObservableProperty]
-    private SensorType _selectedSensorType = SensorType.TriaxialFluxgate;
+    private SensorType _selectedSensorType = SensorType.Generic;
 
     public SensorType[] SensorTypes { get; } = Enum.GetValues<SensorType>();
 
@@ -113,6 +122,13 @@ public partial class ConnectionViewModel : ObservableObject
     [ObservableProperty]
     private bool _isConnected;
 
+    [ObservableProperty] private bool _isConnecting;
+    [ObservableProperty] private bool _isAcquiring;
+    [ObservableProperty] private long _receivedByteCount;
+    [ObservableProperty] private long _parsedReadingCount;
+    [ObservableProperty] private long _parseErrorCount;
+    [ObservableProperty] private string _lastError = "";
+
     [ObservableProperty]
     private string _statusMessage = "就绪";
 
@@ -137,6 +153,9 @@ public partial class ConnectionViewModel : ObservableObject
     /// <summary>第二组三轴的正交度校正配置（仅双三轴传感器使用）</summary>
     [ObservableProperty]
     private OrthogonalityParams? _secondOrthogonalityProfile;
+
+    [ObservableProperty] private string _firstOrthogonalityChannelsText = "";
+    [ObservableProperty] private string _secondOrthogonalityChannelsText = "";
 
     private const int MaxRawDataLines = 200;
 
@@ -192,194 +211,227 @@ public partial class ConnectionViewModel : ObservableObject
     [RelayCommand]
     private async Task ConnectAsync()
     {
-        if (IsConnected)
-        {
-            await DisconnectAsync();
-            return;
-        }
-
+        await _connectionGate.WaitAsync();
+        IsConnecting = true;
         try
         {
-            var sensorConfig = new SensorConfig
+            // 包含 TCP 自动重连期间，避免把“当前断线”误判成可以创建第二个采集会话。
+            if (_connection != null || _sessionPrepared)
             {
-                Type = SelectedSensorType,
-                SampleRate = SampleRate,
-            };
-
-            // 从协议配置中提取通道信息，覆盖传感器类型的默认值
-            if (ProtocolConfig.DerivedChannelCount > 0)
-            {
-                sensorConfig.ChannelCountOverride = ProtocolConfig.DerivedChannelCount;
-                sensorConfig.ChannelNamesOverride = ProtocolConfig.DerivedChannelNames.ToArray();
-            }
-
-            if (!sensorConfig.ValidateSampleRate())
-            {
-                StatusMessage = $"采样率超出范围: {sensorConfig.MinSampleRate}~{sensorConfig.MaxSampleRate} Hz";
+                await DisconnectCoreAsync();
                 return;
             }
-
+            var protocol = ProtocolConfig.FromJson(ProtocolConfig.ToJson())
+                ?? throw new InvalidOperationException("协议配置无效");
+            protocol.Validate();
+            var sensorConfig = new SensorConfig
+            {
+                Type = SensorType.Generic,
+                SampleRate = SampleRate,
+                ChannelCountOverride = protocol.DerivedChannelCount,
+                ChannelNamesOverride = protocol.DerivedChannelNames.ToArray(),
+                ChannelUnitsOverride = protocol.DerivedChannelUnits.ToArray(),
+                ProtocolType = protocol.Name,
+            };
+            if (!sensorConfig.ValidateSampleRate())
+                throw new ArgumentException("标称采样率必须是有限正数；实际节奏由设备决定");
             var connConfig = new ConnectionConfig
             {
-                Type = SelectedConnectionType,
-                PortName = SelectedPort,
-                BaudRate = BaudRate,
-                DataBits = DataBits,
-                Parity = Parity,
-                StopBits = StopBits,
-                IpAddress = IpAddress,
-                Port = Port,
+                Type = SelectedConnectionType, PortName = SelectedPort, BaudRate = BaudRate,
+                DataBits = DataBits, Parity = Parity, StopBits = StopBits,
+                IpAddress = IpAddress, Port = Port,
             };
-
-            // 创建连接
-            _connection = _connectionFactory.Create(connConfig);
-            _connection.DataReceived += OnDataReceived;
-            _connection.ErrorOccurred += OnErrorOccurred;
-            _connection.ConnectionStateChanged += OnConnectionStateChanged;
-
-            // 使用 ProtocolConfig 创建解析器
-            _parser = ParserFactory.Create(ProtocolConfig);
-
-            // 创建传感器适配器
-            _sensorAdapter = SensorAdapterFactory.Create(sensorConfig);
-
-            StatusMessage = "正在连接...";
-
-            // 原始数据显示默认值按协议类型自动选择：二进制协议默认 16 进制，
-            // ASCII 协议默认字符串。用户仍可在界面手动勾选切换。
-            ShowHex = ProtocolConfig.Category == ProtocolCategory.Binary;
-
-            // 关键时序：在打开连接之前先创建会话并就绪 ActiveSessionId。
-            // 串口/TCP 一旦打开即可在后台线程触发数据事件，若此时会话尚未创建，
-            // 到达的读数会被 SessionListViewModel 丢弃。故此处 await 直到会话就绪。
-            await _dataBus.PublishAcquisitionStartingAsync(sensorConfig);
-
-            await _connection.ConnectAsync();
-            StatusMessage = "已连接";
-            _dataBus.PublishConnectionChanged(_connection);
-
-            // 通知数据总线采集开始（连接已打开，供图表等非关键消费者初始化）
+            var connection = _connectionFactory.Create(connConfig);
+            lock (_receiveGate)
+            {
+                _parser = ParserFactory.Create(protocol);
+                _sensorAdapter = SensorAdapterFactory.Create(sensorConfig);
+                _activeChannelUnits = sensorConfig.ChannelUnits.ToArray();
+                _connection = connection;
+                _receivedBytes = _parsedCount = _parseErrors = _lastParserRejectedCount = 0;
+            }
+            ReceivedByteCount = ParsedReadingCount = ParseErrorCount = 0;
+            LastError = "";
+            _lastReportedError = null;
+            ShowHex = protocol.Category == ProtocolCategory.Binary;
+            connection.DataReceived += OnDataReceived;
+            connection.ErrorOccurred += OnErrorOccurred;
+            connection.ConnectionStateChanged += OnConnectionStateChanged;
+            StatusMessage = "正在准备采集会话...";
+            _sessionPrepared = true;
+            await _dataBus.PublishAcquisitionStartingAsync(sensorConfig, connConfig);
+            IsAcquiring = true;
+            // 图表和保存消费者均在首帧前初始化。
             _dataBus.PublishAcquisitionStarted(sensorConfig);
+            _dataBus.PublishConnectionChanged(connection);
+            await connection.ConnectAsync();
+            IsConnected = connection.IsConnected;
+            StatusMessage = "已连接 · 原始数据自动保存";
         }
         catch (Exception ex)
         {
-            // 清理已创建但连接失败的资源
-            if (_connection != null)
-            {
-                _connection.DataReceived -= OnDataReceived;
-                _connection.ErrorOccurred -= OnErrorOccurred;
-                _connection.ConnectionStateChanged -= OnConnectionStateChanged;
-                try { await _connection.DisposeAsync(); } catch { }
-                _connection = null;
-                _dataBus.PublishConnectionChanged(null);
-            }
-            _parser = null;
-            _sensorAdapter = null;
-            // 回滚：连接失败时结束已提前创建的空会话，避免遗留无数据的会话记录
-            _dataBus.PublishAcquisitionStopped();
-            StatusMessage = $"连接失败: {ex.Message}";
+            var message = ex.Message;
+            try { await DisconnectCoreAsync(); }
+            catch (Exception cleanup) { message += $"；结束会话失败: {cleanup.Message}"; }
+            ReportError("连接失败: " + message);
         }
+        finally { IsConnecting = false; _connectionGate.Release(); }
     }
 
-    private async Task DisconnectAsync()
+    public async Task StopAcquisitionAsync()
     {
-        if (_connection != null)
+        await _connectionGate.WaitAsync();
+        IsConnecting = true;
+        try { await DisconnectCoreAsync(); }
+        finally { IsConnecting = false; _connectionGate.Release(); }
+    }
+
+    private async Task DisconnectCoreAsync()
+    {
+        var connection = _connection;
+        if (connection != null)
         {
-            _connection.DataReceived -= OnDataReceived;
-            _connection.ErrorOccurred -= OnErrorOccurred;
-            _connection.ConnectionStateChanged -= OnConnectionStateChanged;
-            await _connection.DisconnectAsync();
-            await _connection.DisposeAsync();
-            _connection = null;
+            // 先停止物理接收并等待其当前回调，最后才结束存储会话。
+            await connection.DisconnectAsync();
+            lock (_receiveGate)
+            {
+                connection.DataReceived -= OnDataReceived;
+                connection.ErrorOccurred -= OnErrorOccurred;
+                connection.ConnectionStateChanged -= OnConnectionStateChanged;
+                _connection = null;
+                _parser?.Reset();
+                _parser = null;
+                _sensorAdapter = null;
+            }
             _dataBus.PublishConnectionChanged(null);
+            await connection.DisposeAsync();
         }
-        _parser?.Reset();
-        _parser = null;
-        _sensorAdapter = null;
-        _dataBus.PublishAcquisitionStopped();
         IsConnected = false;
-        StatusMessage = "已断开";
+        if (_sessionPrepared)
+        {
+            StatusMessage = "正在保存尾批数据...";
+            await _dataBus.PublishAcquisitionStoppingAsync();
+            _sessionPrepared = false;
+            _dataBus.PublishAcquisitionStopped();
+        }
+        IsAcquiring = false;
+        StatusMessage = "已断开 · 会话已保存";
     }
 
     private void OnDataReceived(object? sender, byte[] data)
     {
-        // 原始数据显示：纯调试参考，独立于解析链路，无条件回显收到的字节。
-        // 勾选 ShowHex → 16 进制；否则 → ASCII 字符串。解析失败/卡死都不影响这里。
-        var rawLine = ShowHex
-            ? BitConverter.ToString(data).Replace("-", " ")
-            : System.Text.Encoding.ASCII.GetString(data);
-        Application.Current?.Dispatcher.BeginInvoke(() =>
+        lock (_receiveGate)
         {
-            RawDataLines.Add(rawLine);
-            while (RawDataLines.Count > MaxRawDataLines)
-                RawDataLines.RemoveAt(0);
-        });
-
-        try
-        {
-            _parser?.Feed(data, 0, data.Length);
-        }
-        catch (Exception ex)
-        {
-            System.Diagnostics.Trace.TraceError($"[Parser.Feed] {ex}");
-            return;
-        }
-
-        // 单帧独立 try/catch：一帧失败不影响后续帧，更不能让异常冒泡断流
-        while (true)
-        {
-            MagnetometerReading? reading;
+            if (!ReferenceEquals(sender, _connection) || _parser == null) return;
+            _receivedBytes += data.Length;
+            _rawDisplayQueue.Enqueue(ShowHex ? BitConverter.ToString(data).Replace("-", " ") : System.Text.Encoding.ASCII.GetString(data));
+            while (_rawDisplayQueue.Count > MaxRawDataLines) _rawDisplayQueue.Dequeue();
             try
             {
-                if (_parser?.TryParse(out reading) != true || reading == null)
-                    break;
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Trace.TraceError($"[Parser.TryParse] {ex}");
-                break; // parser 内部状态可能脏，跳出，下次 Feed 再继续
-            }
-
-            try
-            {
-                var processed = _sensorAdapter?.Process(reading) ?? reading;
-
-                // 正交度校正（在发布之前应用）
-                if (IsOrthogonalityCorrectionEnabled && ActiveOrthogonalityProfile != null)
+                _parser.Feed(data, 0, data.Length);
+                while (_parser.TryParse(out var reading))
                 {
-                    processed.OriginalChannelValues = processed.ChannelValues.ToArray();
-                    processed = _orthogonalityCorrector.ApplyToReading(
-                        ActiveOrthogonalityProfile, SecondOrthogonalityProfile, processed);
+                    if (reading is null) continue;
+                    var raw = _sensorAdapter?.Process(reading) ?? reading;
+                    _parsedCount++;
+                    // 原始值先进入独立总线；任何可选改正失败均不能中断保存。
+                    _dataBus.PublishReading(raw);
+                    if (IsOrthogonalityCorrectionEnabled)
+                    {
+                        try
+                        {
+                            if (ActiveOrthogonalityProfile is null)
+                                throw new ArgumentException("请选择第一组改正参数");
+                            var first = ParseChannelSelection(FirstOrthogonalityChannelsText, raw.ChannelValues.Length);
+                            var second = SecondOrthogonalityProfile is null ? null
+                                : ParseChannelSelection(SecondOrthogonalityChannelsText, raw.ChannelValues.Length);
+                            ValidateCorrectionUnits(first);
+                            if (second != null) ValidateCorrectionUnits(second);
+                            var corrected = _orthogonalityCorrector.ApplyToReading(
+                                ActiveOrthogonalityProfile, SecondOrthogonalityProfile, raw.DeepClone(), first, second);
+                            _dataBus.PublishProcessedReading(corrected);
+                        }
+                        catch (Exception ex) { ReportError("改正未应用，原始数据已保留: " + ex.Message); }
+                    }
                 }
-
-                // 发布到数据总线（供实时图表等消费者使用）
-                _dataBus.PublishReading(processed);
+                if (_parser is IParserDiagnostics diagnostics)
+                {
+                    var rejected = diagnostics.RejectedFrameCount - _lastParserRejectedCount;
+                    _parseErrors += rejected;
+                    _lastParserRejectedCount = diagnostics.RejectedFrameCount;
+                    if (rejected > 0 && diagnostics.LastError is { } error) ReportError(error);
+                }
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Trace.TraceError(
-                    $"[ProcessReading] channels={reading?.ChannelValues?.Length} " +
-                    $"sensorType={reading?.SensorType} ortho={IsOrthogonalityCorrectionEnabled} ex={ex}");
-                // 单帧失败，继续下一帧
+                _parseErrors++;
+                _parser.Reset();
+                ReportError("接收解析失败，已重置解析器: " + ex.Message);
             }
+            if (Interlocked.Exchange(ref _receiveUiPending, 1) == 0) OnUi(FlushReceiveStatus);
         }
+    }
+
+    private void FlushReceiveStatus()
+    {
+        lock (_receiveGate)
+        {
+            while (_rawDisplayQueue.Count > 0) RawDataLines.Add(_rawDisplayQueue.Dequeue());
+            while (RawDataLines.Count > MaxRawDataLines) RawDataLines.RemoveAt(0);
+            ReceivedByteCount = _receivedBytes;
+            ParsedReadingCount = _parsedCount;
+            ParseErrorCount = _parseErrors;
+            Interlocked.Exchange(ref _receiveUiPending, 0);
+        }
+    }
+
+    private static int[] ParseChannelSelection(string text, int count)
+    {
+        var parts = text.Split([',', '，', ';', ' '], StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length != 3 || parts.Any(p => !int.TryParse(p, out _)))
+            throw new ArgumentException("请明确填写三个通道索引，例如 0,1,2");
+        var indices = parts.Select(int.Parse).ToArray();
+        if (indices.Distinct().Count() != 3 || indices.Any(i => i < 0 || i >= count))
+            throw new ArgumentException("改正通道索引必须唯一且在当前通道范围内");
+        return indices;
+    }
+
+    private void ValidateCorrectionUnits(int[] channels)
+    {
+        var units = channels.Select(i => i < _activeChannelUnits.Length ? _activeChannelUnits[i] : "").ToArray();
+        if (units.Distinct().Count() != 1 || units[0] is not ("nT" or "uT" or "µT" or "μT" or "mT" or "T"))
+            throw new ArgumentException("改正的三个通道必须具有相同磁场单位，不能包含温度或其他辅助通道");
     }
 
     private void OnErrorOccurred(object? sender, string message)
     {
-        Application.Current?.Dispatcher.BeginInvoke(() =>
-        {
-            StatusMessage = $"错误: {message}";
-        });
+        if (ReferenceEquals(sender, _connection)) ReportError(message);
     }
 
     private void OnConnectionStateChanged(object? sender, bool connected)
     {
-        Application.Current?.Dispatcher.BeginInvoke(() =>
+        if (!connected && ReferenceEquals(sender, _connection))
+            lock (_receiveGate) _parser?.Reset();
+        OnUi(() =>
         {
+            if (!ReferenceEquals(sender, _connection)) return;
             IsConnected = connected;
-            StatusMessage = connected ? "已连接" : "已断开";
+            StatusMessage = connected ? "已连接 · 原始数据自动保存" : "连接中断 · 停止后可结束当前会话";
         });
+    }
+
+    private void ReportError(string message)
+    {
+        if (Interlocked.Exchange(ref _lastReportedError, message) == message) return;
+        System.Diagnostics.Trace.TraceError(message);
+        OnUi(() => { LastError = message; StatusMessage = message; });
+    }
+
+    private static void OnUi(Action action)
+    {
+        if (Application.Current?.Dispatcher is { } dispatcher && !dispatcher.CheckAccess())
+            dispatcher.BeginInvoke(action);
+        else action();
     }
 
     // ---- 协议配置管理 ----
@@ -389,6 +441,7 @@ public partial class ConnectionViewModel : ObservableObject
     {
         try
         {
+            ProtocolConfig.Validate();
             Directory.CreateDirectory(ProtocolConfigDir);
 
             // 过滤非法文件名字符，防止路径穿越
@@ -423,7 +476,7 @@ public partial class ConnectionViewModel : ObservableObject
     {
         if (SelectedSavedProtocol != null)
         {
-            ProtocolConfig = SelectedSavedProtocol;
+            ProtocolConfig = ProtocolConfig.FromJson(SelectedSavedProtocol.ToJson())!;
             SyncSegmentsFromConfig();
             StatusMessage = $"已加载协议: {ProtocolConfig.Name}";
         }
@@ -451,6 +504,8 @@ public partial class ConnectionViewModel : ObservableObject
         if (field != null)
         {
             ProtocolConfig.FieldMappings.Remove(field);
+            int index = 0;
+            foreach (var mapping in ProtocolConfig.FieldMappings.OrderBy(f => f.ChannelIndex)) mapping.ChannelIndex = index++;
             OnPropertyChanged(nameof(ProtocolConfig));
         }
     }
@@ -488,6 +543,8 @@ public partial class ConnectionViewModel : ObservableObject
         if (seg != null)
         {
             ProtocolSegments.Remove(seg);
+            int index = 0;
+            foreach (var field in ProtocolSegments.Where(s => s.Type == SegmentType.DataField).OrderBy(s => s.ChannelIndex)) field.ChannelIndex = index++;
             SyncSegmentsToConfig();
         }
     }
@@ -651,6 +708,7 @@ public partial class ConnectionViewModel : ObservableObject
         SavedProtocols.Add(ProtocolConfig.CreateCct5Gradiometer());
         SavedProtocols.Add(ProtocolConfig.CreateZdzC08());
         SavedProtocols.Add(ProtocolConfig.CreateZdzC08MagneticOnly());
+        SavedProtocols.Add(ProtocolConfig.CreateCtmbs3X2000());
 
         // 从文件加载
         if (Directory.Exists(ProtocolConfigDir))

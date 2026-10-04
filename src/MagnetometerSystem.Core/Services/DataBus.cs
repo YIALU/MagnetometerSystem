@@ -44,6 +44,9 @@ public class DataBus
     /// <summary>新的读数到达时触发</summary>
     public event Action<MagnetometerReading>? ReadingReceived;
 
+    /// <summary>仅供显示的处理结果；原始存储消费者不订阅此事件。</summary>
+    public event Action<MagnetometerReading>? ProcessedReadingReceived;
+
     /// <summary>
     /// 采集即将开始（连接打开之前触发）。存储等关键消费者在此 await 完成准备工作
     /// （如创建会话、就绪 ActiveSessionId），确保连接打开后第一条数据到达时下游已就绪，不丢数据。
@@ -55,6 +58,11 @@ public class DataBus
 
     /// <summary>采集停止</summary>
     public event Action? AcquisitionStopped;
+
+    /// <summary>数据源停止后，等待存储消费者将尾批落库并结束会话。</summary>
+    public event Func<Task>? AcquisitionStopping;
+
+    public ConnectionConfig? AcquisitionConnectionConfig { get; private set; }
 
     /// <summary>会话开始时触发，参数为 sessionId</summary>
     public event Action<string>? SessionStarted;
@@ -73,7 +81,17 @@ public class DataBus
 
     public void PublishReading(MagnetometerReading reading)
     {
-        var handlers = ReadingReceived;
+        PublishToSubscribers(ReadingReceived, reading);
+    }
+
+    public void PublishProcessedReading(MagnetometerReading reading)
+    {
+        PublishToSubscribers(ProcessedReadingReceived, reading);
+    }
+
+    private static void PublishToSubscribers(Action<MagnetometerReading>? handlers, MagnetometerReading reading)
+    {
+        ArgumentNullException.ThrowIfNull(reading);
         if (handlers == null) return;
 
         // 逐订阅者隔离：任一订阅者（如实时图表）抛异常，不影响其余订阅者（尤其是存储）被调用。
@@ -81,7 +99,7 @@ public class DataBus
         {
             try
             {
-                handler(reading);
+                handler(reading.DeepClone());
             }
             catch (Exception ex)
             {
@@ -94,8 +112,9 @@ public class DataBus
     /// 触发"采集即将开始"，按订阅顺序逐个 await。调用方应在连接打开前 await 本方法，
     /// 使会话等准备工作先于数据到达完成。
     /// </summary>
-    public async Task PublishAcquisitionStartingAsync(SensorConfig config)
+    public async Task PublishAcquisitionStartingAsync(SensorConfig config, ConnectionConfig? connectionConfig = null)
     {
+        AcquisitionConnectionConfig = connectionConfig;
         var handlers = AcquisitionStarting;
         if (handlers == null) return;
         foreach (Func<SensorConfig, Task> handler in handlers.GetInvocationList())
@@ -110,6 +129,14 @@ public class DataBus
     public void PublishAcquisitionStopped()
     {
         AcquisitionStopped?.Invoke();
+    }
+
+    public async Task PublishAcquisitionStoppingAsync()
+    {
+        var handlers = AcquisitionStopping;
+        if (handlers == null) return;
+        foreach (Func<Task> handler in handlers.GetInvocationList())
+            await handler();
     }
 
     public void PublishSessionStarted(string sessionId)

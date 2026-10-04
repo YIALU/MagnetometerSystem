@@ -9,6 +9,13 @@ public enum CommandEncoding
 
     /// <summary>二进制帧模式：[帧头?] + [按参数编码的数据帧] + [校验?] + [帧尾?]</summary>
     BinaryFrame,
+
+    /// <summary>
+    /// CTMBS-3-X2000 文本帧模式：构造
+    /// GET /&lt;len&gt;+&lt;deviceId&gt;+&lt;mnemonic&gt;[+&lt;param&gt;...] /http/1.1，
+    /// &lt;len&gt; 为自参考长度（§3.3）。由 <see cref="Communication.Ctmbs3X2000FrameBuilder"/> 构建。
+    /// </summary>
+    CtmbsRequest,
 }
 
 public enum ChecksumKind
@@ -104,6 +111,10 @@ public class DeviceCommand
     // ASCII 模板用
     public string Template { get; set; } = "";
     public bool AppendNewline { get; set; } = true;
+
+    /// <summary>显式响应匹配；留空仅显示收到的数据，不确认设备执行成功。</summary>
+    public string ExpectedResponse { get; set; } = "";
+    public bool ExpectedResponseIsHex { get; set; }
 
     // BinaryFrame 用（全部可选）
     public string FrameHeader { get; set; } = "";  // hex, e.g. "AA 55"

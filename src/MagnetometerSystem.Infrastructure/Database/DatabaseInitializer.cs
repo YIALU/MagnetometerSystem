@@ -11,7 +11,14 @@ public class DatabaseInitializer
 {
     private readonly string _dbPath;
 
-    public string ConnectionString => $"Data Source={_dbPath}";
+    public string ConnectionString => new SqliteConnectionStringBuilder
+    {
+        DataSource = _dbPath,
+        ForeignKeys = true,
+        DefaultTimeout = 2
+    }.ToString();
+
+    public string? LegacyDataWarning { get; private set; }
 
     public DatabaseInitializer()
     {
@@ -39,34 +46,46 @@ public class DatabaseInitializer
         await connection.ExecuteAsync("PRAGMA journal_mode=WAL;");
         await connection.ExecuteAsync("PRAGMA foreign_keys=ON;");
 
-        // 检测旧 schema：若 readings 表存在但缺少 data 列（旧版固定列设计），
-        // 直接 drop 重建。旧采集数据无法迁移到新协议驱动模型 —— 用户已确认"旧库不保留"。
-        await DropLegacyTablesIfNeededAsync(connection);
+        LegacyDataWarning = await PreserveLegacyTablesIfNeededAsync(connection);
 
         await connection.ExecuteAsync(LoadSchemaSql());
+        await EnsureSessionColumnAsync(connection, "channel_units", "TEXT");
+        await EnsureSessionColumnAsync(connection, "legacy_data_table", "TEXT");
     }
 
-    private static async Task DropLegacyTablesIfNeededAsync(SqliteConnection conn)
+    private static async Task EnsureSessionColumnAsync(SqliteConnection conn, string name, string type)
+    {
+        var exists = await conn.ExecuteScalarAsync<long>(
+            "SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name = @Name", new { Name = name });
+        if (exists == 0) await conn.ExecuteAsync($"ALTER TABLE sessions ADD COLUMN {name} {type};");
+    }
+
+    private static async Task<string?> PreserveLegacyTablesIfNeededAsync(SqliteConnection conn)
     {
         var readingsExists = await conn.ExecuteScalarAsync<long>(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='readings'") > 0;
-        if (!readingsExists) return;
+        if (!readingsExists) return null;
 
         var hasDataColumn = await conn.ExecuteScalarAsync<long>(
             "SELECT COUNT(*) FROM pragma_table_info('readings') WHERE name='data'") > 0;
-        if (hasDataColumn) return;
+        if (hasDataColumn) return null;
 
-        // 旧 schema —— 丢弃 readings/corrected_readings/schema_version；sessions 元数据保留
-        // （会显示为 0 条数据，用户可手动删除残留 session）
-        System.Diagnostics.Trace.TraceWarning(
-            "[DatabaseInitializer] 检测到旧 schema 的 readings 表（缺 data 列），将丢弃并重建。原始采集数据无法读取。");
-
-        await conn.ExecuteAsync("DROP TABLE IF EXISTS corrected_readings;");
-        await conn.ExecuteAsync("DROP TABLE IF EXISTS readings;");
-        await conn.ExecuteAsync("DROP TABLE IF EXISTS schema_version;");
-
-        // 清空残留 sessions 的 total_readings 计数
-        await conn.ExecuteAsync("UPDATE sessions SET total_readings = 0;");
+        await EnsureSessionColumnAsync(conn, "legacy_data_table", "TEXT");
+        var suffix = Guid.NewGuid().ToString("N");
+        var legacyTable = $"readings_legacy_{suffix}";
+        var correctedExists = await conn.ExecuteScalarAsync<long>(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='corrected_readings'") > 0;
+        using var tx = conn.BeginTransaction();
+        await conn.ExecuteAsync($"ALTER TABLE readings RENAME TO {legacyTable};", transaction: tx);
+        if (correctedExists)
+            await conn.ExecuteAsync($"ALTER TABLE corrected_readings RENAME TO corrected_readings_legacy_{suffix};", transaction: tx);
+        await conn.ExecuteAsync(
+            "UPDATE sessions SET legacy_data_table = @Table, notes = COALESCE(notes, '') || @Note",
+            new { Table = legacyTable, Note = $"\n旧版原始数据完整保留于 {legacyTable}，需迁移后回放。" }, tx);
+        tx.Commit();
+        var warning = $"检测到旧版数据，已完整保留在 {legacyTable}。旧会话暂不能回放或导出，未删除原始数据。";
+        System.Diagnostics.Trace.TraceWarning(warning);
+        return warning;
     }
 
     private static string LoadSchemaSql()

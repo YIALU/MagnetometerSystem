@@ -29,6 +29,11 @@ public interface IDataExporter
 /// </summary>
 public class ExportOptions
 {
+    public ExportDataSource Source { get; set; } = ExportDataSource.Raw;
+    public string? CorrectionProfileId { get; set; }
+    public bool IncludeUnits { get; set; }
+    /// <summary>null 保留 round-trip 全精度，否则使用指定小数位。</summary>
+    public int? DecimalPlaces { get; set; }
     /// <summary>
     /// 要导出的通道索引。null 或空数组表示导出全部通道。
     /// 例如: [0, 2] 表示仅导出第 1 和第 3 通道
@@ -47,3 +52,5 @@ public class ExportOptions
     /// <summary>是否包含 CSV 头行</summary>
     public bool IncludeHeader { get; set; } = true;
 }
+
+public enum ExportDataSource { Raw, Corrected, RawAndCorrected }

@@ -1,0 +1,93 @@
+<UserControl x:Class="MagnetometerSystem.App.Views.AcquisitionWorkspaceView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:views="clr-namespace:MagnetometerSystem.App.Views"
+             Background="{DynamicResource WorkspaceBackground}">
+    <ScrollViewer x:Name="WorkspaceViewport" Margin="16" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+    <Grid Height="{Binding ActualHeight, ElementName=WorkspaceViewport}" MinHeight="{Binding WorkspaceLayout.MinimumWorkspaceHeight}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/><RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        <DockPanel Margin="0,0,0,12">
+            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                <Button Command="{Binding WorkspaceLayout.ToggleFocusCommand}" Margin="6,0">
+                    <Button.Style><Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                        <Setter Property="Content" Value="专注曲线"/>
+                        <Style.Triggers><DataTrigger Binding="{Binding WorkspaceLayout.IsFocused}" Value="True">
+                            <Setter Property="Content" Value="恢复面板布局"/>
+                        </DataTrigger></Style.Triggers>
+                    </Style></Button.Style>
+                </Button>
+                <Button Content="会话与导出" Command="{Binding NavigateToSessionListCommand}"/>
+            </StackPanel>
+            <StackPanel><TextBlock Text="采集工作台" FontSize="22" FontWeight="SemiBold"/>
+                <TextBlock Text="协议驱动 · 原始数据自动保存 · 暂停曲线不停止采集" Foreground="{DynamicResource MutedBrush}" FontSize="12"/>
+            </StackPanel>
+        </DockPanel>
+        <Border Grid.Row="1" Style="{StaticResource WorkspacePanel}" Padding="10,7" Margin="0,0,0,8">
+            <DockPanel>
+                <Button DockPanel.Dock="Right" Command="{Binding ConnectionVM.ConnectCommand}" Margin="12,0,0,0">
+                    <Button.Style><Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                        <Setter Property="Content" Value="连接并自动保存"/>
+                        <Style.Triggers><DataTrigger Binding="{Binding ConnectionVM.IsAcquiring}" Value="True">
+                            <Setter Property="Content" Value="停止采集并断开"/>
+                        </DataTrigger></Style.Triggers>
+                    </Style></Button.Style>
+                </Button>
+                <StackPanel>
+                    <WrapPanel><TextBlock Text="{Binding ConnectionVM.StatusMessage}" Margin="0,0,16,0"/>
+                        <TextBlock Text="{Binding SessionListVM.StorageStatus}" Foreground="{DynamicResource AccentBrush}"/>
+                    </WrapPanel>
+                    <TextBlock Text="{Binding SessionListVM.StorageError}" Foreground="#B42318" TextWrapping="Wrap"/>
+                    <TextBlock Text="{Binding ConnectionVM.LastError}" Foreground="#B42318" TextWrapping="Wrap"/>
+                </StackPanel>
+            </DockPanel>
+        </Border>
+        <Expander Grid.Row="2" Header="连接与协议" IsExpanded="{Binding WorkspaceLayout.ConnectionExpanded}" Margin="0,0,0,6">
+            <WrapPanel Margin="10" DataContext="{Binding ConnectionVM}">
+                <StackPanel Margin="0,0,12,6"><TextBlock Text="方式"/><ComboBox Width="90" ItemsSource="{Binding ConnectionTypes}" SelectedItem="{Binding SelectedConnectionType}"/></StackPanel>
+                <StackPanel Margin="0,0,12,6"><TextBlock Text="串口"/><ComboBox Width="100" IsEditable="True" ItemsSource="{Binding AvailablePorts}" Text="{Binding SelectedPort, UpdateSourceTrigger=LostFocus}"/></StackPanel>
+                <StackPanel Margin="0,0,12,6"><TextBlock Text="波特率"/><ComboBox Width="110" IsEditable="True" ItemsSource="{Binding BaudRates}" Text="{Binding BaudRate, UpdateSourceTrigger=LostFocus}"/></StackPanel>
+                <StackPanel Margin="0,0,12,6"><TextBlock Text="TCP 地址"/><TextBox Width="130" Text="{Binding IpAddress, UpdateSourceTrigger=LostFocus}"/></StackPanel>
+                <StackPanel Margin="0,0,12,6"><TextBlock Text="TCP 端口"/><TextBox Width="70" Text="{Binding Port, UpdateSourceTrigger=LostFocus}"/></StackPanel>
+                <StackPanel Margin="0,0,12,6"><TextBlock Text="标称采样率 (Hz)"/><TextBox Width="105" Text="{Binding SampleRate, UpdateSourceTrigger=LostFocus}"/></StackPanel>
+                <StackPanel Margin="0,0,12,6"><TextBlock Text="协议预设"/><ComboBox Width="170" ItemsSource="{Binding SavedProtocols}" SelectedItem="{Binding SelectedSavedProtocol}" DisplayMemberPath="Name"/></StackPanel>
+                <Button Content="加载预设" Command="{Binding LoadSelectedProtocolCommand}" VerticalAlignment="Bottom" Margin="0,0,6,6"/>
+                <Button Content="全部参数与协议编辑" Command="{Binding DataContext.NavigateToConnectionCommand, RelativeSource={RelativeSource AncestorType=UserControl}}" VerticalAlignment="Bottom" Margin="0,0,0,6"/>
+            </WrapPanel>
+        </Expander>
+        <Expander Grid.Row="3" IsExpanded="{Binding WorkspaceLayout.StorageExpanded}" Margin="0,0,0,6">
+            <Expander.Header><WrapPanel><TextBlock Text="采集与存储" Margin="0,0,16,0"/>
+                <TextBlock Foreground="{DynamicResource MutedBrush}" FontSize="12"><Run Text="已落库 "/><Run Text="{Binding SessionListVM.SavedReadingCount, Mode=OneWay}"/><Run Text="　待写入 "/><Run Text="{Binding SessionListVM.PendingReadingCount, Mode=OneWay}"/></TextBlock>
+            </WrapPanel></Expander.Header>
+            <WrapPanel Margin="10">
+                <TextBlock Margin="0,0,20,0"><Run Text="已解析 "/><Run Text="{Binding ConnectionVM.ParsedReadingCount, Mode=OneWay}"/></TextBlock>
+                <TextBlock Margin="0,0,20,0"><Run Text="接收字节 "/><Run Text="{Binding ConnectionVM.ReceivedByteCount, Mode=OneWay}"/></TextBlock>
+                <TextBlock Margin="0,0,20,0"><Run Text="解析异常 "/><Run Text="{Binding ConnectionVM.ParseErrorCount, Mode=OneWay}"/></TextBlock>
+                <Button Content="重试待写批次" Command="{Binding SessionListVM.RetryStorageCommand}"/>
+            </WrapPanel>
+        </Expander>
+        <views:RealtimeChartView Grid.Row="4" DataContext="{Binding RealtimeChartVM}"/>
+        <Expander Grid.Row="5" IsExpanded="{Binding WorkspaceLayout.TerminalExpanded}" Margin="0,6,0,0">
+            <Expander.Header><WrapPanel><TextBlock Text="收发调试" Margin="0,0,16,0"/>
+                <TextBlock Text="{Binding DeviceCommandVM.WriteStatus}" Foreground="{DynamicResource MutedBrush}" FontSize="12" Margin="0,0,16,0"/>
+                <TextBlock Text="{Binding DeviceCommandVM.ResponseStatus}" Foreground="{DynamicResource MutedBrush}" FontSize="12"/>
+            </WrapPanel></Expander.Header>
+            <Grid Margin="8" Height="125" DataContext="{Binding DeviceCommandVM}">
+                <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                <TextBox Text="{Binding CommunicationLog, Mode=OneWay}" IsReadOnly="True" FontFamily="Consolas" FontSize="12" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"/>
+                <DockPanel Grid.Row="1" Margin="0,6,0,0">
+                    <Button DockPanel.Dock="Right" Content="发送" Command="{Binding SendFreeCommandCommand}" Margin="6,0,0,0"/>
+                    <Button DockPanel.Dock="Right" Content="命令组与参数" Command="{Binding DataContext.NavigateToDeviceCommandCommand, RelativeSource={RelativeSource AncestorType=UserControl}}" Margin="6,0,0,0"/>
+                    <CheckBox DockPanel.Dock="Right" Content="HEX" IsChecked="{Binding FreeIsHexMode}" Margin="10,0" VerticalAlignment="Center"/>
+                    <ComboBox DockPanel.Dock="Right" ItemsSource="{Binding FreeLineEndings}" SelectedItem="{Binding FreeLineEnding}" Width="80" Margin="8,0" ToolTip="发送行尾：None 表示不追加"/>
+                    <TextBox Text="{Binding FreeCommandText, UpdateSourceTrigger=PropertyChanged}" ToolTip="输入 ASCII 命令或空格分隔的 HEX 字节"/>
+                </DockPanel>
+                <TextBlock Grid.Row="2" Text="写出表示传输已完成；设备应答和执行结果需按协议确认。" FontSize="12" Foreground="{DynamicResource MutedBrush}" Margin="0,5,0,0"/>
+            </Grid>
+        </Expander>
+    </Grid>
+    </ScrollViewer>
+</UserControl>

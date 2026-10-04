@@ -36,6 +36,9 @@ public class FieldMapping
     /// <summary>字段名称（如 "X轴", "Y轴", "Total"）</summary>
     public string Name { get; set; } = string.Empty;
 
+    /// <summary>通道物理单位；无量纲字段可留空。</summary>
+    public string Unit { get; set; } = "nT";
+
     /// <summary>在数据区中的字节偏移（从数据区起始算，不含帧头/长度字节）</summary>
     public int ByteOffset { get; set; }
 
@@ -81,6 +84,20 @@ public enum ProtocolCategory
 }
 
 /// <summary>
+/// 解析器种类：决定 <see cref="Protocol.ParserFactory"/> 用哪类解析器。
+/// 默认 <see cref="Auto"/> 按 <see cref="ProtocolConfig.Category"/> 分发；
+/// 固有协议若帧格式无法用可配置解析器表达，在此显式指名专用解析器。
+/// </summary>
+public enum ParserKind
+{
+    /// <summary>按 Category 分发到 ConfigurableAscii/BinaryParser</summary>
+    Auto,
+
+    /// <summary>CTMBS-3-X2000 文本命令/响应协议专用解析器</summary>
+    Ctmbs3X2000,
+}
+
+/// <summary>
 /// 通信协议配置：用户可自由定义帧格式、字段映射等，可保存/加载
 /// </summary>
 public class ProtocolConfig
@@ -94,6 +111,9 @@ public class ProtocolConfig
     /// <summary>协议类别</summary>
     public ProtocolCategory Category { get; set; } = ProtocolCategory.Ascii;
 
+    /// <summary>解析器种类（默认 Auto，按 Category 分发）。固有协议可指定专用解析器。</summary>
+    public ParserKind ParserKind { get; set; } = ParserKind.Auto;
+
     // ==== ASCII 协议参数 ====
 
     /// <summary>字段分隔符（逗号、空格、制表符等）</summary>
@@ -104,6 +124,9 @@ public class ProtocolConfig
 
     /// <summary>是否有表头行（首行跳过）</summary>
     public bool AsciiHasHeader { get; set; } = false;
+
+    /// <summary>跳过的起始行数；兼容 AsciiHasHeader，取两者较大值。</summary>
+    public int AsciiSkipLines { get; set; }
 
     // ==== 二进制协议参数 ====
 
@@ -170,9 +193,13 @@ public class ProtocolConfig
 
     /// <summary>从协议配置派生的通道数量</summary>
     [JsonIgnore]
-    public int DerivedChannelCount => UsesSegments
-        ? Segments.Count(s => s.Type == SegmentType.DataField)
-        : FieldMappings.Count;
+    public int DerivedChannelCount => ParserKind switch
+    {
+        ParserKind.Ctmbs3X2000 => 4, // D / H / Z / T
+        _ => Category == ProtocolCategory.Binary && UsesSegments
+            ? Segments.Count(s => s.Type == SegmentType.DataField)
+            : FieldMappings.Count,
+    };
 
     /// <summary>
     /// 从协议配置派生的通道名称列表。
@@ -181,11 +208,70 @@ public class ProtocolConfig
     /// 用户在编辑器里上下调整段顺序后名字与数据会错位（图表标题错、DB 名值错配）。
     /// </summary>
     [JsonIgnore]
-    public List<string> DerivedChannelNames => UsesSegments
-        ? Segments.Where(s => s.Type == SegmentType.DataField)
-                  .OrderBy(s => s.ChannelIndex)
-                  .Select(s => s.Name).ToList()
-        : FieldMappings.OrderBy(f => f.ChannelIndex).Select(f => f.Name).ToList();
+    public List<string> DerivedChannelNames => ParserKind switch
+    {
+        ParserKind.Ctmbs3X2000 => ["D", "H", "Z", "T"],
+        _ => Category == ProtocolCategory.Binary && UsesSegments
+            ? Segments.Where(s => s.Type == SegmentType.DataField)
+                      .OrderBy(s => s.ChannelIndex)
+                      .Select(s => s.Name).ToList()
+            : FieldMappings.OrderBy(f => f.ChannelIndex).Select(f => f.Name).ToList(),
+    };
+
+    [JsonIgnore]
+    public List<string> DerivedChannelUnits => ParserKind == ParserKind.Ctmbs3X2000
+        ? ["nT", "nT", "nT", "°C"]
+        : Category == ProtocolCategory.Binary && UsesSegments
+            ? Segments.Where(s => s.Type == SegmentType.DataField).OrderBy(s => s.ChannelIndex).Select(s => s.Unit).ToList()
+            : FieldMappings.OrderBy(f => f.ChannelIndex).Select(f => f.Unit).ToList();
+
+    /// <summary>连接前校验，避免将缺失、重叠或非数值通道静默写成零。</summary>
+    public void Validate()
+    {
+        if (ParserKind == ParserKind.Ctmbs3X2000) return;
+        if (!Enum.IsDefined(Category) || !Enum.IsDefined(ParserKind))
+            throw new ArgumentException("不支持的协议类别或解析器");
+        if (AsciiSkipLines < 0) throw new ArgumentException("跳过行数不能为负数");
+        if (Category == ProtocolCategory.Ascii && AsciiLineEnding is not ("\r\n" or "\n" or "\r"))
+            throw new ArgumentException("ASCII 行结束符应为 CRLF、LF 或 CR");
+        var indices = Category == ProtocolCategory.Binary && UsesSegments
+            ? Segments.Where(s => s.Type == SegmentType.DataField).Select(s => s.ChannelIndex).ToArray()
+            : FieldMappings.Select(f => f.ChannelIndex).ToArray();
+        if (!indices.Order().SequenceEqual(Enumerable.Range(0, indices.Length)))
+            throw new ArgumentException("通道索引必须从 0 连续且唯一，删除字段后请重新排序");
+        if (FieldMappings.Any(f => f.ByteOffset < 0 || !double.IsFinite(f.Scale) || !double.IsFinite(f.Offset)))
+            throw new ArgumentException("字段位置、倍率或偏移无效");
+        if (Category != ProtocolCategory.Binary) return;
+        if (UsesSegments)
+        {
+            ComputeSegmentOffsets();
+            if (TotalFrameLength <= 0 || TotalFrameLength > 131072)
+                throw new ArgumentException("二进制帧长度必须为 1~131072 字节");
+            foreach (var kind in new[] { SegmentType.Header, SegmentType.Tail, SegmentType.LengthField, SegmentType.Checksum })
+                if (Segments.Count(s => s.Type == kind) > 1) throw new ArgumentException($"只支持一个 {kind} 段");
+            foreach (var s in Segments)
+            {
+                if (s.ByteCount <= 0 || !double.IsFinite(s.Scale) || !double.IsFinite(s.Offset))
+                    throw new ArgumentException($"帧段 {s.Name} 的长度、倍率或偏移无效");
+                if (s.Type == SegmentType.LengthField && s.ByteCount is not (1 or 2))
+                    throw new ArgumentException("长度字段必须为 1 或 2 字节");
+                if (s.Type == SegmentType.DataField && s.ByteCount != FrameSegment.GetByteCountForDataType(s.DataType))
+                    throw new ArgumentException($"字段 {s.Name} 的字节数不匹配类型");
+                if ((s.Type is SegmentType.Header or SegmentType.Tail || s.ValidateFixedValue)
+                    && HexToBytes(s.FixedHexValue).Length != s.ByteCount)
+                    throw new ArgumentException($"帧段 {s.Name} 的固定值长度不匹配");
+                if (s.Type == SegmentType.Checksum && (s.ChecksumStartIndex < 0 || s.ChecksumStartIndex >= Segments.IndexOf(s)))
+                    throw new ArgumentException("校验范围起始段必须位于校验段之前");
+                if (s.Type == SegmentType.Checksum && s.ByteCount != (s.ChecksumAlgorithm == ChecksumAlgorithm.CRC16 ? 2 : 1))
+                    throw new ArgumentException("CRC16 校验段必须为 2 字节，其他校验段必须为 1 字节");
+            }
+            if (Segments.Any(s => s.Type == SegmentType.Header && s != Segments[0])
+                || Segments.Any(s => s.Type == SegmentType.Tail && s != Segments[^1]))
+                throw new ArgumentException("帧头必须在首段，帧尾必须在末段");
+        }
+        else if (HasLengthByte && LengthByteCount is not (1 or 2))
+            throw new ArgumentException("长度字段必须为 1 或 2 字节");
+    }
 
     // ==== 辅助方法 ====
 
@@ -479,9 +565,34 @@ public class ProtocolConfig
     }
 
     /// <summary>
+    /// 创建 CTMBS-3-X2000 台站式三分量数采（eq_precursors）固有协议。
+    /// 走 TCP 端口 81，请求帧 GET /&lt;len&gt;+&lt;deviceId&gt;+&lt;mnemonic&gt;[+params] /http/1.1
+    /// （自参考长度，见 §3.3）；实时数据帧 $&lt;L&gt;\n&lt;L digits&gt;&lt;payload&gt;\nack\n。
+    /// 解析为 D/H/Z/T 四通道读数。内置命令仅含实时数据流所需：lin / dat+0 / stp。
+    /// 需先 lin 登录再 dat+0 启动推送；登录默认 administrator / 01234567。
+    /// </summary>
+    public static ProtocolConfig CreateCtmbs3X2000()
+    {
+        var config = new ProtocolConfig
+        {
+            Name = "CTMBS-3-X2000 台站式三分量",
+            Category = ProtocolCategory.Ascii,
+            ParserKind = ParserKind.Ctmbs3X2000,
+            Commands = Ctmbs3X2000Commands.CreateGroups(),
+            Notes = "CTMBS-3-X2000 台站式三分量数采（eq_precursors）实时数据协议，TCP 端口 81。"
+                  + "实时帧 $<L>\\n<L digits><payload>\\nack\\n，payload = HHMMSS 台站码 仪器ID 采样率 "
+                  + "4 ch1..ch4码 ch1..ch4值，解析 D/H/Z/T 4 通道。"
+                  + "需先 lin 登录再 dat+0 启动 1Hz 推送，stp 停止。登录默认 administrator/01234567。"
+                  + "本期仅实时数据接收，HTTP 令牌下载与其余命令留待后续。",
+        };
+        return config;
+    }
+
+    /// <summary>
     /// 创建双三轴 ASCII 协议的默认配置（6通道）
     /// </summary>
-    public static ProtocolConfig CreateDefaultAsciiDualTriaxial()    {
+    public static ProtocolConfig CreateDefaultAsciiDualTriaxial()
+    {
         return new ProtocolConfig
         {
             Name = "双三轴 ASCII (逗号分隔)",
@@ -551,12 +662,18 @@ public class ProtocolConfig
         }
 
         // 数据字段（按 ByteOffset 排序）
+        int dataOffset = 0;
         foreach (var field in FieldMappings.OrderBy(f => f.ByteOffset))
         {
+            if (field.ByteOffset < dataOffset)
+                throw new ArgumentException("旧协议字段重叠，不能自动转换为顺序帧段");
+            if (field.ByteOffset > dataOffset)
+                Segments.Add(new FrameSegment { Type = SegmentType.Padding, Name = "保留区", ByteCount = field.ByteOffset - dataOffset });
             Segments.Add(new FrameSegment
             {
                 Type = SegmentType.DataField,
                 Name = field.Name,
+                Unit = field.Unit,
                 ByteCount = field.ByteSize,
                 DataType = field.DataType,
                 BigEndian = field.BigEndian,
@@ -564,16 +681,27 @@ public class ProtocolConfig
                 Scale = field.Scale,
                 Offset = field.Offset,
             });
+            dataOffset = field.ByteOffset + field.ByteSize;
         }
+        if (!HasLengthByte && FixedDataLength > dataOffset)
+            Segments.Add(new FrameSegment { Type = SegmentType.Padding, Name = "保留区", ByteCount = FixedDataLength - dataOffset });
 
         // 校验
         if (Checksum != ChecksumType.None)
         {
+            ComputeSegmentOffsets();
+            int checksumStartIndex = Segments.FindIndex(s => s.ComputedOffset == ChecksumStartOffset);
+            if (checksumStartIndex < 0)
+            {
+                // 字节起点落在字段内部时，段索引无法无损表达；继续使用兼容解析器。
+                Segments.Clear();
+                return;
+            }
             Segments.Add(new FrameSegment
             {
                 Type = SegmentType.Checksum,
                 Name = "校验",
-                ByteCount = 1,
+                ByteCount = Checksum == ChecksumType.CRC16 ? 2 : 1,
                 ChecksumAlgorithm = Checksum switch
                 {
                     ChecksumType.Xor => ChecksumAlgorithm.Xor,
@@ -581,7 +709,9 @@ public class ProtocolConfig
                     ChecksumType.CRC16 => ChecksumAlgorithm.CRC16,
                     _ => ChecksumAlgorithm.Xor,
                 },
-                ChecksumStartIndex = 0,
+                ChecksumStartIndex = checksumStartIndex,
+                Crc16Variant = Crc16Variant,
+                ChecksumBigEndian = ChecksumBigEndian,
             });
         }
 

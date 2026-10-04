@@ -17,6 +17,7 @@ public class ProtocolConfigChannelOrderTests
         // 模拟用户把 Z 段上移到第一位
         var config = new ProtocolConfig
         {
+            Category = ProtocolCategory.Binary,
             Segments =
             {
                 new() { Type = SegmentType.Header, Name = "帧头", ByteCount = 2, FixedHexValue = "AA55" },
@@ -60,6 +61,7 @@ public class ProtocolConfigChannelOrderTests
         // Arrange: 列表顺序 == ChannelIndex 顺序（未调过顺序的旧协议），应保持不变（向后兼容）
         var config = new ProtocolConfig
         {
+            Category = ProtocolCategory.Binary,
             Segments =
             {
                 new() { Type = SegmentType.DataField, Name = "X", ByteCount = 4, DataType = FieldDataType.Float, ChannelIndex = 0 },

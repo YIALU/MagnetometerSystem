@@ -119,11 +119,7 @@ public class ConfigurableAsciiParserTests
         var parser = new ConfigurableAsciiParser(config);
         FeedString(parser, "X,Y,Z\n50.0,60.0,70.0\n");
 
-        // First call should skip the header line
-        bool result1 = parser.TryParse(out var reading1);
-        Assert.False(result1);
-
-        // Second call should parse the data
+        // 表头已消费后继续解析同一收包中的数据，不能等下一次 Feed 才交付。
         bool result2 = parser.TryParse(out var reading2);
         Assert.True(result2);
         Assert.NotNull(reading2);

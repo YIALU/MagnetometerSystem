@@ -5,6 +5,8 @@
              Startup="OnStartup"
              Exit="OnExit">
     <Application.Resources>
-
+        <ResourceDictionary><ResourceDictionary.MergedDictionaries>
+            <ResourceDictionary Source="Themes/Workspace.xaml"/>
+        </ResourceDictionary.MergedDictionaries></ResourceDictionary>
     </Application.Resources>
 </Application>

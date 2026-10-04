@@ -24,6 +24,7 @@ public class SourceOption
 {
     public string Label { get; set; } = "";
     public string FormulaExpr { get; set; } = "";
+    public string Unit { get; set; } = "";
     public override string ToString() => Label;
 }
 
@@ -36,7 +37,18 @@ public class ComputedChannelDefinition : INotifyPropertyChanged
     private void Notify(string name) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 
     /// <summary>显示名称</summary>
-    public string Name { get; set; } = "Computed";
+    private string _name = "Computed";
+    public string Name
+    {
+        get => _name;
+        set { if (_name == value) return; _name = value; Notify(nameof(Name)); }
+    }
+    private string _unit = "nT";
+    public string Unit
+    {
+        get => _unit;
+        set { if (_unit == value) return; _unit = value; Notify(nameof(Unit)); }
+    }
 
     /// <summary>计算通道类型（仅作为元数据记录）</summary>
     public ComputedChannelType ChannelType { get; set; } = ComputedChannelType.Custom;
@@ -57,10 +69,20 @@ public class ComputedChannelDefinition : INotifyPropertyChanged
     }
 
     /// <summary>曲线颜色 (ARGB hex)</summary>
-    public string ColorHex { get; set; } = "#FF000000";
+    private string _colorHex = "#FF000000";
+    public string ColorHex
+    {
+        get => _colorHex;
+        set { if (_colorHex == value) return; _colorHex = value; Notify(nameof(ColorHex)); }
+    }
 
     /// <summary>是否启用</summary>
-    public bool Enabled { get; set; } = true;
+    private bool _enabled = true;
+    public bool Enabled
+    {
+        get => _enabled;
+        set { if (_enabled == value) return; _enabled = value; Notify(nameof(Enabled)); }
+    }
 
     /// <summary>线宽</summary>
     public float LineWidth { get; set; } = 1.5f;

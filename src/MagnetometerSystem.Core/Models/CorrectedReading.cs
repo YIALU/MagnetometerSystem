@@ -45,19 +45,24 @@ public class CorrectedReading
         double[] correctedValues,
         string correctionProfileId)
     {
+        ArgumentNullException.ThrowIfNull(original);
+        ArgumentNullException.ThrowIfNull(correctedValues);
+        if (correctedValues.Length != original.ChannelValues.Length || correctedValues.Any(v => !double.IsFinite(v)))
+            throw new ArgumentException("改正结果必须保留全部原始通道，并且只能包含有限数值。", nameof(correctedValues));
         var result = new CorrectedReading
         {
             OriginalReadingId = original.Id,
             SessionId = original.SessionId,
             Timestamp = original.Timestamp,
             CorrectionProfileId = correctionProfileId,
-            CorrectedValues = correctedValues,
+            CorrectedValues = (double[])correctedValues.Clone(),
             IsOrthogonalityCorrected = true,
             CorrectedAt = DateTime.UtcNow
         };
 
-        // 对三轴及以上通道数计算总场
-        if (correctedValues.Length >= 3)
+        // 仅兼容布局明确的旧三轴设备；任意协议必须显式定义总场计算通道。
+        if ((original.SensorType == SensorType.TriaxialFluxgate && correctedValues.Length == 3) ||
+            (original.SensorType == SensorType.DualTriaxialFluxgate && correctedValues.Length == 6))
         {
             result.CorrectedTotalField = Math.Sqrt(
                 correctedValues[0] * correctedValues[0] +

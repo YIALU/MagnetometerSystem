@@ -7,20 +7,26 @@ namespace MagnetometerSystem.Core.Storage;
 /// </summary>
 public interface IDataStorageService
 {
+    StorageWriteStatus WriteStatus { get; }
+    event Action<StorageWriteStatus>? WriteStatusChanged;
+
     /// <summary>开始新的采集会话</summary>
     Task<string> StartSessionAsync(string name, SensorConfig sensorConfig, ConnectionConfig connectionConfig);
 
     /// <summary>结束采集会话</summary>
     Task EndSessionAsync(string sessionId);
 
-    /// <summary>批量保存读数</summary>
+    /// <summary>批量入队；返回任务在事务成功提交后完成，失败时抛出并保留待写数据。</summary>
     Task SaveReadingsAsync(IEnumerable<MagnetometerReading> readings);
 
     /// <summary>
     /// 等待后台写入队列把当前已入队的读数全部落库（用于结束会话前确保计数准确）。
-    /// 超时后返回，不阻塞退出。
+    /// 超时或写入失败时抛出，不能将未保存数据视为已完成。
     /// </summary>
     Task WaitForPendingWritesAsync(int timeoutMs = 5000);
+
+    /// <summary>修复存储问题后重试内存中保留的失败批次。</summary>
+    Task RetryPendingWritesAsync();
 
     /// <summary>获取所有会话列表</summary>
     Task<IReadOnlyList<SessionInfo>> GetSessionsAsync();
@@ -64,8 +70,12 @@ public class SessionInfo
     public double SampleRate { get; set; }
     public int ChannelCount { get; set; }
     public string[] ChannelNames { get; set; } = [];
+    public string[] ChannelUnits { get; set; } = [];
+    public string? LegacyDataTable { get; set; }
     public string? DeviceInfo { get; set; }
     public ConnectionType ConnectionType { get; set; }
     public string? Notes { get; set; }
     public long TotalReadings { get; set; }
 }
+
+public sealed record StorageWriteStatus(long SavedReadings, long PendingReadings, string? LastError);

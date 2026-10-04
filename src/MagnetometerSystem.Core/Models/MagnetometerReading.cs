@@ -34,4 +34,17 @@ public class MagnetometerReading
 
     /// <summary>是否已做正交度校正</summary>
     public bool IsOrthogonalityCorrected { get; set; }
+
+    /// <summary>创建不共享通道数组的副本，供存储和可选处理消费者独立使用。</summary>
+    public MagnetometerReading DeepClone() => new()
+    {
+        Id = Id,
+        Timestamp = Timestamp,
+        SessionId = SessionId,
+        SensorType = SensorType,
+        ChannelValues = (double[])ChannelValues.Clone(),
+        OriginalChannelValues = OriginalChannelValues is null ? null : (double[])OriginalChannelValues.Clone(),
+        IsCalibrated = IsCalibrated,
+        IsOrthogonalityCorrected = IsOrthogonalityCorrected,
+    };
 }

@@ -14,25 +14,28 @@
 
     <DockPanel Margin="10">
         <!-- 顶部: 筛选栏 -->
-        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,10">
+        <WrapPanel DockPanel.Dock="Top" Margin="0,0,0,10">
             <TextBox Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
                      Width="200" Margin="0,0,10,0" VerticalContentAlignment="Center"
-                     ToolTip="搜索会话名称"/>
+                     ToolTip="搜索会话名称或备注"/>
             <TextBlock Text="从:" VerticalAlignment="Center" Margin="0,0,5,0"/>
             <DatePicker SelectedDate="{Binding FilterStartDate}" Width="130" Margin="0,0,10,0"/>
             <TextBlock Text="到:" VerticalAlignment="Center" Margin="0,0,5,0"/>
             <DatePicker SelectedDate="{Binding FilterEndDate}" Width="130" Margin="0,0,10,0"/>
-            <TextBlock Text="传感器:" VerticalAlignment="Center" Margin="0,0,5,0"/>
-            <ComboBox ItemsSource="{Binding SensorTypes}" SelectedValue="{Binding FilterSensorType}"
-                      Width="150" Margin="0,0,10,0" IsEditable="False">
-                <ComboBox.Style>
-                    <Style TargetType="ComboBox">
-                        <Setter Property="IsEditable" Value="False"/>
-                    </Style>
-                </ComboBox.Style>
-            </ComboBox>
             <Button Content="刷新" Command="{Binding RefreshSessionsCommand}" Padding="10,3"/>
-        </StackPanel>
+        </WrapPanel>
+
+        <Border DockPanel.Dock="Top" Background="#EFF6FF" Padding="10,6" Margin="0,0,0,8" CornerRadius="4">
+            <StackPanel>
+                <WrapPanel>
+                    <TextBlock Text="{Binding StorageStatus}" FontWeight="SemiBold" Margin="0,0,16,0"/>
+                    <TextBlock Text="{Binding SavedReadingCount, StringFormat=已落库 {0:N0} 条}" Margin="0,0,16,0"/>
+                    <TextBlock Text="{Binding PendingReadingCount, StringFormat=待保存 {0:N0} 条}" Margin="0,0,16,0"/>
+                    <Button Content="重试保存" Command="{Binding RetryStorageCommand}" Padding="8,2"/>
+                </WrapPanel>
+                <TextBlock Text="{Binding StorageError}" Foreground="#B91C1C" TextWrapping="Wrap"/>
+            </StackPanel>
+        </Border>
 
         <!-- 状态: 当前采集指示 -->
         <Border DockPanel.Dock="Top"
@@ -91,7 +94,7 @@
                 <DataGridTextColumn Header="会话名称" Binding="{Binding Name}" Width="200"/>
                 <DataGridTextColumn Header="开始时间" Binding="{Binding StartedAt, StringFormat=yyyy-MM-dd HH:mm:ss}" Width="160"/>
                 <DataGridTextColumn Header="结束时间" Binding="{Binding EndedAt, StringFormat=yyyy-MM-dd HH:mm:ss}" Width="160"/>
-                <DataGridTextColumn Header="传感器" Binding="{Binding SensorType}" Width="120"/>
+                <DataGridTextColumn Header="通道数" Binding="{Binding ChannelCount}" Width="70"/>
                 <DataGridTextColumn Header="采样率" Binding="{Binding SampleRate, StringFormat={}{0} Hz}" Width="80"/>
                 <DataGridTemplateColumn Header="数据点数" Width="130">
                     <DataGridTemplateColumn.CellTemplate>
@@ -146,28 +149,61 @@
             </DataGrid.ContextMenu>
         </DataGrid>
 
-            <!-- 批量校正面板 -->
-            <GroupBox Grid.Row="1" Header="批量校正" Margin="0,10,0,0" Padding="8">
+            <StackPanel Grid.Row="1">
+            <Expander Header="导出选项（原始数据 / 改正版本）" Margin="0,8,0,0" IsExpanded="False">
+                <StackPanel Margin="8">
+                    <WrapPanel Margin="0,0,0,6">
+                        <TextBlock Text="数据来源:" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <ComboBox ItemsSource="{Binding ExportSources}" SelectedItem="{Binding ExportSource}" Width="145" Margin="0,0,12,0"/>
+                        <CheckBox Content="包含表头" IsChecked="{Binding ExportIncludeHeader}" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                        <CheckBox Content="表头包含单位" IsChecked="{Binding ExportIncludeUnits}" VerticalAlignment="Center"/>
+                    </WrapPanel>
+                    <WrapPanel Margin="0,0,0,6">
+                        <TextBlock Text="开始时间:" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <TextBox Text="{Binding ExportStartTime, StringFormat=yyyy-MM-dd HH:mm:ss.fff, ValidatesOnExceptions=True}" Width="180" Margin="0,0,12,0" ToolTip="留空导出全部；格式 yyyy-MM-dd HH:mm:ss.fff"/>
+                        <TextBlock Text="结束时间:" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <TextBox Text="{Binding ExportEndTime, StringFormat=yyyy-MM-dd HH:mm:ss.fff, ValidatesOnExceptions=True}" Width="180" ToolTip="留空导出全部；格式 yyyy-MM-dd HH:mm:ss.fff"/>
+                    </WrapPanel>
+                    <WrapPanel>
+                        <TextBlock Text="通道索引:" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <TextBox Text="{Binding ExportChannelIndices}" Width="160" Margin="0,0,12,0" ToolTip="从0开始，如0,2,3；留空导出全部通道"/>
+                        <TextBlock Text="小数位:" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <TextBox Text="{Binding ExportDecimalPlaces, ValidatesOnExceptions=True}" Width="55" Margin="0,0,12,0" ToolTip="0至15；留空保留全精度"/>
+                        <Button Content="导出所选会话" Command="{Binding ExportSessionCommand}" CommandParameter="{Binding SelectedSession}" Padding="10,4"/>
+                    </WrapPanel>
+                    <TextBlock Text="Raw：原始；Corrected：改正；RawAndCorrected：并列。改正版本使用下方所选第一组配置。" Foreground="#64748B" TextWrapping="Wrap" Margin="0,6,0,0"/>
+                </StackPanel>
+            </Expander>
+            <!-- 批量校正只生成独立结果；必须选择明确的磁场通道 -->
+            <GroupBox Header="批量校正（可选扩展）" Margin="0,10,0,0" Padding="8">
                 <StackPanel>
-                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                    <WrapPanel Margin="0,0,0,8">
                         <TextBlock Text="第一组:" VerticalAlignment="Center" Margin="0,0,8,0"/>
                         <ComboBox ItemsSource="{Binding AvailableProfiles}"
                                   SelectedItem="{Binding SelectedCorrectionProfile}"
                                   DisplayMemberPath="Name" Width="180" Margin="0,0,12,0"/>
-                        <TextBlock Text="第二组（双三轴）:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <TextBlock Text="第二组（可选）:" VerticalAlignment="Center" Margin="0,0,8,0"/>
                         <ComboBox ItemsSource="{Binding AvailableProfiles}"
                                   SelectedItem="{Binding SelectedCorrectionProfileSecond}"
                                   DisplayMemberPath="Name" Width="180" Margin="0,0,8,0"
-                                  ToolTip="仅当目标会话为双三轴（6 通道）时必填"/>
+                                  ToolTip="仅改正一组三通道时可留空"/>
                         <Button Content="刷新" Command="{Binding LoadCorrectionProfilesCommand}" Padding="8,4" Margin="0,0,8,0"/>
                         <Button Content="应用校正" Command="{Binding ApplyBatchCorrectionCommand}"
                                 CommandParameter="{Binding SelectedSession}"
                                 Padding="10,4"/>
-                    </StackPanel>
+                    </WrapPanel>
+                    <WrapPanel Margin="0,0,0,8">
+                        <TextBlock Text="第一组索引:" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <TextBox Text="{Binding FirstCorrectionChannels}" Width="110" Margin="0,0,12,0" ToolTip="从0开始，例如0,1,2；不得包含温度通道"/>
+                        <TextBlock Text="第二组索引:" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <TextBox Text="{Binding SecondCorrectionChannels}" Width="110" Margin="0,0,12,0" ToolTip="例如3,4,5；两组不得重叠"/>
+                        <TextBlock Text="原始数据保持不变；保存结果并导出 CSV" VerticalAlignment="Center" Foreground="#64748B"/>
+                    </WrapPanel>
                     <ProgressBar Value="{Binding CorrectionProgress}" Height="6" Margin="0,4,0,0"
                                  Visibility="{Binding IsCorrecting, Converter={StaticResource BoolToVis}}"/>
                 </StackPanel>
             </GroupBox>
+            </StackPanel>
         </Grid>
     </DockPanel>
 </UserControl>

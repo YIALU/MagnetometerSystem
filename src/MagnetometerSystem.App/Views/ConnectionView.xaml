@@ -36,15 +36,11 @@
         </Grid.RowDefinitions>
 
         <!-- 传感器配置区 -->
-        <GroupBox Grid.Row="0" Header="传感器配置" Margin="0,0,0,8" Padding="10">
+        <GroupBox Grid.Row="0" Header="采集元数据" Margin="0,0,0,8" Padding="10">
             <WrapPanel>
+<TextBlock Text="通道数量、名称和单位由协议定义" VerticalAlignment="Center" Margin="0,0,20,0"/>
                 <StackPanel Margin="0,0,20,0">
-                    <TextBlock Text="传感器类型" Margin="0,0,0,3"/>
-                    <ComboBox Width="160" ItemsSource="{Binding SensorTypes}"
-                              SelectedItem="{Binding SelectedSensorType}"/>
-                </StackPanel>
-                <StackPanel Margin="0,0,20,0">
-                    <TextBlock Text="采样率 (Hz)" Margin="0,0,0,3"/>
+                    <TextBlock Text="标称采样率 (Hz)" Margin="0,0,0,3"/>
                     <ComboBox Width="100" ItemsSource="{Binding PresetSampleRates}"
                               SelectedItem="{Binding SampleRate}"
                               IsEditable="True"
@@ -283,6 +279,9 @@
                                         </DataTemplate>
                                     </GridViewColumn.CellTemplate>
                                 </GridViewColumn>
+                                <GridViewColumn Header="单位" Width="60">
+                                    <GridViewColumn.CellTemplate><DataTemplate><TextBox Text="{Binding Unit, UpdateSourceTrigger=LostFocus}" Width="50" FontSize="11" BorderThickness="0"/></DataTemplate></GridViewColumn.CellTemplate>
+                                </GridViewColumn>
                                 <GridViewColumn Header="字节" Width="50">
                                     <GridViewColumn.CellTemplate>
                                         <DataTemplate>
@@ -504,7 +503,8 @@
                                   Height="150"
                                   FontSize="12">
                             <DataGrid.Columns>
-                                <DataGridTextColumn Header="名称" Binding="{Binding Name}" Width="60"/>
+                                <DataGridTextColumn Header="名称" Binding="{Binding Name}" Width="90"/>
+                                <DataGridTextColumn Header="单位" Binding="{Binding Unit}" Width="60"/>
                                 <DataGridTextColumn Header="通道" Binding="{Binding ChannelIndex}" Width="50"/>
                                 <DataGridTextColumn Header="偏移" Binding="{Binding ByteOffset}" Width="50"/>
                                 <DataGridComboBoxColumn Header="数据类型" Width="80"
@@ -528,10 +528,10 @@
             <Button Padding="20,8" Command="{Binding ConnectCommand}">
                 <Button.Style>
                     <Style TargetType="Button">
-                        <Setter Property="Content" Value="开始"/>
+                        <Setter Property="Content" Value="连接并自动保存"/>
                         <Style.Triggers>
-                            <DataTrigger Binding="{Binding IsConnected}" Value="True">
-                                <Setter Property="Content" Value="停止"/>
+                            <DataTrigger Binding="{Binding IsAcquiring}" Value="True">
+                                <Setter Property="Content" Value="停止采集并断开"/>
                             </DataTrigger>
                         </Style.Triggers>
                     </Style>

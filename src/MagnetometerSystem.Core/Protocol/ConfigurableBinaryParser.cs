@@ -8,8 +8,10 @@ namespace MagnetometerSystem.Core.Protocol;
 /// 支持用户自定义帧头、帧尾、校验、字段映射
 /// 同时支持旧的 FieldMapping 模式和新的 FrameSegment 段式模式
 /// </summary>
-public class ConfigurableBinaryParser : IDataParser
+public class ConfigurableBinaryParser : IDataParser, IParserDiagnostics
 {
+    public long RejectedFrameCount { get; private set; }
+    public string? LastError { get; private set; }
     private readonly ByteRingBuffer _ringBuffer = new(131072);
     private readonly ProtocolConfig _config;
     private readonly byte[] _headerBytes;
@@ -71,13 +73,25 @@ public class ConfigurableBinaryParser : IDataParser
     public void Feed(byte[] data, int offset, int count)
     {
         if (count > _ringBuffer.FreeSpace)
-            _ringBuffer.Skip(count - _ringBuffer.FreeSpace);
+        {
+            _ringBuffer.Clear();
+            RejectedFrameCount++;
+            LastError = "二进制接收缓冲区溢出，已丢弃不完整帧";
+            if (count > _ringBuffer.Capacity) { offset += count - _ringBuffer.Capacity; count = _ringBuffer.Capacity; }
+        }
         _ringBuffer.Write(data, offset, count);
     }
 
     public bool TryParse(out MagnetometerReading? reading)
     {
-        return _useSegments ? TryParseSegments(out reading) : TryParseLegacy(out reading);
+        while (true)
+        {
+            var before = _ringBuffer.Count;
+            if (_useSegments ? TryParseSegments(out reading) : TryParseLegacy(out reading)) return true;
+            if (_ringBuffer.Count >= before) return false;
+            RejectedFrameCount++;
+            LastError = "二进制帧长度、固定值、校验或数值无效，已重新同步";
+        }
     }
 
     public void Reset()
@@ -129,6 +143,11 @@ public class ConfigurableBinaryParser : IDataParser
             // 计算非数据区部分的长度
             int nonDataLen = _segmentFrameLength - _dataSegments.Sum(s => s.ByteCount);
             frameLen = nonDataLen + dataLen;
+            if (frameLen != _segmentFrameLength)
+            {
+                _ringBuffer.Skip(1);
+                return false;
+            }
         }
         else
         {
@@ -156,7 +175,7 @@ public class ConfigurableBinaryParser : IDataParser
             {
                 if (_ringBuffer.Peek(tailOffset + i) != _tailBytes[i])
                 {
-                    _ringBuffer.Skip(_headerBytes.Length);
+                    _ringBuffer.Skip(Math.Max(1, _headerBytes.Length));
                     return false;
                 }
             }
@@ -246,6 +265,7 @@ public class ConfigurableBinaryParser : IDataParser
 
             double rawValue = ReadSegmentValue(frame, fieldStart, seg);
             double finalValue = rawValue * seg.Scale + seg.Offset;
+            if (!double.IsFinite(finalValue)) return false;
 
             if (seg.ChannelIndex < values.Length)
                 values[seg.ChannelIndex] = finalValue;
@@ -319,6 +339,12 @@ public class ConfigurableBinaryParser : IDataParser
             return false;
 
         int frameLen = headerLen + lengthFieldLen + dataLen + checksumLen + tailLen;
+        int requiredData = _config.FieldMappings.Count == 0 ? 0 : _config.FieldMappings.Max(f => f.ByteOffset + f.ByteSize);
+        if (frameLen <= 0 || frameLen > _ringBuffer.Capacity || dataLen < requiredData)
+        {
+            _ringBuffer.Skip(1);
+            return false;
+        }
         if (_ringBuffer.Count < frameLen)
             return false;
 
@@ -328,7 +354,7 @@ public class ConfigurableBinaryParser : IDataParser
             {
                 if (_ringBuffer.Peek(frameLen - tailLen + i) != _tailBytes[i])
                 {
-                    _ringBuffer.Skip(headerLen);
+                    _ringBuffer.Skip(Math.Max(1, headerLen));
                     return false;
                 }
             }
@@ -395,6 +421,7 @@ public class ConfigurableBinaryParser : IDataParser
 
             double rawValue = ReadFieldValue(frame, fieldStart, field);
             double finalValue = rawValue * field.Scale + field.Offset;
+            if (!double.IsFinite(finalValue)) return false;
 
             if (field.ChannelIndex < values.Length)
                 values[field.ChannelIndex] = finalValue;

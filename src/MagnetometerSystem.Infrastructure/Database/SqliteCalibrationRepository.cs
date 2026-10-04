@@ -23,6 +23,8 @@ public class SqliteCalibrationRepository : ICalibrationRepository
 
     public async Task SaveOrthogonalityProfileAsync(OrthogonalityParams profile)
     {
+        ArgumentNullException.ThrowIfNull(profile);
+        profile.Validate();
         const string sql = """
             INSERT OR REPLACE INTO orthogonality_profiles
             (id, name, sensor_serial, created_at,

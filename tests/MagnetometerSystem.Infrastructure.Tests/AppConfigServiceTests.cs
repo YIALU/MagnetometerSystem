@@ -126,7 +126,8 @@ public class AppConfigServiceTests : IAsyncLifetime
             DataStoragePath = "/tmp/data",
             AutoSaveEnabled = false,
             ChartRefreshRate = 60,
-            ThemeName = "Dark"
+            ThemeName = "Dark",
+            WorkbenchPanels = new() { ["connection"] = true, ["terminal"] = false }
         };
 
         // Act
@@ -142,6 +143,8 @@ public class AppConfigServiceTests : IAsyncLifetime
         Assert.False(loaded.AutoSaveEnabled);
         Assert.Equal(60, loaded.ChartRefreshRate);
         Assert.Equal("Dark", loaded.ThemeName);
+        Assert.True(loaded.WorkbenchPanels["connection"]);
+        Assert.False(loaded.WorkbenchPanels["terminal"]);
     }
 
     [Fact]
