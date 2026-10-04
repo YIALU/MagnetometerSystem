@@ -211,6 +211,7 @@ public partial class ConnectionViewModel : ObservableObject
             {
                 sensorConfig.ChannelCountOverride = ProtocolConfig.DerivedChannelCount;
                 sensorConfig.ChannelNamesOverride = ProtocolConfig.DerivedChannelNames.ToArray();
+                sensorConfig.ChannelUnitsOverride = ProtocolConfig.DerivedChannelUnits.ToArray();
             }
 
             if (!sensorConfig.ValidateSampleRate())

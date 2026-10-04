@@ -12,6 +12,8 @@ public class ChannelDisplayConfig : INotifyPropertyChanged
     /// <summary>通道名称</summary>
     public string Name { get; set; } = "Channel";
 
+    public string Unit { get; set; } = "nT";
+
     /// <summary>通道索引</summary>
     public int ChannelIndex { get; set; }
 

@@ -110,6 +110,9 @@ public class FrameSegment : INotifyPropertyChanged
 
     // ---- DataField 专用 ----
 
+    /// <summary>通道物理单位。</summary>
+    public string Unit { get; set; } = "nT";
+
     /// <summary>数据类型</summary>
     private FieldDataType _dataType = FieldDataType.Float;
     public FieldDataType DataType

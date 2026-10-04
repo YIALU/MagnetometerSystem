@@ -47,6 +47,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
 
     private int _channelCount;
     private string[] _channelNames = [];
+    private readonly Dictionary<string, ScottPlot.IYAxis> _unitAxes = new();
     private DateTime _startTime;
     private bool _isAcquiring;
     private bool _disposed;
@@ -254,6 +255,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
     {
         int channelCount = Math.Min(config.ChannelCount, MaxChannels);
         string[] channelNames = config.ChannelNames;
+        string[] configUnits = config.ChannelUnits;
         _startTime = DateTime.Now;
         _isAcquiring = true;
 
@@ -296,6 +298,9 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
                 // 通道布局未变，仅清空公式缓存以便下一 session 重新求值
                 _formulaCache.Clear();
             }
+
+            foreach (var channelConfig in ChannelConfigs)
+                channelConfig.Unit = channelConfig.ChannelIndex < configUnits.Length ? configUnits[channelConfig.ChannelIndex] : "nT";
 
             // 关闭向导面板
             IsAddingTotalField = false;
@@ -405,10 +410,12 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
         var plot = PlotControl.Plot;
         plot.Clear();
 
+        ConfigureUnitAxes(plot);
+
         // 绘制各通道
         for (int ch = 0; ch < _channelCount; ch++)
         {
-            var config = ch < ChannelConfigs.Count ? ChannelConfigs[ch] : null;
+            var config = ChannelConfigs.FirstOrDefault(c => c.ChannelIndex == ch);
             if (config != null && !config.Visible)
                 continue;
 
@@ -436,14 +443,36 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
             }
 
             sig.LineWidth = 1.5f;
-            sig.LegendText = config?.Name ?? (ch < _channelNames.Length ? _channelNames[ch] : $"CH{ch}");
+            sig.LegendText = (config?.Name ?? (ch < _channelNames.Length ? _channelNames[ch] : $"CH{ch}")) + $" ({config?.Unit})";
+            if (config is not null && _unitAxes.TryGetValue(config.Unit, out var axis)) sig.Axes.YAxis = axis;
         }
 
         // 绘制计算通道
         RenderComputedChannels(plot, windowTimes, channelData, startIdx, count);
 
         ConfigurePlotAxes(plot, xMin, xMax);
+        if (!AutoScaleY)
+            foreach (var axis in _unitAxes.Values.Where(a => !ReferenceEquals(a, plot.Axes.Left)))
+                plot.Axes.AutoScaleY(axis);
+        plot.ShowLegend();
         PlotControl.Refresh();
+    }
+
+    private void ConfigureUnitAxes(ScottPlot.Plot plot)
+    {
+        foreach (var old in _unitAxes.Values.Where(a => !ReferenceEquals(a, plot.Axes.Left)))
+            plot.Axes.Remove(old);
+        _unitAxes.Clear();
+        var units = ChannelConfigs.Where(c => c.Visible).Select(c => c.Unit)
+            .Concat(ComputedChannels.Where(c => c.Enabled).Select(c => c.Unit))
+            .Distinct().OrderBy(u => u is "°C" or "℃" ? 1 : 0).ToArray();
+        plot.Axes.Left.Label.Text = units.FirstOrDefault() ?? "数值";
+        foreach (var unit in units)
+        {
+            ScottPlot.IYAxis axis = _unitAxes.Count == 0 ? plot.Axes.Left : plot.Axes.AddRightAxis();
+            axis.Label.Text = unit;
+            _unitAxes.Add(unit, axis);
+        }
     }
 
     private void RenderMultiPlot(double[] windowTimes, double[][] channelData,
@@ -492,7 +521,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
                 ann.LabelBorderWidth = 1;
             }
 
-            plot.Axes.Left.Label.Text = config.Name;
+            plot.Axes.Left.Label.Text = $"{config.Name} ({config.Unit})";
             ConfigurePlotAxes(plot, xMin, xMax);
             plotCtrl.Refresh();
             plotIdx++;
@@ -548,7 +577,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
             compAnn.LabelBorderColor = new ScottPlot.Color(200, 200, 200, 255);
             compAnn.LabelBorderWidth = 1;
 
-            plot.Axes.Left.Label.Text = computed.Name;
+            plot.Axes.Left.Label.Text = $"{computed.Name} ({computed.Unit})";
             ConfigurePlotAxes(plot, xMin, xMax);
             plotCtrl.Refresh();
             plotIdx++;
@@ -593,7 +622,8 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
             var (ca, cr, cg, cb) = new ChannelDisplayConfig { ColorHex = computed.ColorHex }.ParseColor();
             compSig.Color = new ScottPlot.Color(cr, cg, cb, ca);
             compSig.LineWidth = computed.LineWidth;
-            compSig.LegendText = computed.Name;
+            compSig.LegendText = $"{computed.Name} ({computed.Unit})";
+            if (_unitAxes.TryGetValue(computed.Unit, out var axis)) compSig.Axes.YAxis = axis;
         }
     }
 
@@ -695,7 +725,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
         var plot = PlotControl.Plot;
         plot.Clear();
         plot.Axes.Bottom.Label.Text = "时间 (s)";
-        plot.Axes.Left.Label.Text = "磁场 (nT)";
+        plot.Axes.Left.Label.Text = "数值";
         PlotControl.Refresh();
     }
 

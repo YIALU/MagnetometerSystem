@@ -36,6 +36,9 @@ public class FieldMapping
     /// <summary>字段名称（如 "X轴", "Y轴", "Total"）</summary>
     public string Name { get; set; } = string.Empty;
 
+    /// <summary>通道物理单位；未标注的旧协议兼容 nT。</summary>
+    public string Unit { get; set; } = "nT";
+
     /// <summary>在数据区中的字节偏移（从数据区起始算，不含帧头/长度字节）</summary>
     public int ByteOffset { get; set; }
 
@@ -131,6 +134,9 @@ public class ProtocolConfig
     /// <summary>校验方式</summary>
     public ChecksumType Checksum { get; set; } = ChecksumType.None;
 
+    /// <summary>必需的校验尚未配置时禁止解析，不可把未知 CRC 当成填充接受。</summary>
+    public bool RequireChecksum { get; set; }
+
     /// <summary>校验计算的范围起始（0=从帧头开始，通常为 0）</summary>
     public int ChecksumStartOffset { get; set; } = 0;
 
@@ -186,6 +192,34 @@ public class ProtocolConfig
                   .OrderBy(s => s.ChannelIndex)
                   .Select(s => s.Name).ToList()
         : FieldMappings.OrderBy(f => f.ChannelIndex).Select(f => f.Name).ToList();
+
+    [JsonIgnore]
+    public List<string> DerivedChannelUnits => UsesSegments
+        ? Segments.Where(s => s.Type == SegmentType.DataField).OrderBy(s => s.ChannelIndex).Select(s => s.Unit).ToList()
+        : FieldMappings.OrderBy(f => f.ChannelIndex).Select(f => f.Unit).ToList();
+
+    /// <summary>校验配置必须由协议提供者确认；不推断设备端 CRC 参数。</summary>
+    public void ValidateRequiredChecksum()
+    {
+        if (!RequireChecksum) return;
+        const string message = "CRC 参数待确认：请按固件协议配置校验段的算法、字节数、起始段和字节序后再连接。";
+        if (Category != ProtocolCategory.Binary)
+            throw new ArgumentException(message);
+        if (UsesSegments)
+        {
+            ComputeSegmentOffsets();
+            var checksums = Segments.Where(s => s.Type == SegmentType.Checksum).ToArray();
+            if (checksums.Length != 1) throw new ArgumentException(message);
+            var checksum = checksums[0];
+            if (!Enum.IsDefined(checksum.ChecksumAlgorithm)
+                || checksum.ByteCount != (checksum.ChecksumAlgorithm == ChecksumAlgorithm.CRC16 ? 2 : 1)
+                || checksum.ChecksumStartIndex < 0 || checksum.ChecksumStartIndex >= Segments.IndexOf(checksum)
+                || (checksum.ChecksumAlgorithm == ChecksumAlgorithm.CRC16 && !Enum.IsDefined(checksum.Crc16Variant)))
+                throw new ArgumentException(message);
+        }
+        else if (Checksum == ChecksumType.None || !Enum.IsDefined(Checksum))
+            throw new ArgumentException(message);
+    }
 
     // ==== 辅助方法 ====
 
@@ -374,7 +408,7 @@ public class ProtocolConfig
     /// FF5A + 信息ID(AD00) + 长度(5C00=92) + 92 字节数据区 + CRC16(2) + 帧尾(33)。
     /// 信息 ID 与长度字段值恒定，打开 ValidateFixedValue 作为帧同步锚点 —— 92 字节浮点载荷中
     /// 偶然出现 FF5A 的概率不低，仅靠帧头帧尾定长容易误锁。
-    /// CRC 段按 Padding 处理，不校验：文档称"序号 2~26 之间所有字节的 CRC-16"，多项式 0x8005，
+    /// CRC 参数未确认，保留显式占位并通过 RequireChecksum 阻止默认采集：文档称"序号 2~26 之间所有字节的 CRC-16"，多项式 0x8005，
     /// 但按该范围以 ARC/MSB-0x8005 × init{0000,FFFF} 组合计算均与文档样本包的 BD 67 不符；
     /// 进一步对 init 做 GF(2) 线性反解并跨 ZDZ 实测样本交叉验证，无一致解。参数待固件侧确认。
     /// </remarks>
@@ -382,7 +416,7 @@ public class ProtocolConfig
     {
         int ch = 0;
         // 数据段：非 magneticOnly 时映射为通道，否则退化为同宽度的 Padding
-        FrameSegment Data(string name, FieldDataType type, bool magnetic = false)
+        FrameSegment Data(string name, FieldDataType type, bool magnetic = false, string unit = "nT")
         {
             int width = FrameSegment.GetByteCountForDataType(type);
             if (magneticOnly && !magnetic)
@@ -391,6 +425,7 @@ public class ProtocolConfig
             {
                 Type = SegmentType.DataField,
                 Name = name,
+                Unit = unit,
                 ByteCount = width,
                 DataType = type,
                 ChannelIndex = ch++,
@@ -418,24 +453,24 @@ public class ProtocolConfig
             Data("ΔY", FieldDataType.Float),
             Data("ΔZ", FieldDataType.Float),
 
-            Data("GPS纬度", FieldDataType.Double),
-            Data("GPS经度", FieldDataType.Double),
+            Data("GPS纬度", FieldDataType.Double, unit: "°"),
+            Data("GPS经度", FieldDataType.Double, unit: "°"),
 
-            Data("加速度X", FieldDataType.Float),
-            Data("加速度Y", FieldDataType.Float),
-            Data("加速度Z", FieldDataType.Float),
+            Data("加速度X", FieldDataType.Float, unit: "m/s²"),
+            Data("加速度Y", FieldDataType.Float, unit: "m/s²"),
+            Data("加速度Z", FieldDataType.Float, unit: "m/s²"),
 
-            Data("陀螺仪X", FieldDataType.Float),
-            Data("陀螺仪Y", FieldDataType.Float),
-            Data("陀螺仪Z", FieldDataType.Float),
+            Data("陀螺仪X", FieldDataType.Float, unit: "°/s"),
+            Data("陀螺仪Y", FieldDataType.Float, unit: "°/s"),
+            Data("陀螺仪Z", FieldDataType.Float, unit: "°/s"),
 
-            Data("磁力仪X", FieldDataType.Float),
-            Data("磁力仪Y", FieldDataType.Float),
-            Data("磁力仪Z", FieldDataType.Float),
+            Data("磁力仪X", FieldDataType.Float, unit: "设备单位"),
+            Data("磁力仪Y", FieldDataType.Float, unit: "设备单位"),
+            Data("磁力仪Z", FieldDataType.Float, unit: "设备单位"),
 
-            Data("入水深度", FieldDataType.Float),
+            Data("入水深度", FieldDataType.Float, unit: "m"),
 
-            new() { Type = SegmentType.Padding, Name = "CRC(不校验)", ByteCount = 2 },
+            new() { Type = SegmentType.Padding, Name = "CRC参数待确认（请配置校验段）", ByteCount = 2 },
             new() { Type = SegmentType.Tail, Name = "帧尾", ByteCount = 1, FixedHexValue = "33" },
         ];
     }
@@ -451,9 +486,10 @@ public class ProtocolConfig
             Name = "磁梯度数采卡-pt",
             Category = ProtocolCategory.Binary,
             Segments = BuildZdzC08Segments(magneticOnly: false),
+            RequireChecksum = true,
             Commands = ZdzC08Commands.CreateGroups(),
             Notes = "ZDZ_C08 / CTMBS-3 数采卡 101 字节上传帧，全字段。串口 115200 8N1。"
-                  + "磁分量与梯度单位 nT，加速度 m/s²，陀螺 °/s，深度 m。CRC 段不校验。",
+                  + "磁分量与梯度单位 nT，加速度 m/s²，陀螺 °/s，深度 m。CRC 参数待固件确认，默认禁止采集；请删除 CRC 占位段，在帧尾前添加校验段并配置确认的参数。",
         };
         config.ComputeSegmentOffsets();
         return config;
@@ -470,9 +506,10 @@ public class ProtocolConfig
             Name = "磁梯度数采卡-pt (仅磁场6通道)",
             Category = ProtocolCategory.Binary,
             Segments = BuildZdzC08Segments(magneticOnly: true),
+            RequireChecksum = true,
             Commands = ZdzC08Commands.CreateGroups(),
             Notes = "ZDZ_C08 / CTMBS-3 数采卡 101 字节上传帧，仅映射 X1/Y1/Z1/X2/Y2/Z2（单位 nT）。"
-                  + "其余字段按保留区跳过。CRC 段不校验。",
+                  + "其余字段按保留区跳过。CRC 参数待固件确认，默认禁止采集；请删除 CRC 占位段，在帧尾前添加校验段并配置确认的参数。",
         };
         config.ComputeSegmentOffsets();
         return config;
@@ -557,6 +594,7 @@ public class ProtocolConfig
             {
                 Type = SegmentType.DataField,
                 Name = field.Name,
+                Unit = field.Unit,
                 ByteCount = field.ByteSize,
                 DataType = field.DataType,
                 BigEndian = field.BigEndian,

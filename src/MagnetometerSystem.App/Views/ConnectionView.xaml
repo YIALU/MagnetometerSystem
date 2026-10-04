@@ -237,12 +237,20 @@
                     </WrapPanel>
 
                     <!-- 帧段列表 -->
+                    <TextBlock Text="{Binding ProtocolConfig.Notes}" TextWrapping="Wrap" Foreground="#8A4B00" Margin="0,0,0,6"/>
                     <ListView ItemsSource="{Binding ProtocolSegments}" MaxHeight="280"
                               ScrollViewer.VerticalScrollBarVisibility="Auto"
                               ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                               BorderThickness="1" BorderBrush="#CCC">
                         <ListView.View>
                             <GridView>
+                                <GridViewColumn Header="单位" Width="70">
+                                    <GridViewColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <TextBox Text="{Binding Unit, UpdateSourceTrigger=LostFocus}" Width="58" FontSize="11"/>
+                                        </DataTemplate>
+                                    </GridViewColumn.CellTemplate>
+                                </GridViewColumn>
                                 <GridViewColumn Header="类型" Width="65">
                                     <GridViewColumn.CellTemplate>
                                         <DataTemplate>
@@ -431,6 +439,22 @@
                                                         </Style>
                                                     </ComboBox.Style>
                                                 </ComboBox>
+
+                                                <StackPanel Orientation="Horizontal" Margin="4,0,0,0">
+                                                    <StackPanel.Style>
+                                                        <Style TargetType="StackPanel">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding Type}" Value="{x:Static models:SegmentType.Checksum}">
+                                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </StackPanel.Style>
+                                                    <TextBlock Text="起始段" VerticalAlignment="Center" FontSize="11"/>
+                                                    <TextBox Text="{Binding ChecksumStartIndex, UpdateSourceTrigger=LostFocus}" Width="30" FontSize="11"
+                                                             ToolTip="校验计算起始段的索引，从 0 开始；范围至校验段之前。须按固件协议确认。"/>
+                                                </StackPanel>
 
                                                 <!-- Checksum: CRC16 校验值字节序（仅 CRC16 算法时显示） -->
                                                 <CheckBox Content="大端" VerticalAlignment="Center" FontSize="11"

@@ -28,6 +28,7 @@ public class ConfigurableBinaryParser : IDataParser
     public ConfigurableBinaryParser(ProtocolConfig config)
     {
         _config = config ?? throw new ArgumentNullException(nameof(config));
+        config.ValidateRequiredChecksum();
         _useSegments = config.UsesSegments;
 
         if (_useSegments)
@@ -77,7 +78,14 @@ public class ConfigurableBinaryParser : IDataParser
 
     public bool TryParse(out MagnetometerReading? reading)
     {
-        return _useSegments ? TryParseSegments(out reading) : TryParseLegacy(out reading);
+        // false 仅表示当前缓冲已无可输出读数。坏候选消耗字节后应继续找帧，
+        // 否则调用方的 while (TryParse(...)) 会把同一包内后续好帧留到下次 Feed。
+        while (true)
+        {
+            int before = _ringBuffer.Count;
+            if (_useSegments ? TryParseSegments(out reading) : TryParseLegacy(out reading)) return true;
+            if (_ringBuffer.Count == 0 || _ringBuffer.Count == before) return false;
+        }
     }
 
     public void Reset()
@@ -156,7 +164,7 @@ public class ConfigurableBinaryParser : IDataParser
             {
                 if (_ringBuffer.Peek(tailOffset + i) != _tailBytes[i])
                 {
-                    _ringBuffer.Skip(_headerBytes.Length);
+                    _ringBuffer.Skip(1);
                     return false;
                 }
             }
@@ -328,7 +336,7 @@ public class ConfigurableBinaryParser : IDataParser
             {
                 if (_ringBuffer.Peek(frameLen - tailLen + i) != _tailBytes[i])
                 {
-                    _ringBuffer.Skip(headerLen);
+                    _ringBuffer.Skip(1);
                     return false;
                 }
             }

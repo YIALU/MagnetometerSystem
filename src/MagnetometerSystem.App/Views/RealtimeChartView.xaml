@@ -262,7 +262,7 @@
                                                     <TextBlock Text="偏移:" VerticalAlignment="Center" FontSize="11" Margin="0,0,3,0"/>
                                                     <TextBox Width="65" FontSize="11" VerticalAlignment="Center"
                                                              Text="{Binding DisplayOffset, UpdateSourceTrigger=LostFocus}"/>
-                                                    <TextBlock Text="nT" VerticalAlignment="Center" FontSize="11" Margin="3,0,3,0" Foreground="Gray"/>
+                                                    <TextBlock Text="{Binding Unit}" VerticalAlignment="Center" FontSize="11" Margin="3,0,3,0" Foreground="Gray"/>
                                                     <Button Content="自动" FontSize="10" Padding="4,1" VerticalAlignment="Center"
                                                             ToolTip="根据通道平均值自动设置偏移，使数据趋近于 0"
                                                             Command="{Binding DataContext.AutoOffsetChannelCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
@@ -316,7 +316,7 @@
                                                     <TextBlock Text="偏移:" VerticalAlignment="Center" FontSize="11" Margin="0,0,3,0"/>
                                                     <TextBox Width="65" FontSize="11" VerticalAlignment="Center"
                                                              Text="{Binding DisplayOffset, UpdateSourceTrigger=LostFocus}"/>
-                                                    <TextBlock Text="nT" VerticalAlignment="Center" FontSize="11" Margin="3,0,3,0" Foreground="Gray"/>
+                                                    <TextBlock Text="{Binding Unit}" VerticalAlignment="Center" FontSize="11" Margin="3,0,3,0" Foreground="Gray"/>
                                                     <Button Content="自动" FontSize="10" Padding="4,1" VerticalAlignment="Center"
                                                             ToolTip="根据计算通道平均值自动设置偏移，使数据趋近于 0"
                                                             Command="{Binding DataContext.AutoOffsetComputedChannelCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"

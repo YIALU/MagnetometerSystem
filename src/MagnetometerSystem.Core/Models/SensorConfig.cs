@@ -27,6 +27,9 @@ public class SensorConfig
     /// </summary>
     public string[]? ChannelNamesOverride { get; set; }
 
+    public string[]? ChannelUnitsOverride { get; set; }
+    public string[] ChannelUnits => ChannelUnitsOverride ?? Enumerable.Repeat("nT", ChannelCount).ToArray();
+
     /// <summary>通道数（优先使用覆盖值，否则根据传感器类型确定）</summary>
     public int ChannelCount => ChannelCountOverride > 0 ? ChannelCountOverride : Type switch
     {

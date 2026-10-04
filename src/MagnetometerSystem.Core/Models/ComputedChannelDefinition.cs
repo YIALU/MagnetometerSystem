@@ -38,6 +38,8 @@ public class ComputedChannelDefinition : INotifyPropertyChanged
     /// <summary>显示名称</summary>
     public string Name { get; set; } = "Computed";
 
+    public string Unit { get; set; } = "nT";
+
     /// <summary>计算通道类型（仅作为元数据记录）</summary>
     public ComputedChannelType ChannelType { get; set; } = ComputedChannelType.Custom;
 
