@@ -48,13 +48,14 @@ dotnet test MagnetometerSystem.sln -c Debug --collect:"XPlat Code Coverage" --re
 - `AcquisitionProtocolTests` / `TcpAcquisitionLoopbackTests`：协议边界、真实 TCP 分包解析、对端接收到的命令字节、并发发送完整帧、有限重连。
 - `AcquisitionStorageWorkflowTests`：原始/显示数据隔离、存储提交与失败后重试、停止尾批、原始/校正导出，以及旧固定列数据保留。
 - `App.Tests`：在共享 STA / WPF Dispatcher 环境运行实际 ViewModel。`ProtocolFlowTests` 通过真实 TCP → `ConnectionViewModel` → `SessionListViewModel` → SQLite，覆盖 21 通道、温度单位、首帧/定时批次/停止尾批，以及 `DeviceCommandViewModel` 对端字节和分片响应。`HistoryPlaybackViewModelTests` 使用真实临时 SQLite，验证通道/单位、显式校正索引、原始值保护、时间戳倍速、完成后复播、实时连接互斥，并加载实际历史视图检查内嵌曲线绑定和温度轴。
-- `RealtimeWorkspaceTests` / `WorkspaceLayoutTests`：实际 WPF 工作台、单图温度轴、原始值统计、通道重排、65 通道、折叠/专注状态恢复和控件绑定。`ShutdownUpdateTests` 三项用例验证更新前等待保存和设置完成、取消更新、保存失败阻止安装以及重试；安装器与这组测试的连接使用替身，不执行真实安装。
+- `RealtimeWorkspaceTests` / `WorkspaceLayoutTests`：实际 WPF 工作台、单图温度轴、原始值统计、通道重排、65 通道、折叠/专注状态恢复和控件绑定。`ShutdownUpdateTests` 验证更新与正常关闭前等待尾批和设置保存、取消更新、真实 SQLite 写入失败阻止安装及显式重试；安装器与这组测试的连接使用替身，不执行真实安装。
+- `CtmbsAcquisitionFlowTests`：真实 TCP 夹入状态/参数响应、坏长度头和合法推送，仅合法测量入库与绘图。`VariableLengthSegmentParserTests` 覆盖保留区、未映射尾部、动态校验和帧尾；`ZdzUnitAxesTests` / `UnitWorkflowTests` 覆盖各单位轴范围、回放单位、计算单位及非法来源。
 
 这些条目表示测试代码的覆盖范围。最近一次完整运行结果见下面的日期记录；实体串口、真实设备 ACK/执行结果与长时间稳定性，在没有对应运行记录时一律视为未验证。
 
 历史 `18-TASK-TESTS-单元测试与集成测试.md` 中的“零测试”“目标覆盖率 ≥ 80%”是早期规划，不能用作当前测试结论。
 
-## 2026-10-04 验证记录
+## 2026-10-04 首轮验证记录
 
 环境为 Windows 本机、当前工作区修改、Debug 构建；Core/Infrastructure 目标为 `net8.0`，App 为 `net8.0-windows`。完成构建后，最终串行执行：
 
@@ -74,6 +75,26 @@ dotnet test MagnetometerSystem.sln --no-build --no-restore -m:1 --verbosity mini
 已加载并检查实际 WPF 主窗口，保存了[专注曲线截图](../.codex_tmp/ui-verification/workspace-focus.png)和[辅助面板展开截图](../.codex_tmp/ui-verification/workspace-expanded.png)，并完成目视核验。TRX 与截图是本机 `.codex_tmp` 下的验证产物，不作为源码提交，也不会随新克隆自动出现。
 
 构建保留已有 `NU1701` 警告：`SkiaSharp.Views.WPF 3.119.0` 使用 .NET Framework 兼容资源还原；本次 WPF 测试通过不消除此依赖兼容性警告。本轮没有执行虚拟/实体串口验收、真实安装器升级、设备执行确认或长时间吞吐测试，也未给出代码覆盖率百分比。TCP 对端模拟响应证明响应处理路径，不能替代真实设备证据。
+
+## 2026-10-04 PR 审查修复验证
+
+在独立 worktree、Windows / SDK 9.0.312（目标 .NET 8）中完成构建与串行回归。构建禁用编译服务器并串行执行；一次 WPF DLL 临时占用失败后，重试构建成功再运行测试，未使用失败构建作为通过证据。
+
+```powershell
+dotnet build MagnetometerSystem.sln -c Debug --no-restore --disable-build-servers -m:1 -nr:false -p:UseSharedCompilation=false -p:BuildInParallel=false
+dotnet test MagnetometerSystem.sln -c Debug --no-build --no-restore -m:1 --verbosity minimal --logger trx --results-directory .codex_tmp/TestResults-pr-final
+```
+
+| 项目 | 通过 | 跳过 | 失败 | TRX 时间 |
+| --- | ---: | ---: | ---: | --- |
+| Core | 346 | 1 | 0 | 15_04_22 |
+| Infrastructure | 72 | 0 | 0 | 15_04_23 |
+| App | 28 | 0 | 0 | 15_04_33 |
+| 合计 | **446** | **1** | **0** | 2026-10-04，本机 `.codex_tmp/TestResults-pr-final` |
+
+新增证据包括：默认采集/改正失败时真实 TCP 同时到达 SQLite 与图表；CTMBS 状态响应不入测量库、坏长头即时恢复；变长载荷的动态校验与帧尾；单位迁移、回放与异单位轴范围；真实 SQLite 写入失败后的安装阻止、恢复重试、正常关闭尾帧。`InstallerHandoffTests` 的三个真实进程测试验证应用及互斥锁退出后才启动替身安装器、超时不启动、失效进程不能完成交接。
+
+串口仍是环境跳过；未运行真实安装器、实体设备或长时间吞吐验收。便携 ZIP 另用 `build.ps1` 的实际 `Compress-Archive` 命令进行临时目录归档，检查可执行文件与 `portable.marker` 位于 ZIP 根目录并保留子目录；该检查不是一次正式发布。
 
 ## 核心业务验收矩阵
 

@@ -395,15 +395,13 @@ public sealed class GiteeUpdateService : IUpdateService, IDisposable
 
         if (Options.PackageKind == AppPackageKind.Installer)
         {
-            // 每用户安装，不会弹 UAC。安装脚本的 [Run] 段没有 skipifsilent，
-            // 因此静默安装完会自动把新版本拉起来。
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = localFilePath,
-                Arguments = "/SILENT /CLOSEAPPLICATIONS /NORESTART",
-                UseShellExecute = true
-            });
-            return true;   // 调用方随即退出，把程序目录让给安装器
+            if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("自动安装更新仅支持 Windows。");
+            // Setup checks AppMutex immediately, even in silent mode. Keep the application's mutex
+            // alive and let a ready helper wait for actual process termination before launching Setup.
+            using var owner = Process.GetCurrentProcess();
+            using var waiter = InstallerHandoff.Start(localFilePath, "/SILENT /CLOSEAPPLICATIONS /NORESTART",
+                Path.GetDirectoryName(Path.GetFullPath(localFilePath))!, owner);
+            return true; // Only a successfully acknowledged handoff permits the caller to exit.
         }
 
         // 便携版：运行中的单文件 exe 无法自我覆盖，只能引导用户手动解压
