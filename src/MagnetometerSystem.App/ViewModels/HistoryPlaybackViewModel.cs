@@ -47,6 +47,9 @@ public partial class HistoryPlaybackViewModel : ObservableObject
     [ObservableProperty]
     private SessionInfo? _selectedSession;
 
+    [ObservableProperty]
+    private string _statusMessage = "";
+
     // ---- 回放状态 ----
     [ObservableProperty]
     private PlaybackState _state = PlaybackState.Ready;
@@ -106,6 +109,18 @@ public partial class HistoryPlaybackViewModel : ObservableObject
         _dataBus = dataBus;
         _orthogonalityCorrector = orthogonalityCorrector;
         _calibrationRepository = calibrationRepository;
+
+        _dataBus.ConnectionChanged += _ =>
+        {
+            void RefreshConnectionState()
+            {
+                StatusMessage = _dataBus.CurrentConnection == null ? "" : "请先断开实时连接，再播放历史数据。";
+                PlayCommand.NotifyCanExecuteChanged();
+            }
+            var dispatcher = Application.Current?.Dispatcher;
+            if (dispatcher == null || dispatcher.CheckAccess()) RefreshConnectionState();
+            else dispatcher.BeginInvoke(RefreshConnectionState);
+        };
 
         // 延迟加载：用户首次切换到回放页面时才加载
     }
@@ -228,6 +243,12 @@ public partial class HistoryPlaybackViewModel : ObservableObject
     private Task PlayAsync()
     {
         if (_readings.Length == 0) return Task.CompletedTask;
+        if (_dataBus.CurrentConnection != null)
+        {
+            StatusMessage = "请先断开实时连接，再播放历史数据。";
+            return Task.CompletedTask;
+        }
+        StatusMessage = "";
 
         _dataBus.IsPlaybackMode = true;
 
@@ -256,7 +277,8 @@ public partial class HistoryPlaybackViewModel : ObservableObject
     }
 
     private bool CanPlay() =>
-        _readings.Length > 0 && State != PlaybackState.Playing && State != PlaybackState.Loading;
+        _readings.Length > 0 && _dataBus.CurrentConnection == null &&
+        State != PlaybackState.Playing && State != PlaybackState.Loading;
 
     [RelayCommand(CanExecute = nameof(CanPause))]
     private void Pause()
@@ -274,6 +296,7 @@ public partial class HistoryPlaybackViewModel : ObservableObject
     [RelayCommand(CanExecute = nameof(CanStop))]
     private void Stop()
     {
+        if (_dataBus.CurrentConnection != null && !_dataBus.IsPlaybackMode) return;
         _playbackTimer?.Stop();
         _playbackTimer = null;
         _playbackClock.Reset();
@@ -328,6 +351,11 @@ public partial class HistoryPlaybackViewModel : ObservableObject
     public void SeekTo(double progress)
     {
         if (_readings.Length == 0 || !double.IsFinite(progress)) return;
+        if (_dataBus.CurrentConnection != null)
+        {
+            StatusMessage = "实时连接期间不能定位历史回放。";
+            return;
+        }
 
         progress = Math.Clamp(progress, 0.0, 1.0);
         var targetIndex = (int)(progress * (_readings.Length - 1));

@@ -146,6 +146,8 @@ public partial class SessionListViewModel : ObservableObject
         await _lifecycleGate.WaitAsync();
         try
         {
+            if (_dataBus.IsPlaybackMode)
+                throw new InvalidOperationException("请先停止历史回放，再开始实时采集。");
             if (ActiveSessionId != null)
                 throw new InvalidOperationException("上一个会话尚未完成保存，请先重试停止采集。");
             _currentSensorConfig = config;

@@ -221,6 +221,11 @@ public partial class ConnectionViewModel : ObservableObject
 
     private async Task ConnectCoreAsync()
     {
+        if (_dataBus.IsPlaybackMode)
+        {
+            StatusMessage = "请先停止历史回放，再连接实时采集。";
+            return;
+        }
         try
         {
             var sensorConfig = new SensorConfig
@@ -279,6 +284,9 @@ public partial class ConnectionViewModel : ObservableObject
             // 串口/TCP 一旦打开即可在后台线程触发数据事件，若此时会话尚未创建，
             // 到达的读数会被 SessionListViewModel 丢弃。故此处 await 直到会话就绪。
             _sessionPrepared = true;
+            // Reserve the live connection before asynchronous session preparation.
+            // Playback must remain unavailable while opening or reconnecting.
+            _dataBus.PublishConnectionChanged(_connection);
             await _dataBus.PublishAcquisitionStartingAsync(sensorConfig);
             IsAcquiring = true;
 

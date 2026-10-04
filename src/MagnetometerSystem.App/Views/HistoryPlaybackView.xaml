@@ -27,6 +27,8 @@
             </StackPanel>
         </StackPanel>
 
+        <TextBlock DockPanel.Dock="Top" Text="{Binding StatusMessage}" TextWrapping="Wrap" Foreground="DarkOrange" Margin="0,0,0,8"/>
+
         <!-- 会话信息区 -->
         <Border DockPanel.Dock="Top" Background="#F5F5F5" Padding="10,6" Margin="0,0,0,10" CornerRadius="3">
             <Border.Style>
