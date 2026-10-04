@@ -44,7 +44,7 @@ jobs:
         run: dotnet restore MagnetometerSystem.sln
 
       - name: Build solution
-        run: dotnet build MagnetometerSystem.sln --configuration Debug --no-restore
+        run: dotnet build MagnetometerSystem.sln --configuration Debug --no-restore -m:1
 
       - name: Run tests
         run: dotnet test MagnetometerSystem.sln --configuration Debug --no-build --no-restore -m:1 --logger trx --results-directory TestResults
