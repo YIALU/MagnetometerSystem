@@ -2,7 +2,7 @@ name: Windows CI
 
 on:
   pull_request:
-    branches: [master]
+    branches: [master, 'codex/**']
     types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [master]
@@ -47,7 +47,7 @@ jobs:
         run: dotnet build MagnetometerSystem.sln --configuration Debug --no-restore
 
       - name: Run tests
-        run: dotnet test MagnetometerSystem.sln --configuration Debug --no-build --logger trx --results-directory TestResults
+        run: dotnet test MagnetometerSystem.sln --configuration Debug --no-build --no-restore -m:1 --logger trx --results-directory TestResults
 
       - name: Upload test results
         if: always()
