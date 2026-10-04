@@ -218,6 +218,7 @@ public partial class SessionListViewModel : ObservableObject
     [RelayCommand]
     private async Task RetryStorageAsync()
     {
+        string? recoveredSessionId = null;
         await _lifecycleGate.WaitAsync();
         try
         {
@@ -226,10 +227,17 @@ public partial class SessionListViewModel : ObservableObject
                 if (_acceptingReadings) return;
             }
             await _storageService.RetryPendingWritesAsync();
+            var sessionId = ActiveSessionId;
             await CompleteSessionAsync();
+            recoveredSessionId = sessionId;
         }
         catch (Exception ex) { OnUi(() => StorageError = ex.Message); }
         finally { _lifecycleGate.Release(); }
+
+        if (recoveredSessionId == null) return;
+        // Connection stop takes its gate before the session gate, so never notify while holding ours.
+        try { await _dataBus.PublishAcquisitionRecoveryCompletedAsync(recoveredSessionId); }
+        catch (Exception ex) { OnUi(() => StorageError = ex.Message); }
     }
 
     private static void OnUi(Action action)

@@ -63,6 +63,16 @@ public class DataBus
         foreach (Func<Task> handler in handlers.GetInvocationList()) await handler();
     }
 
+    /// <summary>失败会话显式恢复完成；调用方须先释放会话生命周期锁。</summary>
+    public event Func<string, Task>? AcquisitionRecoveryCompleted;
+
+    public async Task PublishAcquisitionRecoveryCompletedAsync(string sessionId)
+    {
+        var handlers = AcquisitionRecoveryCompleted;
+        if (handlers == null) return;
+        foreach (Func<string, Task> handler in handlers.GetInvocationList()) await handler(sessionId);
+    }
+
     /// <summary>关键保存故障：同步停止生产，再异步完成断开和尾批处理。</summary>
     public event Action<Exception>? AcquisitionFaulted;
 

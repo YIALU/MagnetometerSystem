@@ -32,6 +32,7 @@ public partial class ConnectionViewModel : ObservableObject
     private long _receiveGeneration;
     private readonly object _receiveGate = new();
     private bool _sessionPrepared;
+    private string? _preparedSessionId;
 
     [ObservableProperty]
     private bool _isAcquiring;
@@ -160,6 +161,12 @@ public partial class ConnectionViewModel : ObservableObject
         _orthogonalityCorrector = orthogonalityCorrector;
         _calibrationRepository = calibrationRepository;
         _dataBus.AcquisitionFaulted += OnAcquisitionFaulted;
+        _dataBus.AcquisitionRecoveryCompleted += OnAcquisitionRecoveryCompletedAsync;
+        _dataBus.SessionStarted += sessionId =>
+        {
+            if (_sessionPrepared && _connection != null && _preparedSessionId == null)
+                _preparedSessionId = sessionId;
+        };
 
         // 监听段列表变化，订阅每个段的 PropertyChanged
         ProtocolSegments.CollectionChanged += (s, e) =>
@@ -330,6 +337,37 @@ public partial class ConnectionViewModel : ObservableObject
         });
     }
 
+    private async Task OnAcquisitionRecoveryCompletedAsync(string sessionId)
+    {
+        var generation = Volatile.Read(ref _connectionGeneration);
+        await _connectionGate.WaitAsync();
+        try
+        {
+            if (generation != Volatile.Read(ref _connectionGeneration) ||
+                !_sessionPrepared || _preparedSessionId != sessionId) return;
+            // The user's retry can win the race with the background fault-stop task.
+            // Finish that same faulted connection here, after the session gate was released.
+            if (_connection != null)
+            {
+                if (Volatile.Read(ref _receiveGeneration) != -generation) return;
+                await DisconnectCoreAsync();
+            }
+            else CompleteAcquisitionStop();
+        }
+        finally { _connectionGate.Release(); }
+    }
+
+    private void CompleteAcquisitionStop()
+    {
+        bool wasPrepared = _sessionPrepared;
+        _sessionPrepared = false;
+        _preparedSessionId = null;
+        Volatile.Write(ref _receiveGeneration, 0);
+        IsAcquiring = false;
+        StatusMessage = "已断开 · 会话已保存";
+        if (wasPrepared) _dataBus.PublishAcquisitionStopped();
+    }
+
     private async Task DisconnectCoreAsync()
     {
         var connection = _connection;
@@ -355,11 +393,8 @@ public partial class ConnectionViewModel : ObservableObject
         {
             StatusMessage = "正在保存尾批数据...";
             await _dataBus.PublishAcquisitionStoppingAsync();
-            _sessionPrepared = false;
-            _dataBus.PublishAcquisitionStopped();
         }
-        IsAcquiring = false;
-        StatusMessage = "已断开 · 会话已保存";
+        CompleteAcquisitionStop();
     }
 
     private void OnDataReceived(object? sender, byte[] data)

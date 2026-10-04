@@ -71,7 +71,7 @@ public class CsvExporterTests : IAsyncLifetime
         if (readings.Length > 0)
         {
             await _storageService.SaveReadingsAsync(readings);
-            await Task.Delay(1500);
+            await _storageService.WaitForPendingWritesAsync();
         }
 
         return sessionId;
@@ -149,16 +149,14 @@ public class CsvExporterTests : IAsyncLifetime
     [Fact]
     public async Task ExportAsync_ReportsProgress()
     {
-        // Arrange - use enough readings to trigger progress reporting (>1000 for mid-export reports)
+        // The synchronous observer makes progress assertions independent of dispatcher scheduling.
         var sessionId = await CreateSessionWithReadings(5);
         var options = new ExportOptions { IncludeHeader = true };
         var progressValues = new List<double>();
-        var progress = new Progress<double>(v => progressValues.Add(v));
+        var progress = new InlineProgress<double>(progressValues.Add);
 
         // Act
         await _exporter.ExportAsync(sessionId, _csvPath, options, progress);
-        // Give Progress<T> callback time to execute (it posts to SynchronizationContext)
-        await Task.Delay(200);
 
         // Assert - at minimum, final progress of 1.0 should be reported
         Assert.Contains(progressValues, v => Math.Abs(v - 1.0) < 0.001);
@@ -184,41 +182,73 @@ public class CsvExporterTests : IAsyncLifetime
         Assert.Contains("Timestamp", nonEmptyLines[0]);
     }
 
-    [Fact]
-    public async Task ExportAsync_CancellationDeletesFile()
+    [Theory]
+    [InlineData(2000, 0.5)]
+    [InlineData(1000, 1.0)]
+    public async Task ExportAsync_CancellationDeletesFile(int readingCount, double cancellationProgress)
     {
-        // Arrange - need enough readings that cancellation can fire mid-export
-        var baseTime = new DateTime(2025, 6, 1, 12, 0, 0, DateTimeKind.Utc);
-        var config = CreateDefaultConfig();
-        var sessionId = await _storageService.StartSessionAsync("Cancel Test", config, new ConnectionConfig());
-
-        // Create many readings
-        var readings = Enumerable.Range(0, 2000).Select(i =>
-            new MagnetometerReading
-            {
-                SessionId = sessionId,
-                Timestamp = baseTime.AddMilliseconds(i),
-                SensorType = SensorType.TriaxialFluxgate,
-                ChannelValues = [i * 1.0, i * 2.0, i * 3.0],
-                IsCalibrated = false,
-                IsOrthogonalityCorrected = false
-            }).ToArray();
-        await _storageService.SaveReadingsAsync(readings);
-        await Task.Delay(2000);
-
-        var cts = new CancellationTokenSource();
-        var options = new ExportOptions { IncludeHeader = true };
-
-        // Cancel almost immediately
-        cts.CancelAfter(1);
-
-        // Act & Assert
-        await Assert.ThrowsAsync<OperationCanceledException>(async () =>
+        var sessionId = await CreateSessionWithReadings(readingCount);
+        using var cts = new CancellationTokenSource();
+        var progressValues = new List<double>();
+        var progress = new InlineProgress<double>(value =>
         {
-            await _exporter.ExportAsync(sessionId, _csvPath, options, ct: cts.Token);
+            progressValues.Add(value);
+            // The exporter calls IProgress synchronously after writing rows. Cancel here rather
+            // than racing a timer against machine speed. The output must already exist on disk.
+            Assert.True(File.Exists(_csvPath));
+            Assert.True(new FileInfo(_csvPath).Length > 0);
+            cts.Cancel();
         });
 
-        // If cancellation happened mid-write, file should be deleted
-        // If it completed before cancel took effect, that's also acceptable
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            _exporter.ExportAsync(sessionId, _csvPath, new ExportOptions(), progress, cts.Token));
+
+        Assert.Equal(cancellationProgress, Assert.Single(progressValues));
+        Assert.True(cts.IsCancellationRequested);
+        Assert.False(File.Exists(_csvPath));
+        // Cancellation deletes only the incomplete export, leaving the stored session intact.
+        Assert.Equal(readingCount, (await _storageService.GetReadingsAsync(sessionId)).Count);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(3)]
+    public async Task ExportAsync_AlreadyCanceledPreservesExistingDestination(int readingCount)
+    {
+        var sessionId = await CreateSessionWithReadings(readingCount);
+        const string existing = "keep previous export";
+        await File.WriteAllTextAsync(_csvPath, existing);
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            _exporter.ExportAsync(sessionId, _csvPath, new ExportOptions(), ct: cts.Token));
+
+        Assert.Equal(existing, await File.ReadAllTextAsync(_csvPath));
+    }
+
+    [Fact]
+    public async Task ExportAsync_EmptySessionCancellationDeletesHeaderFile()
+    {
+        var sessionId = await CreateSessionWithReadings(0);
+        using var cts = new CancellationTokenSource();
+        bool outputCreated = false;
+        var progress = new InlineProgress<double>(value =>
+        {
+            Assert.Equal(1.0, value);
+            outputCreated = File.Exists(_csvPath) && new FileInfo(_csvPath).Length > 0;
+            cts.Cancel();
+        });
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            _exporter.ExportAsync(sessionId, _csvPath, new ExportOptions { IncludeHeader = true }, progress, cts.Token));
+
+        Assert.True(outputCreated);
+        Assert.False(File.Exists(_csvPath));
+    }
+
+    private sealed class InlineProgress<T>(Action<T> report) : IProgress<T>
+    {
+        public void Report(T value) => report(value);
     }
 }

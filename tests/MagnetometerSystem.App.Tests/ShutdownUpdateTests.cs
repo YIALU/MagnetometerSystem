@@ -145,6 +145,8 @@ public class ShutdownUpdateTests
         await Execute("CREATE TRIGGER fail_live_save BEFORE INSERT ON readings BEGIN SELECT RAISE(FAIL, 'test live disk failure'); END;");
         using var faultObserved = new ManualResetEventSlim();
         int faults = 0;
+        int stopped = 0;
+        fixture.Bus.AcquisitionStopped += () => stopped++;
         fixture.Bus.AcquisitionFaulted += _ => throw new IOException("isolated observer error");
         fixture.Bus.AcquisitionFaulted += _ => { Interlocked.Increment(ref faults); faultObserved.Set(); };
         bool triggerExists = true;
@@ -177,13 +179,22 @@ public class ShutdownUpdateTests
             Assert.Empty(await fixture.Storage.GetReadingsAsync(sessionId));
             Assert.Null(Assert.Single(await fixture.Storage.GetSessionsAsync()).EndedAt);
 
+            await sessions.RetryStorageCommand.ExecuteAsync(null);
+            Assert.True(fixture.Main.ConnectionVM.IsAcquiring);
+            Assert.Equal(sessionId, sessions.ActiveSessionId);
+            Assert.NotNull(sessions.StorageError);
+            Assert.Equal(0, stopped);
+            Assert.Equal(3, fixture.Storage.PendingWriteCount);
+            Assert.Equal(2, Volatile.Read(ref faults));
+
             await Execute("DROP TRIGGER fail_live_save;");
             triggerExists = false;
             // Passive waits never implicitly restart the writer, even after the cause has been repaired.
             await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Storage.WaitForPendingWritesAsync());
-            Assert.Equal(1, Volatile.Read(ref faults));
+            Assert.Equal(2, Volatile.Read(ref faults));
             await sessions.RetryStorageCommand.ExecuteAsync(null);
-            await fixture.Main.ConnectionVM.StopAcquisitionAsync();
+            Assert.False(fixture.Main.ConnectionVM.IsAcquiring);
+            Assert.Equal(1, stopped);
             Assert.Null(sessions.StorageError);
             Assert.Null(sessions.ActiveSessionId);
             Assert.Equal(0, fixture.Storage.PendingWriteCount);
@@ -195,7 +206,10 @@ public class ShutdownUpdateTests
             fixture.Connection.Feed("16,17,18\n");
             string newSessionId = Assert.IsType<string>(sessions.ActiveSessionId);
             Assert.NotEqual(sessionId, newSessionId);
+            Assert.True(fixture.Main.ConnectionVM.IsAcquiring);
+            Assert.True(fixture.Connection.IsConnected);
             await fixture.Main.ConnectionVM.StopAcquisitionAsync();
+            Assert.Equal(2, stopped);
             Assert.Equal(16d, Assert.Single(await fixture.Storage.GetReadingsAsync(newSessionId)).ChannelValues[0]);
         }
         finally
