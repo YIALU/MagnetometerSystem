@@ -37,15 +37,17 @@ public sealed class GiteeUpdateService : IUpdateService, IDisposable
 
     public UpdateOptions Options { get; }
 
-    public GiteeUpdateService(UpdateOptions options)
+    public GiteeUpdateService(UpdateOptions options) : this(options, null)
+    {
+    }
+
+    internal GiteeUpdateService(UpdateOptions options, HttpMessageHandler? handler)
     {
         Options = options ?? throw new ArgumentNullException(nameof(options));
 
-        _http = new HttpClient
-        {
-            // 只覆盖到响应头；下载正文时用 ResponseHeadersRead 绕开该超时
-            Timeout = TimeSpan.FromSeconds(15)
-        };
+        _http = handler == null ? new HttpClient() : new HttpClient(handler);
+        // 只覆盖到响应头；下载正文时用 ResponseHeadersRead 绕开该超时
+        _http.Timeout = TimeSpan.FromSeconds(15);
         _http.DefaultRequestHeaders.UserAgent.Add(
             new ProductInfoHeaderValue("MagnetometerSystem", options.CurrentVersion));
         _http.DefaultRequestHeaders.Accept.Add(
@@ -262,24 +264,24 @@ public sealed class GiteeUpdateService : IUpdateService, IDisposable
         var targetPath = Path.Combine(Options.DownloadDirectory, info.FileName!);
         var partPath = targetPath + ".part";
 
-        var expectedHash = await TryGetExpectedHashAsync(info, ct).ConfigureAwait(false);
-
-        // 上次下载完成过就别再下一遍
-        if (File.Exists(targetPath))
-        {
-            if (expectedHash is null ||
-                string.Equals(await ComputeSha256Async(targetPath, ct).ConfigureAwait(false),
-                              expectedHash, StringComparison.OrdinalIgnoreCase))
-            {
-                return targetPath;
-            }
-            File.Delete(targetPath);
-        }
-
-        File.Delete(partPath);
-
         try
         {
+            // 缓存和新下载都必须有当前发行版所选文件的有效校验值。
+            var expectedHash = await GetExpectedHashAsync(info, ct).ConfigureAwait(false);
+
+            // 只有重新校验通过的缓存才能复用。
+            if (File.Exists(targetPath))
+            {
+                if (string.Equals(await ComputeSha256Async(targetPath, ct).ConfigureAwait(false),
+                                  expectedHash, StringComparison.OrdinalIgnoreCase))
+                {
+                    return targetPath;
+                }
+                File.Delete(targetPath);
+            }
+
+            File.Delete(partPath);
+
             using (var response = await _http.GetAsync(
                        info.DownloadUrl, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false))
             {
@@ -304,14 +306,11 @@ public sealed class GiteeUpdateService : IUpdateService, IDisposable
                 }
             }
 
-            if (expectedHash is not null)
+            var actual = await ComputeSha256Async(partPath, ct).ConfigureAwait(false);
+            if (!string.Equals(actual, expectedHash, StringComparison.OrdinalIgnoreCase))
             {
-                var actual = await ComputeSha256Async(partPath, ct).ConfigureAwait(false);
-                if (!string.Equals(actual, expectedHash, StringComparison.OrdinalIgnoreCase))
-                {
-                    throw new InvalidDataException(
-                        "安装包校验失败，文件可能在传输中损坏。请重试，或到发行版页面手动下载。");
-                }
+                throw new InvalidDataException(
+                    "安装包校验失败，文件可能在传输中损坏。请重试，或到发行版页面手动下载。");
             }
 
             File.Move(partPath, targetPath, overwrite: true);
@@ -326,29 +325,31 @@ public sealed class GiteeUpdateService : IUpdateService, IDisposable
     }
 
     /// <summary>
-    /// 从 SHA256SUMS.txt 取该文件的预期哈希。附件不存在或取不到时返回 null（跳过校验）。
-    /// 校验文件本身取不到不应阻断更新——它只是加分项。
+    /// 从 SHA256SUMS.txt 取所选文件的有效 SHA256；无法取得时拒绝应用内下载及缓存复用。
     /// </summary>
-    private async Task<string?> TryGetExpectedHashAsync(UpdateInfo info, CancellationToken ct)
+    private async Task<string> GetExpectedHashAsync(UpdateInfo info, CancellationToken ct)
     {
-        if (string.IsNullOrEmpty(info.ChecksumsUrl) || string.IsNullOrEmpty(info.FileName))
+        if (string.IsNullOrWhiteSpace(info.ChecksumsUrl) || string.IsNullOrEmpty(info.FileName))
         {
-            return null;
+            throw new InvalidDataException("发行版缺少 SHA256 校验文件，无法验证安装包。请到发行版页面手动下载。");
         }
 
+        string text;
         try
         {
-            var text = await _http.GetStringAsync(info.ChecksumsUrl, ct).ConfigureAwait(false);
-            return ParseChecksums(text, info.FileName!);
+            text = await _http.GetStringAsync(info.ChecksumsUrl, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             throw;
         }
-        catch
+        catch (Exception ex)
         {
-            return null;
+            throw new InvalidDataException("无法获取 SHA256 校验文件，安装包未经验证。请重试或到发行版页面手动下载。", ex);
         }
+
+        return ParseChecksums(text, info.FileName!)
+            ?? throw new InvalidDataException("SHA256 校验清单没有所选安装包的有效校验值。请到发行版页面手动下载。");
     }
 
     /// <summary>解析 sha256sum 格式：「&lt;hash&gt;&lt;空白&gt;&lt;文件名&gt;」，每行一条。</summary>
@@ -364,9 +365,11 @@ public sealed class GiteeUpdateService : IUpdateService, IDisposable
 
             // 兼容 sha256sum 二进制模式的 '*' 前缀
             var name = parts[1].Trim().TrimStart('*');
-            if (name.Equals(fileName, StringComparison.OrdinalIgnoreCase))
+            var hash = parts[0];
+            if (name.Equals(fileName, StringComparison.OrdinalIgnoreCase)
+                && hash.Length == 64 && hash.All(Uri.IsHexDigit))
             {
-                return parts[0].Trim();
+                return hash;
             }
         }
 

@@ -90,7 +90,7 @@ public sealed record UpdateInfo
     /// <summary>安装包文件名。</summary>
     public string? FileName { get; init; }
 
-    /// <summary>SHA256SUMS.txt 的下载地址。没有该附件时为 null，此时跳过校验。</summary>
+    /// <summary>SHA256SUMS.txt 的下载地址。缺失或无法取得有效目标校验值时，应用内下载必须失败。</summary>
     public string? ChecksumsUrl { get; init; }
 
     /// <summary>是否可以在应用内直接下载（附件齐全）。</summary>
