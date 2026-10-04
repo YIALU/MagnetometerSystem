@@ -8,12 +8,14 @@ namespace MagnetometerSystem.App.Tests;
 
 public class ZdzUnitAxesTests
 {
-    [Fact]
-    public Task ZdzChannelsUsePhysicalUnitAxesAndSurviveChannelReorder() => WpfTestHost.RunAsync(async () =>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public Task ZdzChannelsUsePhysicalUnitAxesAndSurviveChannelReorder(bool autoScale) => WpfTestHost.RunAsync(async () =>
     {
         var protocol = ProtocolConfig.CreateZdzC08();
         var bus = new DataBus();
-        using var vm = new RealtimeChartViewModel(bus);
+        using var vm = new RealtimeChartViewModel(bus) { AutoScaleY = autoScale };
         vm.PlotControl = new WpfPlot();
         bus.PublishAcquisitionStarted(new SensorConfig
         {
@@ -34,7 +36,15 @@ public class ZdzUnitAxesTests
         var lines = vm.PlotControl.Plot.GetPlottables().OfType<ScottPlot.Plottables.Scatter>().ToArray();
         Assert.Equal(21, lines.Length);
         for (int ch = 0; ch < lines.Length; ch++)
+        {
             Assert.Equal(protocol.DerivedChannelUnits[ch], lines[ch].Axes.YAxis.Label.Text);
+            if (autoScale || !ReferenceEquals(lines[ch].Axes.YAxis, vm.PlotControl.Plot.Axes.Left))
+            {
+                var range = lines[ch].Axes.YAxis.Range;
+                Assert.True(range.Min <= ch * 1000.0 && range.Max >= ch * 1000.0 + 3,
+                    $"Channel {ch} values must be visible inside {range.Min}..{range.Max}");
+            }
+        }
         Assert.Same(lines[0].Axes.YAxis, lines[8].Axes.YAxis);
         Assert.NotSame(lines[0].Axes.YAxis, lines[9].Axes.YAxis);
         Assert.NotSame(lines[9].Axes.YAxis, lines[11].Axes.YAxis);

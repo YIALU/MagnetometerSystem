@@ -18,7 +18,7 @@ public interface IDataStorageService
 
     /// <summary>
     /// 等待后台写入队列把当前已入队的读数全部落库（用于结束会话前确保计数准确）。
-    /// 超时后返回，不阻塞退出。
+    /// 写入失败或超时会抛出异常，不能继续宣称已保存；再次等待会重试保留的失败批次。
     /// </summary>
     Task WaitForPendingWritesAsync(int timeoutMs = 5000);
 
@@ -64,6 +64,7 @@ public class SessionInfo
     public double SampleRate { get; set; }
     public int ChannelCount { get; set; }
     public string[] ChannelNames { get; set; } = [];
+    public string[] ChannelUnits { get; set; } = [];
     public string? DeviceInfo { get; set; }
     public ConnectionType ConnectionType { get; set; }
     public string? Notes { get; set; }

@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     sample_rate     REAL NOT NULL,
     channel_count   INTEGER NOT NULL,
     channel_names   TEXT,
+    channel_units   TEXT,
     device_info     TEXT,
     connection_type TEXT,
     notes           TEXT,

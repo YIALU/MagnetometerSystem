@@ -26,6 +26,12 @@ public partial class ConnectionViewModel : ObservableObject
     private IDeviceConnection? _connection;
     private IDataParser? _parser;
     private ISensorAdapter? _sensorAdapter;
+    private readonly SemaphoreSlim _connectionGate = new(1, 1);
+    private readonly object _receiveGate = new();
+    private bool _sessionPrepared;
+
+    [ObservableProperty]
+    private bool _isAcquiring;
 
     // ---- 传感器配置 ----
 
@@ -192,12 +198,18 @@ public partial class ConnectionViewModel : ObservableObject
     [RelayCommand]
     private async Task ConnectAsync()
     {
-        if (IsConnected)
+        await _connectionGate.WaitAsync();
+        try
         {
-            await DisconnectAsync();
-            return;
+            if (_sessionPrepared || _connection != null) await DisconnectCoreAsync();
+            else await ConnectCoreAsync();
         }
+        catch (Exception ex) { StatusMessage = $"连接或保存失败: {ex.Message}"; }
+        finally { _connectionGate.Release(); }
+    }
 
+    private async Task ConnectCoreAsync()
+    {
         try
         {
             var sensorConfig = new SensorConfig
@@ -253,7 +265,9 @@ public partial class ConnectionViewModel : ObservableObject
             // 关键时序：在打开连接之前先创建会话并就绪 ActiveSessionId。
             // 串口/TCP 一旦打开即可在后台线程触发数据事件，若此时会话尚未创建，
             // 到达的读数会被 SessionListViewModel 丢弃。故此处 await 直到会话就绪。
+            _sessionPrepared = true;
             await _dataBus.PublishAcquisitionStartingAsync(sensorConfig);
+            IsAcquiring = true;
 
             await _connection.ConnectAsync();
             StatusMessage = "已连接";
@@ -264,104 +278,116 @@ public partial class ConnectionViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            // 清理已创建但连接失败的资源
-            if (_connection != null)
-            {
-                _connection.DataReceived -= OnDataReceived;
-                _connection.ErrorOccurred -= OnErrorOccurred;
-                _connection.ConnectionStateChanged -= OnConnectionStateChanged;
-                try { await _connection.DisposeAsync(); } catch { }
-                _connection = null;
-                _dataBus.PublishConnectionChanged(null);
-            }
-            _parser = null;
-            _sensorAdapter = null;
-            // 回滚：连接失败时结束已提前创建的空会话，避免遗留无数据的会话记录
-            _dataBus.PublishAcquisitionStopped();
-            StatusMessage = $"连接失败: {ex.Message}";
+            string message = ex.Message;
+            try { await DisconnectCoreAsync(); }
+            catch (Exception cleanup) { message += $"；结束会话失败: {cleanup.Message}"; }
+            StatusMessage = $"连接失败: {message}";
         }
     }
 
-    private async Task DisconnectAsync()
+    public async Task StopAcquisitionAsync()
     {
-        if (_connection != null)
+        await _connectionGate.WaitAsync();
+        try { await DisconnectCoreAsync(); }
+        finally { _connectionGate.Release(); }
+    }
+
+    private async Task DisconnectCoreAsync()
+    {
+        var connection = _connection;
+        if (connection != null)
         {
-            _connection.DataReceived -= OnDataReceived;
-            _connection.ErrorOccurred -= OnErrorOccurred;
-            _connection.ConnectionStateChanged -= OnConnectionStateChanged;
-            await _connection.DisconnectAsync();
-            await _connection.DisposeAsync();
-            _connection = null;
+            // Disconnect may deliver the final callback; keep receiving until it completes.
+            await connection.DisconnectAsync();
+            lock (_receiveGate)
+            {
+                connection.DataReceived -= OnDataReceived;
+                connection.ErrorOccurred -= OnErrorOccurred;
+                connection.ConnectionStateChanged -= OnConnectionStateChanged;
+                _connection = null;
+                _parser?.Reset();
+                _parser = null;
+                _sensorAdapter = null;
+            }
             _dataBus.PublishConnectionChanged(null);
+            await connection.DisposeAsync();
         }
-        _parser?.Reset();
-        _parser = null;
-        _sensorAdapter = null;
-        _dataBus.PublishAcquisitionStopped();
         IsConnected = false;
-        StatusMessage = "已断开";
+        if (_sessionPrepared)
+        {
+            StatusMessage = "正在保存尾批数据...";
+            await _dataBus.PublishAcquisitionStoppingAsync();
+            _sessionPrepared = false;
+            _dataBus.PublishAcquisitionStopped();
+        }
+        IsAcquiring = false;
+        StatusMessage = "已断开 · 会话已保存";
     }
 
     private void OnDataReceived(object? sender, byte[] data)
     {
-        // 原始数据显示：纯调试参考，独立于解析链路，无条件回显收到的字节。
-        // 勾选 ShowHex → 16 进制；否则 → ASCII 字符串。解析失败/卡死都不影响这里。
-        var rawLine = ShowHex
-            ? BitConverter.ToString(data).Replace("-", " ")
-            : System.Text.Encoding.ASCII.GetString(data);
-        Application.Current?.Dispatcher.BeginInvoke(() =>
+        lock (_receiveGate)
         {
-            RawDataLines.Add(rawLine);
-            while (RawDataLines.Count > MaxRawDataLines)
-                RawDataLines.RemoveAt(0);
-        });
+            if (!ReferenceEquals(sender, _connection) || _parser == null) return;
+            // 原始数据显示：纯调试参考，独立于解析链路，无条件回显收到的字节。
+            // 勾选 ShowHex → 16 进制；否则 → ASCII 字符串。解析失败/卡死都不影响这里。
+            var rawLine = ShowHex
+                ? BitConverter.ToString(data).Replace("-", " ")
+                : System.Text.Encoding.ASCII.GetString(data);
+            Application.Current?.Dispatcher.BeginInvoke(() =>
+            {
+                RawDataLines.Add(rawLine);
+                while (RawDataLines.Count > MaxRawDataLines)
+                    RawDataLines.RemoveAt(0);
+            });
 
-        try
-        {
-            _parser?.Feed(data, 0, data.Length);
-        }
-        catch (Exception ex)
-        {
-            System.Diagnostics.Trace.TraceError($"[Parser.Feed] {ex}");
-            return;
-        }
-
-        // 单帧独立 try/catch：一帧失败不影响后续帧，更不能让异常冒泡断流
-        while (true)
-        {
-            MagnetometerReading? reading;
             try
             {
-                if (_parser?.TryParse(out reading) != true || reading == null)
-                    break;
+                _parser?.Feed(data, 0, data.Length);
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Trace.TraceError($"[Parser.TryParse] {ex}");
-                break; // parser 内部状态可能脏，跳出，下次 Feed 再继续
+                System.Diagnostics.Trace.TraceError($"[Parser.Feed] {ex}");
+                return;
             }
 
-            try
+            // 单帧独立 try/catch：一帧失败不影响后续帧，更不能让异常冒泡断流
+            while (true)
             {
-                var processed = _sensorAdapter?.Process(reading) ?? reading;
-
-                // 正交度校正（在发布之前应用）
-                if (IsOrthogonalityCorrectionEnabled && ActiveOrthogonalityProfile != null)
+                MagnetometerReading? reading;
+                try
                 {
-                    processed.OriginalChannelValues = processed.ChannelValues.ToArray();
-                    processed = _orthogonalityCorrector.ApplyToReading(
-                        ActiveOrthogonalityProfile, SecondOrthogonalityProfile, processed);
+                    if (_parser?.TryParse(out reading) != true || reading == null)
+                        break;
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Trace.TraceError($"[Parser.TryParse] {ex}");
+                    break; // parser 内部状态可能脏，跳出，下次 Feed 再继续
                 }
 
-                // 发布到数据总线（供实时图表等消费者使用）
-                _dataBus.PublishReading(processed);
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Trace.TraceError(
-                    $"[ProcessReading] channels={reading?.ChannelValues?.Length} " +
-                    $"sensorType={reading?.SensorType} ortho={IsOrthogonalityCorrectionEnabled} ex={ex}");
-                // 单帧失败，继续下一帧
+                try
+                {
+                    var processed = _sensorAdapter?.Process(reading) ?? reading;
+
+                    // 正交度校正（在发布之前应用）
+                    if (IsOrthogonalityCorrectionEnabled && ActiveOrthogonalityProfile != null)
+                    {
+                        processed.OriginalChannelValues = processed.ChannelValues.ToArray();
+                        processed = _orthogonalityCorrector.ApplyToReading(
+                            ActiveOrthogonalityProfile, SecondOrthogonalityProfile, processed);
+                    }
+
+                    // 发布到数据总线（供实时图表等消费者使用）
+                    _dataBus.PublishReading(processed);
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Trace.TraceError(
+                        $"[ProcessReading] channels={reading?.ChannelValues?.Length} " +
+                        $"sensorType={reading?.SensorType} ortho={IsOrthogonalityCorrectionEnabled} ex={ex}");
+                    // 单帧失败，继续下一帧
+                }
             }
         }
     }

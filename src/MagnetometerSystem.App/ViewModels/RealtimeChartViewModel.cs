@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Globalization;
 using System.Text;
 using System.Windows;
 using System.Windows.Threading;
@@ -47,6 +48,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
 
     private int _channelCount;
     private string[] _channelNames = [];
+    private string[] _channelUnits = [];
     private readonly Dictionary<string, ScottPlot.IYAxis> _unitAxes = new();
     private DateTime _startTime;
     private bool _isAcquiring;
@@ -82,6 +84,9 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
 
     [ObservableProperty]
     private string _statisticsText = "";
+
+    [ObservableProperty]
+    private string _computationError = "";
 
     [ObservableProperty]
     private long _dataPointCount;
@@ -256,6 +261,8 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
         int channelCount = Math.Min(config.ChannelCount, MaxChannels);
         string[] channelNames = config.ChannelNames;
         string[] configUnits = config.ChannelUnits;
+        bool unitsChanged = !_channelUnits.SequenceEqual(configUnits);
+        _channelUnits = configUnits.ToArray();
         _startTime = DateTime.Now;
         _isAcquiring = true;
 
@@ -275,7 +282,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
             IsPaused = false;
 
             // 初始化通道显示配置：仅当通道数量或名称发生变化时才重建，否则保留现有 Visible 等用户配置
-            bool channelLayoutChanged =
+            bool channelLayoutChanged = unitsChanged ||
                 ChannelConfigs.Count != _channelCount ||
                 !Enumerable.Range(0, _channelCount).All(i =>
                     i < ChannelConfigs.Count &&
@@ -451,9 +458,9 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
         RenderComputedChannels(plot, windowTimes, channelData, startIdx, count);
 
         ConfigurePlotAxes(plot, xMin, xMax);
-        if (!AutoScaleY)
-            foreach (var axis in _unitAxes.Values.Where(a => !ReferenceEquals(a, plot.Axes.Left)))
-                plot.Axes.AutoScaleY(axis);
+        // The parameterless AutoScaleY above affects only the left axis.
+        foreach (var axis in _unitAxes.Values.Where(a => !ReferenceEquals(a, plot.Axes.Left)))
+            plot.Axes.AutoScaleY(axis);
         plot.ShowLegend();
         PlotControl.Refresh();
     }
@@ -796,11 +803,12 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private void AddComputedChannel()
     {
-        string defaultFormula = _channelNames.Length > 0 ? _channelNames[0] : "CH0";
+        string defaultFormula = "CH0";
         ComputedChannels.Add(new ComputedChannelDefinition
         {
             Name = $"Calc{ComputedChannels.Count}",
             Formula = defaultFormula,
+            Unit = _channelUnits.FirstOrDefault() ?? "",
             ChannelType = ComputedChannelType.Custom,
             ColorHex = "#FF000000",
         });
@@ -823,6 +831,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private void StartAddTotalField()
     {
+        ComputationError = "";
         BuildWizardRawSources();
         WizardSourceA = 0;
         WizardSourceB = Math.Min(1, WizardRawSources.Count - 1);
@@ -834,6 +843,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private void ConfirmAddTotalField()
     {
+        ComputationError = "";
         if (WizardSourceA < 0 || WizardSourceA >= WizardRawSources.Count
             || WizardSourceB < 0 || WizardSourceB >= WizardRawSources.Count
             || WizardSourceC < 0 || WizardSourceC >= WizardRawSources.Count)
@@ -842,6 +852,9 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
             return;
         }
 
+        var sources = new[] { WizardRawSources[WizardSourceA], WizardRawSources[WizardSourceB], WizardRawSources[WizardSourceC] };
+        if (sources.Select(s => s.FormulaExpr).Distinct().Count() != 3 || !HaveSameMagneticUnit(sources))
+        { ComputationError = "总场需要三个不同通道，且使用相同的磁场单位。"; return; }
         var a = WizardRawSources[WizardSourceA].FormulaExpr;
         var b = WizardRawSources[WizardSourceB].FormulaExpr;
         var c = WizardRawSources[WizardSourceC].FormulaExpr;
@@ -851,6 +864,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
         ComputedChannels.Add(new ComputedChannelDefinition
         {
             Name = $"Total{totalCount}",
+            Unit = sources[0].Unit,
             Formula = formula,
             ChannelType = ComputedChannelType.TotalField,
             ColorHex = "#FF000000",
@@ -865,6 +879,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private void StartAddGradient()
     {
+        ComputationError = "";
         BuildWizardGradientSources();
         WizardSourceA = 0;
         WizardSourceB = Math.Min(1, WizardGradientSources.Count - 1);
@@ -875,6 +890,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private void ConfirmAddGradient()
     {
+        ComputationError = "";
         if (WizardSourceA < 0 || WizardSourceA >= WizardGradientSources.Count
             || WizardSourceB < 0 || WizardSourceB >= WizardGradientSources.Count)
         {
@@ -882,16 +898,22 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
             return;
         }
 
+        var sources = new[] { WizardGradientSources[WizardSourceA], WizardGradientSources[WizardSourceB] };
+        if (sources[0].FormulaExpr == sources[1].FormulaExpr || !HaveSameMagneticUnit(sources))
+        { ComputationError = "磁场梯度需要两个不同来源，且使用相同的磁场单位。"; return; }
         var a = WizardGradientSources[WizardSourceA].FormulaExpr;
         var b = WizardGradientSources[WizardSourceB].FormulaExpr;
-        var formula = GradientBaselineDistance != 0 && GradientBaselineDistance != 1.0
-            ? $"(({a}) - ({b})) / {GradientBaselineDistance:R}"
+        if (!double.IsFinite(GradientBaselineDistance) || GradientBaselineDistance <= 0)
+        { ComputationError = "梯度基线距离必须为有限正数。"; return; }
+        var formula = GradientBaselineDistance != 1.0
+            ? $"(({a}) - ({b})) / {GradientBaselineDistance.ToString("R", CultureInfo.InvariantCulture)}"
             : $"({a}) - ({b})";
 
         int gradCount = ComputedChannels.Count(ch => ch.ChannelType == ComputedChannelType.Gradient) + 1;
         ComputedChannels.Add(new ComputedChannelDefinition
         {
             Name = $"Grad{gradCount}",
+            Unit = sources[0].Unit + "/m",
             Formula = formula,
             ChannelType = ComputedChannelType.Gradient,
             ColorHex = "#FF808080",
@@ -903,9 +925,14 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private void CancelAddWizard()
     {
+        ComputationError = "";
         IsAddingTotalField = false;
         IsAddingGradient = false;
     }
+
+    private static bool HaveSameMagneticUnit(SourceOption[] sources) =>
+        sources.Select(s => s.Unit).Distinct().Count() == 1
+        && sources[0].Unit is "nT" or "uT" or "µT" or "μT" or "mT" or "T";
 
     /// <summary>
     /// 构建向导可选的原始通道列表
@@ -916,7 +943,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
         for (int i = 0; i < _channelCount; i++)
         {
             var label = i < _channelNames.Length ? _channelNames[i] : $"CH{i}";
-            WizardRawSources.Add(new SourceOption { Label = label, FormulaExpr = $"CH{i}" });
+            WizardRawSources.Add(new SourceOption { Label = label, FormulaExpr = $"CH{i}", Unit = _channelUnits.ElementAtOrDefault(i) ?? "" });
         }
     }
 
@@ -931,7 +958,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
         for (int i = 0; i < _channelCount; i++)
         {
             var label = i < _channelNames.Length ? _channelNames[i] : $"CH{i}";
-            WizardGradientSources.Add(new SourceOption { Label = label, FormulaExpr = $"CH{i}" });
+            WizardGradientSources.Add(new SourceOption { Label = label, FormulaExpr = $"CH{i}", Unit = _channelUnits.ElementAtOrDefault(i) ?? "" });
         }
 
         // 已有计算通道（内联其公式）
@@ -943,6 +970,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
                 {
                     Label = comp.Name,
                     FormulaExpr = comp.Formula,
+                    Unit = comp.Unit,
                 });
             }
         }

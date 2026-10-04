@@ -53,6 +53,16 @@ public class DataBus
     /// <summary>采集开始（连接打开之后触发，供图表等非关键消费者初始化）</summary>
     public event Action<SensorConfig>? AcquisitionStarted;
 
+    /// <summary>采集停止前等待关键消费者保存完成；失败传回退出/断开调用方。</summary>
+    public event Func<Task>? AcquisitionStopping;
+
+    public async Task PublishAcquisitionStoppingAsync()
+    {
+        var handlers = AcquisitionStopping;
+        if (handlers == null) return;
+        foreach (Func<Task> handler in handlers.GetInvocationList()) await handler();
+    }
+
     /// <summary>采集停止</summary>
     public event Action? AcquisitionStopped;
 

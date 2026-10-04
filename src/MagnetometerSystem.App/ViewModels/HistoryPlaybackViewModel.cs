@@ -34,6 +34,7 @@ public partial class HistoryPlaybackViewModel : ObservableObject
 
     // ---- 内部数据 ----
     private MagnetometerReading[] _readings = [];
+    private SensorConfig? _loadedSensorConfig;
     private DispatcherTimer? _playbackTimer;
     private bool _wasPlayingBeforeSeek;
 
@@ -170,6 +171,7 @@ public partial class HistoryPlaybackViewModel : ObservableObject
     private async Task LoadSessionAsync()
     {
         if (SelectedSession == null) return;
+        var selectedSession = SelectedSession;
 
         // 如果正在回放，先停止
         if (State == PlaybackState.Playing || State == PlaybackState.Paused)
@@ -182,8 +184,9 @@ public partial class HistoryPlaybackViewModel : ObservableObject
 
         try
         {
-            var readings = await _storageService.GetReadingsAsync(SelectedSession.Id);
+            var readings = await _storageService.GetReadingsAsync(selectedSession.Id);
             _readings = readings.OrderBy(r => r.Timestamp).ToArray();
+            _loadedSensorConfig = RebuildSensorConfig(selectedSession);
 
             TotalReadings = _readings.Length;
             CurrentIndex = 0;
@@ -232,7 +235,7 @@ public partial class HistoryPlaybackViewModel : ObservableObject
                 Progress = 0;
             }
 
-            var sensorConfig = RebuildSensorConfig(SelectedSession!);
+            var sensorConfig = _loadedSensorConfig!;
             _dataBus.PublishAcquisitionStarted(sensorConfig);
         }
 
@@ -329,8 +332,8 @@ public partial class HistoryPlaybackViewModel : ObservableObject
     {
         _playbackTimer?.Stop();
 
-        var baseInterval = SelectedSession!.SampleRate > 0
-            ? 1000.0 / SelectedSession.SampleRate
+        var baseInterval = _loadedSensorConfig!.SampleRate > 0
+            ? 1000.0 / _loadedSensorConfig.SampleRate
             : 100.0;
         var adjustedInterval = baseInterval / PlaybackSpeed;
 
@@ -432,6 +435,8 @@ public partial class HistoryPlaybackViewModel : ObservableObject
             SampleRate = session.SampleRate,
             ChannelCountOverride = session.ChannelCount,
             ChannelNamesOverride = session.ChannelNames,
+            ChannelUnitsOverride = Enumerable.Range(0, session.ChannelCount)
+                .Select(i => i < session.ChannelUnits.Length ? session.ChannelUnits[i] : "未知单位").ToArray(),
         };
     }
 

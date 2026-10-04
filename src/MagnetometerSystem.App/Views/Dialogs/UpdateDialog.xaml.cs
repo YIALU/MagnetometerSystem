@@ -89,6 +89,8 @@ public partial class UpdateDialog : Window
 
     private async Task DownloadAndApplyAsync()
     {
+        MainWindow? preparedWindow = null;
+        bool exitRequested = false;
         _cts = new CancellationTokenSource();
         SetDownloadingState(true);
 
@@ -97,14 +99,24 @@ public partial class UpdateDialog : Window
             var progress = new Progress<DownloadProgress>(OnProgress);
             var localPath = await _updateService.DownloadAsync(_info, progress, _cts.Token);
 
-            StatusText.Text = "下载完成，正在启动安装…";
+            StatusText.Text = "下载完成，正在准备更新…";
             Log.Information("更新包已下载: {Path}", localPath);
 
+            if (_updateService.Options.PackageKind == AppPackageKind.Installer)
+            {
+                var mainWindow = Application.Current.MainWindow as MainWindow
+                    ?? throw new InvalidOperationException("无法找到主窗口，未启动安装。");
+                StatusText.Text = "正在停止采集并保存数据，完成后启动安装…";
+                await mainWindow.PrepareForExitAsync();
+                preparedWindow = mainWindow;
+                _cts.Token.ThrowIfCancellationRequested();
+            }
             var shouldExit = _updateService.TryApplyUpdate(_info, localPath);
 
             if (shouldExit)
             {
-                // 安装版：静默安装会关闭本程序并在装完后自动重启新版本
+                // 安装器可能立即关闭本进程；启动它之前已经等待全部保存。
+                exitRequested = true;
                 Application.Current.Shutdown();
                 return;
             }
@@ -132,6 +144,9 @@ public partial class UpdateDialog : Window
         }
         finally
         {
+            // 安装未启动、取消或便携模式不会退出；恢复正常操作。
+            if (preparedWindow != null && !exitRequested)
+                preparedWindow.CancelExitPreparation();
             _cts?.Dispose();
             _cts = null;
         }

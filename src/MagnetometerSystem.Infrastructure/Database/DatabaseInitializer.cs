@@ -44,6 +44,11 @@ public class DatabaseInitializer
         await DropLegacyTablesIfNeededAsync(connection);
 
         await connection.ExecuteAsync(LoadSchemaSql());
+        // Incremental metadata migration: existing sessions/readings remain unchanged.
+        var hasUnits = await connection.ExecuteScalarAsync<long>(
+            "SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name='channel_units'") > 0;
+        if (!hasUnits)
+            await connection.ExecuteAsync("ALTER TABLE sessions ADD COLUMN channel_units TEXT;");
     }
 
     private static async Task DropLegacyTablesIfNeededAsync(SqliteConnection conn)

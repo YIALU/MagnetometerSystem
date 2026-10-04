@@ -168,31 +168,30 @@ public partial class App : Application
         }
     }
 
+    internal static async Task SaveCurrentSettingsAsync(MainViewModel mainVm, IAppConfigService? configService = null)
+    {
+        configService ??= Services.GetRequiredService<IAppConfigService>();
+        var settings = await configService.LoadSettingsAsync();
+        settings.ChartRefreshRate = mainVm.RealtimeChartVM.RefreshRate;
+        settings.DefaultPortName = mainVm.ConnectionVM.SelectedPort;
+        settings.DefaultBaudRate = mainVm.ConnectionVM.BaudRate;
+        settings.DefaultIpAddress = mainVm.ConnectionVM.IpAddress;
+        settings.DefaultPort = mainVm.ConnectionVM.Port;
+        await configService.SaveSettingsAsync(settings);
+    }
+
+    /// <summary>所有正常退出入口都先等待物理连接停止、会话提交和设置保存。</summary>
+    public static async Task PrepareForExitAsync(MainViewModel mainVm, IAppConfigService? configService = null)
+    {
+        await mainVm.ConnectionVM.StopAcquisitionAsync();
+        // Stop 已等待真实存储任务；异步刷新的错误文字/计数不能作为提交凭据。
+        if (mainVm.SessionListVM.ActiveSessionId != null)
+            throw new InvalidOperationException("当前会话尚未完成保存，请重试写入后再退出。");
+        await SaveCurrentSettingsAsync(mainVm, configService);
+    }
+
     private void OnExit(object sender, ExitEventArgs e)
     {
-        try
-        {
-            var configService = Services.GetRequiredService<IAppConfigService>();
-
-            if (MainWindow?.DataContext is MainViewModel mainVm)
-            {
-                var settings = new AppSettings
-                {
-                    ChartRefreshRate = mainVm.RealtimeChartVM.RefreshRate,
-                    DefaultPortName = mainVm.ConnectionVM.SelectedPort,
-                    DefaultBaudRate = mainVm.ConnectionVM.BaudRate,
-                    DefaultIpAddress = mainVm.ConnectionVM.IpAddress,
-                    DefaultPort = mainVm.ConnectionVM.Port,
-                };
-
-                configService.SaveSettingsAsync(settings).GetAwaiter().GetResult();
-            }
-        }
-        catch (Exception ex)
-        {
-            System.Diagnostics.Trace.TraceError($"保存配置失败: {ex.Message}");
-        }
-
         _singleInstanceMutex?.Dispose();
         _singleInstanceMutex = null;
 
