@@ -11,7 +11,7 @@ namespace MagnetometerSystem.Core.Protocol;
 /// <code>$&lt;L&gt;\n&lt;L digits&gt;&lt;payload&gt;\nack\n</code>
 /// 其中 &lt;L&gt; = digits(L) + payload 字节数（自参考，§3.3）。
 /// payload = " HHMMSS 台站码 仪器ID 采样率 4 ch1..ch4码 ch1..ch4值"，完整匹配实时数据结构后读取 D/H/Z/T。
-/// 非数据帧（$ack / $err / 登录返回的仪器 ID 尾巴 / 非法长度字段）静默跳过，不产读数。
+/// 合法命令响应（$ack / $err / 带数据响应）不产读数；损坏封装和测量字段仍提供诊断。
 /// </summary>
 public class Ctmbs3X2000Parser : IDataParser, IParserDiagnostics
 {
@@ -109,10 +109,10 @@ public class Ctmbs3X2000Parser : IDataParser, IParserDiagnostics
 
             // 取出完整帧（消费掉），解析 payload
             var frame = _ring.ReadBytes(frameSize);
-            if (TryDecodePayload(frame, digitCount, len, out reading))
-                return true; // 命中数据帧
-            Reject("CTMBS 数据帧载荷或帧尾无效");
-            // 不是数据帧（长度合法但载荷非数据）——已消费，继续找下一帧
+            var kind = DecodePayload(frame, digitCount, len, out reading);
+            if (kind == PayloadKind.Measurement) return true;
+            if (kind == PayloadKind.Invalid) Reject("CTMBS 数据帧载荷或帧尾无效");
+            // 合法命令响应不产测量、不计解析错误，继续寻找下一帧。
         }
     }
 
@@ -185,28 +185,28 @@ public class Ctmbs3X2000Parser : IDataParser, IParserDiagnostics
 
     // ---- 载荷解析 ----
 
-    private bool TryDecodePayload(byte[] frame, int digitCount, int len, out MagnetometerReading? reading)
+    private enum PayloadKind { Invalid, OtherResponse, Measurement }
+
+    private PayloadKind DecodePayload(byte[] frame, int digitCount, int len, out MagnetometerReading? reading)
     {
         reading = null;
-        // frame = '$' + digits + '\n' + (len 字节 = digits+payload) + '\nack\n'
         int bodyStart = 1 + digitCount + 1;
         int bodyEnd = bodyStart + len;
-        // 校验尾部 \nack\n
-        if (bodyEnd + AckTail.Length > frame.Length) return false;
+        if (bodyEnd + AckTail.Length > frame.Length) return PayloadKind.Invalid;
         for (int i = 0; i < AckTail.Length; i++)
-            if (frame[bodyEnd + i] != AckTail[i]) return false;
+            if (frame[bodyEnd + i] != AckTail[i]) return PayloadKind.Invalid;
 
-        // len 字节 = digits(ASCII) + payload；剥离开头 digits
         int payloadStart = bodyStart + digitCount;
-        if (!frame.AsSpan(1, digitCount).SequenceEqual(frame.AsSpan(bodyStart, digitCount))) return false;
+        if (!frame.AsSpan(1, digitCount).SequenceEqual(frame.AsSpan(bodyStart, digitCount))) return PayloadKind.Invalid;
         int payloadLen = len - digitCount;
-        if (payloadLen <= 0) return false;
+        if (payloadLen <= 0) return PayloadKind.Invalid;
         var payload = Encoding.ASCII.GetString(frame, payloadStart, payloadLen);
-
-        // 普通命令响应与推送共用此包裹格式；状态、网络/通道参数等响应也可能
-        // 以四个数字结尾。只有 §6 的完整单帧结构才属于实时测量，不能按尾字段猜测。
         var tokens = payload.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        if (tokens.Length != 13
+
+        // §3.2 的合法封装也承载 ste、pmr 和扩展命令响应（pmr+1m 同样有13字段）。
+        // 没有请求标识，不能把未知响应的业务字段当成坏测量帧；只严格诊断带测量结构锚点的载荷。
+        if (!LooksLikeMeasurement(tokens)) return PayloadKind.OtherResponse;
+        if (tokens.Length < 13 || (tokens.Length - 9) % 4 != 0
             || TryParseHhmmss(tokens[0], _receivedAtUtc) is not { } timestamp
             || tokens[1].Any(c => char.IsControl(c) || c == '$')
             || tokens[2].Any(c => char.IsControl(c) || c == '$')
@@ -214,21 +214,28 @@ public class Ctmbs3X2000Parser : IDataParser, IParserDiagnostics
             || !int.TryParse(tokens[4], NumberStyles.None, CultureInfo.InvariantCulture, out int channelCount)
             || channelCount != 4
             || tokens.Skip(5).Take(4).Any(code => !IsAsciiDigits(code)))
-            return false;
+            return PayloadKind.Invalid;
         var values = new double[4];
-        for (int i = 0; i < 4; i++)
+        for (int i = 9; i < tokens.Length; i++)
         {
-            if (!double.TryParse(tokens[9 + i], NumberStyles.Float,
-                CultureInfo.InvariantCulture, out values[i]) || !double.IsFinite(values[i]))
-                return false;
+            if (!double.TryParse(tokens[i], NumberStyles.Float, CultureInfo.InvariantCulture, out double value)
+                || !double.IsFinite(value)) return PayloadKind.Invalid;
+            if (i < 13) values[i - 9] = value;
         }
+        // §5.1 dat+5 可以在同一头部后包含多组四通道值。这是合法批量响应，不是实时单帧。
+        if (tokens.Length > 13) return PayloadKind.OtherResponse;
+        reading = new MagnetometerReading { Timestamp = timestamp, ChannelValues = values };
+        return PayloadKind.Measurement;
+    }
 
-        reading = new MagnetometerReading
-        {
-            Timestamp = timestamp,
-            ChannelValues = values,
-        };
-        return true;
+    private static bool LooksLikeMeasurement(string[] tokens)
+    {
+        if (tokens.Length < 5) return false;
+        bool timeShape = tokens[0].Length == 6;
+        bool channelCount = int.TryParse(tokens[4], NumberStyles.None, CultureInfo.InvariantCulture, out int count) && count == 4;
+        bool channelCodes = tokens.Length >= 9 && tokens.Skip(5).Take(4).All(IsAsciiDigits);
+        // 两个独立锚点保留单字段损坏的诊断：时刻、通道数或某个通道码损坏仍会进入严格校验。
+        return (timeShape && channelCount) || (timeShape && channelCodes) || (channelCount && channelCodes);
     }
 
     private static DateTime? TryParseHhmmss(string tok, DateTime receivedAtUtc)

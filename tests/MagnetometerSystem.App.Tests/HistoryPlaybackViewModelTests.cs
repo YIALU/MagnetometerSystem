@@ -9,6 +9,7 @@ using MagnetometerSystem.Core.Models;
 using MagnetometerSystem.Core.Services;
 using MagnetometerSystem.Core.Storage;
 using MagnetometerSystem.Infrastructure.Database;
+using MagnetometerSystem.Infrastructure.Export;
 using Microsoft.Data.Sqlite;
 
 namespace MagnetometerSystem.App.Tests;
@@ -211,6 +212,86 @@ public class HistoryPlaybackViewModelTests
             Assert.Equal(0, stopped);
         });
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public Task ConnectingDuringPlayback_StopsPlaybackBeforeImmediateFirstFrameAndSavesOnlyLiveData(bool paused) =>
+        WpfTestHost.RunAsync(async () =>
+        {
+            using var fixture = await PlaybackFixture.CreateAsync();
+            var profiles = new SqliteCalibrationRepository(fixture.Database);
+            var corrector = new OrthogonalityCorrector();
+            var sessions = new SessionListViewModel(fixture.Storage, new CsvExporter(fixture.Storage),
+                fixture.Bus, corrector, profiles);
+            using var history = fixture.CreateViewModel();
+            await history.LoadSessionByIdAsync(fixture.SessionId);
+            var rawReadings = new List<MagnetometerReading>();
+            var displayed = new List<MagnetometerReading>();
+            fixture.Bus.ReadingReceived += rawReadings.Add;
+            fixture.Bus.ProcessedReadingReceived += displayed.Add;
+            history.SeekTo(0);
+            history.PlaybackSpeed = 0.001; // Keep the recorded next point pending during connection preparation.
+            await history.PlayCommand.ExecuteAsync(null);
+            if (paused) history.PauseCommand.Execute(null);
+            Assert.Equal(paused ? PlaybackState.Paused : PlaybackState.Playing, history.State);
+            Assert.True(fixture.Bus.IsPlaybackMode);
+            Assert.Equal(new double[] { 20, 1, 2, 3 }, Assert.Single(displayed).ChannelValues);
+            Assert.Empty(rawReadings);
+
+            var stopped = 0;
+            fixture.Bus.AcquisitionStopped += () => stopped++;
+            bool preparedBeforeFirstFrame = false;
+            var transport = new ImmediateFirstFrameConnection(() =>
+            {
+                preparedBeforeFirstFrame = !fixture.Bus.IsPlaybackMode && history.State == PlaybackState.Ready
+                    && sessions.ActiveSessionId != null && sessions.ActiveSessionId != fixture.SessionId
+                    && stopped == 0;
+            });
+            var connection = new ConnectionViewModel(new ImmediateConnectionFactory(transport),
+                fixture.Bus, corrector, profiles)
+            {
+                SelectedConnectionType = ConnectionType.Tcp,
+                ProtocolConfig = new ProtocolConfig
+                {
+                    FieldMappings = Enumerable.Range(0, 4).Select(i => new FieldMapping
+                    { Name = $"Live{i}", Unit = "V", ChannelIndex = i, ByteOffset = i }).ToList(),
+                },
+            };
+            try
+            {
+                await connection.ConnectCommand.ExecuteAsync(null);
+                Assert.True(connection.IsConnected, connection.LastError);
+                Assert.Equal(1, transport.ConnectCount);
+                Assert.True(preparedBeforeFirstFrame);
+                Assert.False(fixture.Bus.IsPlaybackMode);
+                Assert.False(history.IsPlaying);
+                Assert.False(history.IsPaused);
+                Assert.Equal(PlaybackState.Ready, history.State);
+                Assert.Equal(0, stopped);
+                Assert.Equal(new double[] { 101, 102, 103, 104 }, Assert.Single(rawReadings).ChannelValues);
+                string liveSessionId = Assert.IsType<string>(sessions.ActiveSessionId);
+
+                // Stopping the actual connection must flush the immediately received tail batch.
+                await connection.StopAcquisitionAsync();
+                var live = Assert.Single(await fixture.Storage.GetReadingsAsync(liveSessionId));
+                Assert.Equal(new double[] { 101, 102, 103, 104 }, live.ChannelValues);
+                Assert.Equal(liveSessionId, live.SessionId);
+                var storedSessions = await fixture.Storage.GetSessionsAsync();
+                Assert.Equal(2, storedSessions.Count);
+                Assert.Equal(1, storedSessions.Single(s => s.Id == liveSessionId).TotalReadings);
+                Assert.NotNull(storedSessions.Single(s => s.Id == liveSessionId).EndedAt);
+                var historical = await fixture.Storage.GetReadingsAsync(fixture.SessionId);
+                Assert.Equal(3, historical.Count);
+                Assert.Equal(new double[] { 20, 1, 2, 3 }, historical[0].ChannelValues);
+                Assert.Equal(2, displayed.Count);
+                Assert.Equal(live.ChannelValues, displayed[^1].ChannelValues);
+                Assert.Equal(1, stopped);
+                Assert.Null(sessions.ActiveSessionId);
+                Assert.Equal(0, fixture.Storage.WriteStatus.PendingReadings);
+            }
+            finally { await connection.StopAcquisitionAsync(); }
+        });
+
     [Fact]
     public Task LegacyMissingUnits_AreNotInventedAsMagneticUnits() =>
         WpfTestHost.RunAsync(async () =>
@@ -242,6 +323,42 @@ public class HistoryPlaybackViewModelTests
             Assert.Equal(0, displayed);
             Assert.Contains("磁场单位", vm.StatusMessage);
         });
+
+    private sealed class ImmediateConnectionFactory(ImmediateFirstFrameConnection connection) : IConnectionFactory
+    {
+        public IDeviceConnection Create(ConnectionConfig config) => connection;
+    }
+
+    private sealed class ImmediateFirstFrameConnection(Action beforeFirstFrame) : IDeviceConnection
+    {
+        public event EventHandler<byte[]>? DataReceived;
+        public event EventHandler<string>? ErrorOccurred { add { } remove { } }
+        public event EventHandler<bool>? ConnectionStateChanged;
+        public bool IsConnected { get; private set; }
+        public int ConnectCount { get; private set; }
+        public ConnectionConfig Config { get; } = new() { Type = ConnectionType.Tcp };
+
+        public Task ConnectAsync(CancellationToken ct = default)
+        {
+            ConnectCount++;
+            beforeFirstFrame();
+            IsConnected = true;
+            ConnectionStateChanged?.Invoke(this, true);
+            // Fire synchronously, before the connection's ConnectAsync continuation can run.
+            DataReceived?.Invoke(this, "101,102,103,104\n"u8.ToArray());
+            return Task.CompletedTask;
+        }
+
+        public Task DisconnectAsync()
+        {
+            IsConnected = false;
+            ConnectionStateChanged?.Invoke(this, false);
+            return Task.CompletedTask;
+        }
+
+        public Task SendAsync(byte[] data, CancellationToken ct = default) => Task.CompletedTask;
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
 
     private sealed class PlaybackFixture : IDisposable
     {

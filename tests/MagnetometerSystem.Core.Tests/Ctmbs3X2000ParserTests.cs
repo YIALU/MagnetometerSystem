@@ -44,13 +44,19 @@ public class Ctmbs3X2000ParserTests
     [InlineData(" 07 04 8 1 0 1 0 1 0 1 0")] // pmr+m (§5.6)
     [InlineData(" 127.0.0.1 255.255.255.0 127.0.0.2 3 8080 21 81 10.13.64.1 1024 10.5.67.14")]
     [InlineData(" 1 2 3 4")]
+    [InlineData(" 07 3125 1 0 3124 1 0 3123 1 0 3129 1 0")] // pmr+1m has 13 fields too.
     public void Parse_CommandDataResponses_DoNotBecomeMeasurements(string payload)
     {
         var parser = new Ctmbs3X2000Parser(ProtocolConfig.CreateCtmbs3X2000());
         byte[] response = Frame(payload);
-        parser.Feed(response, 0, response.Length);
-        Assert.False(parser.TryParse(out var reading));
-        Assert.Null(reading);
+        foreach (byte value in response)
+        {
+            parser.Feed([value], 0, 1);
+            Assert.False(parser.TryParse(out var reading));
+            Assert.Null(reading);
+            Assert.Equal(0, parser.RejectedFrameCount);
+        }
+        Assert.Null(parser.LastError);
 
         byte[] stream = [.. Frame(), .. response, .. Frame()];
         parser.Feed(stream, 0, stream.Length);
@@ -58,9 +64,27 @@ public class Ctmbs3X2000ParserTests
         Assert.True(parser.TryParse(out var second));
         Assert.Equal(new[] { 1.23, 2.34, 3.45, 4.56 }, second!.ChannelValues);
         Assert.False(parser.TryParse(out _));
+        Assert.Equal(0, parser.RejectedFrameCount);
+        Assert.Null(parser.LastError);
+    }
+
+    [Fact]
+    public void Parse_DamagedCommandEnvelopeStillReportsFailureAndRecovers()
+    {
+        byte[] response = Frame(" 20261004120000 1 0 1 1 0 0 0 0 00 25.50");
+        response[^2] = (byte)'X'; // Even a nonmeasurement response must have an intact ack tail.
+        byte[] stream = [.. response, .. Frame()];
+        var parser = new Ctmbs3X2000Parser(ProtocolConfig.CreateCtmbs3X2000());
+        parser.Feed(stream, 0, stream.Length);
+        Assert.True(parser.TryParse(out var reading));
+        Assert.Equal(1.23, reading!.ChannelValues[0]);
+        Assert.Equal(1, parser.RejectedFrameCount);
+        Assert.NotNull(parser.LastError);
+        Assert.False(parser.TryParse(out _));
     }
 
     [Theory]
+    [InlineData(0, "12000")]
     [InlineData(0, "240000")]
     [InlineData(0, "126000")]
     [InlineData(0, "120060")]
@@ -88,14 +112,24 @@ public class Ctmbs3X2000ParserTests
     }
 
     [Theory]
-    [InlineData(" 1.23 2.34 3.45 4.56")] // dat+5 returns multiple samples, not one live reading.
-    [InlineData(" extra")]
-    public void Parse_ExtraRealtimeFields_DoNotSilentlyPublishLastSample(string suffix)
+    [InlineData(" 1.23 2.34 3.45 4.56", 0)] // dat+5 is a valid batch response, not one live reading.
+    [InlineData(" extra", 1)]
+    [InlineData(" NaN 2.34 3.45 4.56", 1)]
+    public void Parse_ExtraRealtimeFields_DoNotSilentlyPublishLastSample(string suffix, int rejected)
     {
         byte[] bytes = Frame(Payload + suffix);
         var parser = new Ctmbs3X2000Parser(ProtocolConfig.CreateCtmbs3X2000());
-        parser.Feed(bytes, 0, bytes.Length);
-        Assert.False(parser.TryParse(out _));
+        foreach (byte value in bytes)
+        {
+            parser.Feed([value], 0, 1);
+            Assert.False(parser.TryParse(out _));
+        }
+        Assert.Equal(rejected, parser.RejectedFrameCount);
+        byte[] live = Frame();
+        parser.Feed(live, 0, live.Length);
+        Assert.True(parser.TryParse(out var reading));
+        Assert.Equal(1.23, reading!.ChannelValues[0]);
+        Assert.Equal(rejected, parser.RejectedFrameCount);
     }
 
     [Theory]
