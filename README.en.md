@@ -2,6 +2,8 @@
 
 [简体中文](README.md)
 
+Current version: **[V0.5.0](https://github.com/YIALU/MagnetometerSystem/releases/tag/v0.5.0)** · [Changelog](docs/变更日志.md). GitHub Releases provide the Windows x64 installer, portable package, and SHA256 checksums. In-app updates still use the Gitee release source.
+
 A **.NET 8 / WPF** desktop workbench for everyday magnetometer debugging. Its primary workflow is to **receive data using a user-defined protocol, automatically store original readings after connecting, and plot live curves**.
 
 The protocol defines channel count, names, and units. Sampling rates are not constrained by device categories. Orthogonality correction, offset/gain calibration, and calculated channels are optional extensions.

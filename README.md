@@ -2,6 +2,8 @@
 
 [English](README.en.md)
 
+当前版本：**[V0.5.0](https://github.com/YIALU/MagnetometerSystem/releases/tag/v0.5.0)** · [变更日志](docs/变更日志.md)。GitHub Release 提供 Windows x64 安装版、便携版与 SHA256 校验文件；应用内自动更新仍使用 Gitee 发布源。
+
 面向日常设备调试的通用磁力仪上位机，使用 **.NET 8 / WPF**。核心工作是：**按用户定义的协议接收数据，连接后自动保存原始读数，并绘制实时曲线**。
 
 通道数量、名称和单位由协议定义；采样率不与设备类型绑定。正交度校正、偏移/增益校准、计算通道等按需使用，不是开始采集的前置条件。
