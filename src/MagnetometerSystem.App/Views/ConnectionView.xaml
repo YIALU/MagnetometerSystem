@@ -555,7 +555,7 @@
                     <Style TargetType="Button">
                         <Setter Property="Content" Value="开始"/>
                         <Style.Triggers>
-                            <DataTrigger Binding="{Binding IsConnected}" Value="True">
+                            <DataTrigger Binding="{Binding IsAcquiring}" Value="True">
                                 <Setter Property="Content" Value="停止"/>
                             </DataTrigger>
                         </Style.Triggers>
