@@ -13,6 +13,30 @@ public class OrthogonalityParams
     /// <summary>配置名称</summary>
     public string Name { get; set; } = string.Empty;
 
+    /// <summary>拟合输入、偏移和输出的磁场单位；空表示旧配置单位未知，不能直接用于改正。</summary>
+    public string Unit { get; set; } = "";
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string UnitDisplay => CanonicalUnit(Unit) is { Length: > 0 } unit ? unit : "未知";
+
+    public static string CanonicalUnit(string? unit) => unit?.Trim() switch
+    {
+        "nT" => "nT", "uT" or "µT" or "μT" => "uT", "mT" => "mT", "T" => "T", _ => ""
+    };
+
+    /// <summary>应用前要求输入与拟合单位一致；此方法不隐式换算数值。</summary>
+    public void ValidateUnit(string? inputUnit)
+    {
+        var profileUnit = CanonicalUnit(Unit);
+        var sourceUnit = CanonicalUnit(inputUnit);
+        if (profileUnit.Length == 0)
+            throw new ArgumentException("改正配置的拟合单位未知，请使用单位明确的配置重新拟合。");
+        if (sourceUnit.Length == 0)
+            throw new ArgumentException("待改正通道的磁场单位未知，无法安全应用改正。");
+        if (profileUnit != sourceUnit)
+            throw new ArgumentException($"改正配置单位 {profileUnit} 与通道单位 {sourceUnit} 不一致；请使用相同单位的配置。");
+    }
+
     /// <summary>关联传感器序列号</summary>
     public string? SensorSerial { get; set; }
 

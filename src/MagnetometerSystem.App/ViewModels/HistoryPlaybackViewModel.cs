@@ -549,8 +549,8 @@ public partial class HistoryPlaybackViewModel : ObservableObject, IDisposable
         var reading = source.DeepClone();
         if (IsOrthogonalityCorrectionEnabled && SelectedOrthogonalityProfile != null)
             reading = _orthogonalityCorrector.ApplyToReading(SelectedOrthogonalityProfile,
-                SelectedSecondProfile, reading, ReadMagneticChannelIndices(FirstChannelIndices),
-                SelectedSecondProfile == null ? null : ReadMagneticChannelIndices(SecondChannelIndices));
+                SelectedSecondProfile, reading, ReadMagneticChannelIndices(FirstChannelIndices, SelectedOrthogonalityProfile),
+                SelectedSecondProfile == null ? null : ReadMagneticChannelIndices(SecondChannelIndices, SelectedSecondProfile));
         // 历史数据只发送到显示总线，不能依赖全局标志阻止它进入原始保存链路。
         _dataBus.PublishProcessedReading(reading);
     }
@@ -565,8 +565,8 @@ public partial class HistoryPlaybackViewModel : ObservableObject, IDisposable
         }
         try
         {
-            var first = ReadMagneticChannelIndices(FirstChannelIndices);
-            var second = SelectedSecondProfile == null ? null : ReadMagneticChannelIndices(SecondChannelIndices);
+            var first = ReadMagneticChannelIndices(FirstChannelIndices, SelectedOrthogonalityProfile);
+            var second = SelectedSecondProfile == null ? null : ReadMagneticChannelIndices(SecondChannelIndices, SelectedSecondProfile);
             foreach (var count in _readings.Select(r => r.ChannelValues.Length).Distinct())
                 _orthogonalityCorrector.ApplyToReading(SelectedOrthogonalityProfile,
                     SelectedSecondProfile, new MagnetometerReading { ChannelValues = new double[count] }, first, second);
@@ -587,16 +587,16 @@ public partial class HistoryPlaybackViewModel : ObservableObject, IDisposable
         return parts.Select(int.Parse).ToArray();
     }
 
-    private int[] ReadMagneticChannelIndices(string text)
+    private int[] ReadMagneticChannelIndices(string text, OrthogonalityParams profile)
     {
         var indices = ParseChannelIndices(text);
         var units = LoadedSession?.ChannelUnits ?? [];
         if (indices.Any(index => index < 0 || index >= units.Length || string.IsNullOrWhiteSpace(units[index])))
             throw new ArgumentException("所选通道缺少有效单位，不能确认磁场三轴；请关闭回放校正。");
-        var selectedUnits = indices.Select(index => units[index].Trim()).ToArray();
-        if (selectedUnits.Distinct().Count() != 1 ||
-            selectedUnits[0] is not ("nT" or "uT" or "µT" or "μT" or "mT" or "T"))
+        var selectedUnits = indices.Select(index => OrthogonalityParams.CanonicalUnit(units[index])).ToArray();
+        if (selectedUnits.Distinct().Count() != 1 || string.IsNullOrEmpty(selectedUnits[0]))
             throw new ArgumentException("所选三个通道必须使用相同的磁场单位，不能包含温度等辅助通道。");
+        profile.ValidateUnit(selectedUnits[0]);
         return indices;
     }
 

@@ -122,10 +122,13 @@
                     <TextBox Text="{Binding SensorSerial, UpdateSourceTrigger=PropertyChanged}"
                              Margin="0,0,0,15" Padding="5,4"/>
 
-                    <TextBlock Text="参考场强 (nT)（可选）" FontWeight="SemiBold" Margin="0,0,0,5"/>
+                    <TextBlock Text="CSV 导入数值单位（必须明确选择）" FontWeight="SemiBold" Margin="0,0,0,5"/>
+                    <ComboBox ItemsSource="{Binding FittingUnits}" SelectedItem="{Binding FittingUnit}" Margin="0,0,0,10"/>
+                    <TextBlock Text="实时采集和历史会话使用记录的通道单位；改变此选项不会改变已加载数据或结果的单位。" TextWrapping="Wrap" Foreground="Gray" FontSize="11" Margin="0,0,0,10"/>
+                    <TextBlock FontWeight="SemiBold" Margin="0,0,0,5"><Run Text="参考场强（"/><Run Text="{Binding ReferenceUnit, Mode=OneWay}"/><Run Text="，可选）"/></TextBlock>
                     <TextBox Text="{Binding ReferenceFieldStrength, UpdateSourceTrigger=PropertyChanged, TargetNullValue=''}"
                              Margin="0,0,0,5" Padding="5,4"/>
-                    <TextBlock Text="留空则自动估算（当地地磁场约 50000 nT）" Foreground="Gray" FontSize="11" Margin="0,0,0,15"/>
+                    <TextBlock Text="留空则自动估算；数值须使用上方单位（50000 nT = 50 uT）" Foreground="Gray" FontSize="11" Margin="0,0,0,15"/>
                 </StackPanel>
             </Grid>
 
@@ -318,14 +321,14 @@
 
                             <TextBlock Grid.Row="0" Grid.Column="0" Text="总场均值：" FontWeight="SemiBold" Margin="0,2"/>
                             <TextBlock Grid.Row="0" Grid.Column="1" Margin="0,2">
-                                <Run Text="{Binding DataValidation.MeanTotalField, Mode=OneWay, StringFormat={}{0:F0}}"/>
-                                <Run Text=" nT"/>
+                                <Run Text="{Binding DataValidation.MeanTotalField, Mode=OneWay, StringFormat={}{0:G6}}"/>
+                                <Run Text=" "/><Run Text="{Binding CollectedUnit, Mode=OneWay}"/>
                             </TextBlock>
 
                             <TextBlock Grid.Row="1" Grid.Column="0" Text="总场标准差：" FontWeight="SemiBold" Margin="0,2"/>
                             <TextBlock Grid.Row="1" Grid.Column="1" Margin="0,2">
-                                <Run Text="{Binding DataValidation.TotalFieldStdDev, Mode=OneWay, StringFormat={}{0:F1}}"/>
-                                <Run Text=" nT"/>
+                                <Run Text="{Binding DataValidation.TotalFieldStdDev, Mode=OneWay, StringFormat={}{0:G6}}"/>
+                                <Run Text=" "/><Run Text="{Binding CollectedUnit, Mode=OneWay}"/>
                             </TextBlock>
 
                             <TextBlock Grid.Row="2" Grid.Column="0" Text="变异系数：" FontWeight="SemiBold" Margin="0,2"/>
@@ -476,20 +479,20 @@
 
                                     <TextBlock Grid.Row="0" Grid.Column="0" Text="残差均值：" Margin="0,2"/>
                                     <TextBlock Grid.Row="0" Grid.Column="1" Margin="0,2">
-                                        <Run Text="{Binding CalculationResult.Quality.ResidualMean, Mode=OneWay, StringFormat={}{0:F4}}"/>
-                                        <Run Text=" nT"/>
+                                        <Run Text="{Binding CalculationResult.Quality.ResidualMean, Mode=OneWay, StringFormat={}{0:G6}}"/>
+                                        <Run Text=" "/><Run Text="{Binding CalculationResult.Parameters.Unit, Mode=OneWay}"/>
                                     </TextBlock>
 
                                     <TextBlock Grid.Row="1" Grid.Column="0" Text="残差标准差：" Margin="0,2"/>
                                     <TextBlock Grid.Row="1" Grid.Column="1" Margin="0,2">
-                                        <Run Text="{Binding CalculationResult.Quality.ResidualStd, Mode=OneWay, StringFormat={}{0:F4}}"/>
-                                        <Run Text=" nT"/>
+                                        <Run Text="{Binding CalculationResult.Quality.ResidualStd, Mode=OneWay, StringFormat={}{0:G6}}"/>
+                                        <Run Text=" "/><Run Text="{Binding CalculationResult.Parameters.Unit, Mode=OneWay}"/>
                                     </TextBlock>
 
                                     <TextBlock Grid.Row="2" Grid.Column="0" Text="最大残差：" Margin="0,2"/>
                                     <TextBlock Grid.Row="2" Grid.Column="1" Margin="0,2">
-                                        <Run Text="{Binding CalculationResult.Quality.MaxResidual, Mode=OneWay, StringFormat={}{0:F4}}"/>
-                                        <Run Text=" nT"/>
+                                        <Run Text="{Binding CalculationResult.Quality.MaxResidual, Mode=OneWay, StringFormat={}{0:G6}}"/>
+                                        <Run Text=" "/><Run Text="{Binding CalculationResult.Parameters.Unit, Mode=OneWay}"/>
                                     </TextBlock>
 
                                     <TextBlock Grid.Row="3" Grid.Column="0" Text="球面覆盖度：" Margin="0,2"/>
@@ -505,6 +508,7 @@
                             <!-- 校正效果可视化 -->
                             <TextBlock Text="校正效果可视化" FontWeight="SemiBold" FontSize="14" Margin="0,10,0,8"/>
                             <views:CalibrationVisualizationControl
+                                Unit="{Binding CalculationResult.Parameters.Unit}"
                                 RawData="{Binding VisualizationRawData}"
                                 CorrectedData="{Binding VisualizationCorrectedData}"
                                 Height="400"/>
@@ -595,20 +599,20 @@
 
                                         <TextBlock Grid.Row="0" Grid.Column="0" Text="残差均值：" Margin="0,2"/>
                                         <TextBlock Grid.Row="0" Grid.Column="1" Margin="0,2">
-                                            <Run Text="{Binding SecondCalculationResult.Quality.ResidualMean, Mode=OneWay, StringFormat={}{0:F4}}"/>
-                                            <Run Text=" nT"/>
+                                            <Run Text="{Binding SecondCalculationResult.Quality.ResidualMean, Mode=OneWay, StringFormat={}{0:G6}}"/>
+                                            <Run Text=" "/><Run Text="{Binding SecondCalculationResult.Parameters.Unit, Mode=OneWay}"/>
                                         </TextBlock>
 
                                         <TextBlock Grid.Row="1" Grid.Column="0" Text="残差标准差：" Margin="0,2"/>
                                         <TextBlock Grid.Row="1" Grid.Column="1" Margin="0,2">
-                                            <Run Text="{Binding SecondCalculationResult.Quality.ResidualStd, Mode=OneWay, StringFormat={}{0:F4}}"/>
-                                            <Run Text=" nT"/>
+                                            <Run Text="{Binding SecondCalculationResult.Quality.ResidualStd, Mode=OneWay, StringFormat={}{0:G6}}"/>
+                                            <Run Text=" "/><Run Text="{Binding SecondCalculationResult.Parameters.Unit, Mode=OneWay}"/>
                                         </TextBlock>
 
                                         <TextBlock Grid.Row="2" Grid.Column="0" Text="最大残差：" Margin="0,2"/>
                                         <TextBlock Grid.Row="2" Grid.Column="1" Margin="0,2">
-                                            <Run Text="{Binding SecondCalculationResult.Quality.MaxResidual, Mode=OneWay, StringFormat={}{0:F4}}"/>
-                                            <Run Text=" nT"/>
+                                            <Run Text="{Binding SecondCalculationResult.Quality.MaxResidual, Mode=OneWay, StringFormat={}{0:G6}}"/>
+                                            <Run Text=" "/><Run Text="{Binding SecondCalculationResult.Parameters.Unit, Mode=OneWay}"/>
                                         </TextBlock>
 
                                         <TextBlock Grid.Row="3" Grid.Column="0" Text="球面覆盖度：" Margin="0,2"/>
@@ -673,11 +677,12 @@
                                       Height="140" Margin="0,0,0,8">
                                 <DataGrid.Columns>
                                     <DataGridTextColumn Header="名称" Binding="{Binding Name}" Width="*"/>
+                                    <DataGridTextColumn Header="拟合单位" Binding="{Binding UnitDisplay}" Width="70"/>
                                     <DataGridTextColumn Header="传感器序列号" Binding="{Binding SensorSerial}" Width="110"/>
                                     <DataGridTextColumn Header="创建时间" Binding="{Binding CreatedAt, StringFormat=yyyy-MM-dd HH:mm}" Width="130"/>
                                     <DataGridTextColumn Header="样本数" Binding="{Binding SampleCount}" Width="70"/>
-                                    <DataGridTextColumn Header="残差均值" Binding="{Binding ResidualMean, StringFormat=F4}" Width="80"/>
-                                    <DataGridTextColumn Header="残差 Std" Binding="{Binding ResidualStd, StringFormat=F4}" Width="80"/>
+                                    <DataGridTextColumn Header="残差均值" Binding="{Binding ResidualMean, StringFormat=G6}" Width="80"/>
+                                    <DataGridTextColumn Header="残差 Std" Binding="{Binding ResidualStd, StringFormat=G6}" Width="80"/>
                                 </DataGrid.Columns>
                             </DataGrid>
 
@@ -700,11 +705,11 @@
                                         <TextBlock Text="偏移: " FontFamily="Consolas"/>
                                         <TextBlock FontFamily="Consolas" Foreground="#0078D4">
                                             <Run Text="[Ox="/>
-                                            <Run Text="{Binding SelectedSavedProfile.Offset[0], StringFormat=F4, Mode=OneWay}"/>
+                                            <Run Text="{Binding SelectedSavedProfile.Offset[0], StringFormat=G6, Mode=OneWay}"/>
                                             <Run Text=", Oy="/>
-                                            <Run Text="{Binding SelectedSavedProfile.Offset[1], StringFormat=F4, Mode=OneWay}"/>
+                                            <Run Text="{Binding SelectedSavedProfile.Offset[1], StringFormat=G6, Mode=OneWay}"/>
                                             <Run Text=", Oz="/>
-                                            <Run Text="{Binding SelectedSavedProfile.Offset[2], StringFormat=F4, Mode=OneWay}"/>
+                                            <Run Text="{Binding SelectedSavedProfile.Offset[2], StringFormat=G6, Mode=OneWay}"/>
                                             <Run Text="]"/>
                                         </TextBlock>
                                     </StackPanel>

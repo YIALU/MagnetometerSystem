@@ -27,12 +27,12 @@ public class SqliteCalibrationRepository : ICalibrationRepository
         profile.Validate();
         const string sql = """
             INSERT OR REPLACE INTO orthogonality_profiles
-            (id, name, sensor_serial, created_at,
+            (id, name, sensor_serial, created_at, unit,
              offset_x, offset_y, offset_z,
              m00, m01, m02, m10, m11, m12, m20, m21, m22,
              residual_mean, residual_std, sample_count, notes)
             VALUES
-            (@Id, @Name, @SensorSerial, @CreatedAt,
+            (@Id, @Name, @SensorSerial, @CreatedAt, @Unit,
              @OffsetX, @OffsetY, @OffsetZ,
              @M00, @M01, @M02, @M10, @M11, @M12, @M20, @M21, @M22,
              @ResidualMean, @ResidualStd, @SampleCount, @Notes)
@@ -47,6 +47,7 @@ public class SqliteCalibrationRepository : ICalibrationRepository
             profile.Name,
             profile.SensorSerial,
             CreatedAt = profile.CreatedAt.ToString("O"),
+            Unit = OrthogonalityParams.CanonicalUnit(profile.Unit),
             OffsetX = profile.Offset[0],
             OffsetY = profile.Offset[1],
             OffsetZ = profile.Offset[2],
@@ -167,6 +168,7 @@ public class SqliteCalibrationRepository : ICalibrationRepository
             Name = (string)row.name,
             SensorSerial = row.sensor_serial as string,
             CreatedAt = DateTime.Parse((string)row.created_at, null, DateTimeStyles.RoundtripKind),
+            Unit = row.unit as string ?? "",
             Offset = [(double)row.offset_x, (double)row.offset_y, (double)row.offset_z],
             CompensationMatrix =
             [

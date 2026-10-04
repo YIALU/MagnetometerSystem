@@ -587,8 +587,8 @@ public partial class SessionListViewModel : ObservableObject
         OrthogonalityCorrectionSnapshot snapshot;
         try
         {
-            firstChannels = CorrectionMapping(FirstCorrectionChannels, session, false);
-            secondChannels = isDual ? CorrectionMapping(SecondCorrectionChannels, session, true) : null;
+            firstChannels = CorrectionMapping(FirstCorrectionChannels, session, false, SelectedCorrectionProfile);
+            secondChannels = isDual ? CorrectionMapping(SecondCorrectionChannels, session, true, SelectedCorrectionProfileSecond!) : null;
             snapshot = new OrthogonalityCorrectionSnapshot(SelectedCorrectionProfile, SelectedCorrectionProfileSecond, firstChannels, secondChannels);
         }
         catch (Exception ex)
@@ -684,7 +684,7 @@ public partial class SessionListViewModel : ObservableObject
             .Select(s => int.Parse(s, System.Globalization.CultureInfo.InvariantCulture)).ToArray();
     }
 
-    private static int[] CorrectionMapping(string text, SessionInfo session, bool second)
+    private static int[] CorrectionMapping(string text, SessionInfo session, bool second, OrthogonalityParams profile)
     {
         int[] indices;
         if (!string.IsNullOrWhiteSpace(text)) indices = ParseIndices(text);
@@ -693,12 +693,12 @@ public partial class SessionListViewModel : ObservableObject
         else throw new ArgumentException("请明确填写要改正的三个磁场通道索引，例如 0,1,2；不会自动把温度等辅助通道用于正交度改正。");
         if (indices.Length != 3 || indices.Distinct().Count() != 3 || indices.Any(i => i < 0 || i >= session.ChannelCount))
             throw new ArgumentException("正交度改正需要三个不重复且有效的通道索引。");
-        if (session.ChannelUnits.Length == session.ChannelCount)
-        {
-            var units = indices.Select(i => session.ChannelUnits[i]).ToArray();
-            if (units.Distinct().Count() != 1 || !new[] { "nT", "uT", "µT", "μT", "mT", "T" }.Contains(units[0]))
-                throw new ArgumentException("所选三个通道必须使用相同的磁场单位，不能包含温度等辅助通道。");
-        }
+        if (session.ChannelUnits.Length != session.ChannelCount)
+            throw new ArgumentException("会话缺少完整通道单位，不能确认改正参数适用。");
+        var units = indices.Select(i => OrthogonalityParams.CanonicalUnit(session.ChannelUnits[i])).ToArray();
+        if (units.Distinct().Count() != 1 || string.IsNullOrEmpty(units[0]))
+            throw new ArgumentException("所选三个通道必须使用相同的磁场单位，不能包含温度等辅助通道。");
+        profile.ValidateUnit(units[0]);
         return indices;
     }
 

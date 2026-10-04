@@ -96,6 +96,7 @@ public class HistoryPlaybackViewModelTests
             vm.FirstChannelIndices = "1,2,3";
             vm.SelectedOrthogonalityProfile = new OrthogonalityParams
             {
+                Unit = "nT",
                 CompensationMatrix = [2, 0, 0, 0, 2, 0, 0, 0, 2],
             };
             var displayed = new List<MagnetometerReading>();

@@ -25,6 +25,47 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
     private readonly IDataStorageService _storageService;
     private readonly List<double[]> _collectedData = new();
     private readonly List<double[]> _collectedDataSecondGroup = new();
+    private string _collectedUnit = "";
+    private int _collectedChannelCount;
+    private long _collectedGeneration;
+
+    [ObservableProperty] private string _fittingUnit = "";
+    public string[] FittingUnits { get; } = ["nT", "uT", "mT", "T"];
+    public string CollectedUnit => _collectedUnit;
+    public string ReferenceUnit => _collectedUnit.Length > 0 ? _collectedUnit : FittingUnit;
+    partial void OnFittingUnitChanged(string? oldValue, string newValue)
+    {
+        if (_collectedUnit.Length == 0 && OrthogonalityParams.CanonicalUnit(oldValue) != OrthogonalityParams.CanonicalUnit(newValue))
+            ReferenceFieldStrength = null;
+        OnPropertyChanged(nameof(ReferenceUnit));
+    }
+
+    private void SetCollectedUnit(string unit, int channelCount)
+    {
+        if (OrthogonalityParams.CanonicalUnit(ReferenceUnit) != unit) ReferenceFieldStrength = null;
+        _collectedGeneration++;
+        _collectedUnit = unit;
+        _collectedChannelCount = channelCount;
+        FittingUnit = unit;
+        CalculationResult = null;
+        SecondCalculationResult = null;
+        SavedProfile = null;
+        SavedSecondProfile = null;
+        VisualizationRawData = null;
+        VisualizationCorrectedData = null;
+        OnPropertyChanged(nameof(CollectedUnit));
+        OnPropertyChanged(nameof(ReferenceUnit));
+    }
+
+    private static string SourceUnit(IReadOnlyList<string> units, int requiredChannels)
+    {
+        if (units.Count < requiredChannels)
+            throw new ArgumentException("所选拟合通道缺少单位，不能确认拟合数据含义。");
+        var selected = units.Take(requiredChannels).Select(OrthogonalityParams.CanonicalUnit).ToArray();
+        if (selected.Any(u => u.Length == 0) || selected.Distinct().Count() != 1)
+            throw new ArgumentException("拟合通道必须具有相同且明确的磁场单位，不能包含温度等通道。");
+        return selected[0];
+    }
 
     // 手动模式：保留最近 10 条读数用于记录点时求均值
     private readonly Queue<MagnetometerReading> _recentReadings = new(10);
@@ -141,7 +182,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         // Step 2 → Step 3：执行校验（仅展示警告，不阻止）
         if (CurrentStep == 2)
         {
-            var validation = CalibrationDataValidator.Validate(_collectedData);
+            var validation = CalibrationDataValidator.Validate(_collectedData, _collectedUnit);
             DataValidation = validation;
             HasValidationWarnings = validation.Warnings.Count > 0;
 
@@ -245,6 +286,14 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
     [RelayCommand]
     private void StartCollecting()
     {
+        try
+        {
+            if (_dataBus.CurrentConnection == null || _dataBus.IsPlaybackMode)
+                throw new ArgumentException("请先连接设备，再按当前协议通道单位采集拟合数据。");
+            var count = SelectedSensorType == SensorType.DualTriaxialFluxgate ? 6 : 3;
+            SetCollectedUnit(SourceUnit(_dataBus.AcquisitionChannelUnits, count), count);
+        }
+        catch (Exception ex) { CollectionStatus = ex.Message; return; }
         _collectedData.Clear();
         _collectedDataSecondGroup.Clear();
         CollectedData.Clear();
@@ -273,54 +322,50 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
 
     private void OnCalibrationDataReceived(MagnetometerReading reading)
     {
-        // 任何模式都先维护"最近 10 条"队列
-        if (_recentReadings.Count >= RecentBufferSize)
-            _recentReadings.Dequeue();
-        _recentReadings.Enqueue(reading);
-
-        if (SelectedMode == CalibrationCollectionMode.Manual48)
+        var generation = Volatile.Read(ref _collectedGeneration);
+        var sourceUnits = _dataBus.AcquisitionChannelUnits;
+        void AcceptReading()
         {
-            // 手动模式：仅保持队列，不入 _collectedData；更新缓冲就绪状态
-            bool enough = _recentReadings.Count >= RecentBufferSize;
-            _dataBus.ManualOrthoState.Update(true, _collectedData.Count, _rawFilePath,
-                enough ? "缓冲就绪，可以记录" : $"缓冲中 ({_recentReadings.Count}/{RecentBufferSize})",
-                enough);
-            return;
-        }
-
-        // 连续模式：原有逻辑
-        double[] sample1;
-
-        if (SelectedSensorType == SensorType.DualTriaxialFluxgate)
-        {
-            if (reading.ChannelValues.Length < 6) return;
-            sample1 = new double[] { reading.ChannelValues[0], reading.ChannelValues[1], reading.ChannelValues[2] };
-            var sample2 = new double[] { reading.ChannelValues[3], reading.ChannelValues[4], reading.ChannelValues[5] };
+            if (generation != _collectedGeneration || !IsCollecting) return;
+            try
+            {
+                if (SourceUnit(sourceUnits, _collectedChannelCount) != _collectedUnit)
+                    throw new ArgumentException("连接通道单位已改变，请重新开始拟合数据采集。");
+            }
+            catch (Exception ex)
+            {
+                StopCollecting();
+                CollectionStatus = ex.Message;
+                return;
+            }
+            if (reading.ChannelValues.Length < _collectedChannelCount) return;
+            if (_recentReadings.Count >= RecentBufferSize) _recentReadings.Dequeue();
+            _recentReadings.Enqueue(reading);
+            if (SelectedMode == CalibrationCollectionMode.Manual48)
+            {
+                bool enough = _recentReadings.Count >= RecentBufferSize;
+                _dataBus.ManualOrthoState.Update(true, _collectedData.Count, _rawFilePath,
+                    enough ? "缓冲就绪，可以记录" : $"缓冲中 ({_recentReadings.Count}/{RecentBufferSize})", enough);
+                return;
+            }
+            double[] sample1 = [reading.ChannelValues[0], reading.ChannelValues[1], reading.ChannelValues[2]];
             _collectedData.Add(sample1);
-            _collectedDataSecondGroup.Add(sample2);
-        }
-        else
-        {
-            if (reading.ChannelValues.Length < 3) return;
-            sample1 = new double[] { reading.ChannelValues[0], reading.ChannelValues[1], reading.ChannelValues[2] };
-            _collectedData.Add(sample1);
-        }
-
-        AppendRawPoint(reading);
-
-        System.Windows.Application.Current?.Dispatcher?.Invoke(() =>
-        {
+            if (_collectedChannelCount == 6)
+                _collectedDataSecondGroup.Add([reading.ChannelValues[3], reading.ChannelValues[4], reading.ChannelValues[5]]);
+            AppendRawPoint(reading);
             CollectedData.Add(sample1);
             CollectedSampleCount = _collectedData.Count;
-
             if (_collectedData.Count % 50 == 0)
             {
                 UpdateCoverageEstimate();
                 RunDataValidation();
             }
-
             UpdateStepNavigation();
-        });
+        }
+        // Keep dataset and UI mutations together; queued callbacks from an older dataset cannot mix units.
+        if (System.Windows.Application.Current?.Dispatcher is { } dispatcher && !dispatcher.CheckAccess())
+            dispatcher.Invoke(AcceptReading);
+        else AcceptReading();
     }
 
     private void UpdateCoverageEstimate()
@@ -393,7 +438,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
             return;
         }
 
-        bool dual = SelectedSensorType == SensorType.DualTriaxialFluxgate;
+        bool dual = _collectedChannelCount == 6;
         int n = dual ? 6 : 3;
 
         // 对每通道求均值
@@ -475,9 +520,10 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         _rawPointIndex = 0;
         _rawWriter.WriteLine($"# Calibration Profile : {ProfileName}");
         _rawWriter.WriteLine($"# Sensor Type         : {SelectedSensorType}");
+        _rawWriter.WriteLine($"# Unit                : {_collectedUnit}");
         _rawWriter.WriteLine($"# Collection Mode     : {mode}");
         _rawWriter.WriteLine($"# Recorded At         : {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
-        var channelNames = SelectedSensorType == SensorType.DualTriaxialFluxgate
+        var channelNames = _collectedChannelCount == 6
             ? "X1,Y1,Z1,X2,Y2,Z2" : "X,Y,Z";
         _rawWriter.WriteLine("point_index,timestamp," + channelNames);
         _rawWriter.Flush();
@@ -490,7 +536,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         var sb = new System.Text.StringBuilder();
         sb.Append(_rawPointIndex).Append(',');
         sb.Append(reading.Timestamp.ToString("yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture));
-        int n = SelectedSensorType == SensorType.DualTriaxialFluxgate ? 6 : 3;
+        int n = _collectedChannelCount == 6 ? 6 : 3;
         for (int i = 0; i < n && i < reading.ChannelValues.Length; i++)
         {
             sb.Append(',');
@@ -510,6 +556,12 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
     [RelayCommand]
     private void ImportFromFile()
     {
+        var importUnit = OrthogonalityParams.CanonicalUnit(FittingUnit);
+        if (importUnit.Length == 0)
+        {
+            CollectionStatus = "请先明确选择 CSV 数值的磁场单位；不会自动猜测或换算。";
+            return;
+        }
         var dialog = new OpenFileDialog
         {
             Title = "导入三轴校正数据",
@@ -596,6 +648,8 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
                 return;
             }
 
+            if (IsCollecting) StopCollecting();
+            SetCollectedUnit(importUnit, requiredCols);
             _collectedData.Clear();
             _collectedDataSecondGroup.Clear();
             CollectedData.Clear();
@@ -624,7 +678,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
     {
         if (_collectedData.Count < 3) return;
 
-        var validation = CalibrationDataValidator.Validate(_collectedData);
+        var validation = CalibrationDataValidator.Validate(_collectedData, _collectedUnit);
         DataValidation = validation;
         HasValidationWarnings = validation.Warnings.Count > 0;
 
@@ -634,7 +688,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         }
         else
         {
-            ValidationStatusText = $"数据质量良好（总场 {validation.MeanTotalField:F0} nT，覆盖度 {validation.SphericityCoverage:P0}）";
+            ValidationStatusText = $"数据质量良好（总场 {validation.MeanTotalField:G6} {_collectedUnit}，覆盖度 {validation.SphericityCoverage:P0}）";
         }
     }
 
@@ -667,10 +721,21 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
 
         try
         {
+            var generation = _collectedGeneration;
+            var unit = _collectedUnit;
+            CalculationResult = null;
+            SecondCalculationResult = null;
+            if (unit.Length == 0) throw new ArgumentException("拟合数据单位未知，请重新采集或明确单位后导入。");
+            var referenceField = ReferenceFieldStrength;
             var rawData = ConvertToMatrix(_collectedData);
-
+            var rawData2 = _collectedChannelCount == 6 ? ConvertToMatrix(_collectedDataSecondGroup) : null;
             var result = await Task.Run(() =>
-                _orthogonalityService.Calculate(rawData, ReferenceFieldStrength));
+                _orthogonalityService.Calculate(rawData, referenceField, unit));
+            if (generation != _collectedGeneration)
+            {
+                CalculationStatus = "拟合数据已更换，请重新计算。";
+                return;
+            }
 
             if (result.Success)
             {
@@ -695,12 +760,16 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
             }
 
             // Run second group calculation for DualTriaxial
-            if (SelectedSensorType == SensorType.DualTriaxialFluxgate && _collectedDataSecondGroup.Count >= 3)
+            if (rawData2 != null && rawData2.GetLength(0) >= 3)
             {
-                var rawData2 = ConvertToMatrix(_collectedDataSecondGroup);
                 var result2 = await Task.Run(() =>
-                    _orthogonalityService.Calculate(rawData2, ReferenceFieldStrength));
+                    _orthogonalityService.Calculate(rawData2, referenceField, unit));
 
+                if (generation != _collectedGeneration)
+                {
+                    CalculationStatus = "拟合数据已更换，请重新计算。";
+                    return;
+                }
                 SecondCalculationResult = result2.Success ? result2 : null;
             }
         }
@@ -747,13 +816,19 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
     }
 
     /// <summary>质量评级</summary>
-    public string QualityRating => CalculationResult?.Quality switch
+    public string QualityRating => RateQuality(CalculationResult);
+
+    private static string RateQuality(OrthogonalityResult? result)
     {
-        { ResidualStd: < 10 } => "优秀",
-        { ResidualStd: < 50 } => "良好",
-        { ResidualStd: < 200 } => "一般",
-        _ => "较差"
-    };
+        if (result == null) return "—";
+        var scale = OrthogonalityParams.CanonicalUnit(result.Parameters.Unit) switch
+        {
+            "nT" => 1d, "uT" => 1e3, "mT" => 1e6, "T" => 1e9, _ => double.NaN
+        };
+        var residualNt = result.Quality.ResidualStd * scale;
+        if (!double.IsFinite(residualNt) || residualNt < 0) return "未知";
+        return residualNt switch { < 10 => "优秀", < 50 => "良好", < 200 => "一般", _ => "较差" };
+    }
 
     public string MatrixM00 => FormatMatrixValue(0);
     public string MatrixM01 => FormatMatrixValue(1);
@@ -772,9 +847,9 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         return m[index].ToString("F6");
     }
 
-    public string OffsetX => CalculationResult?.Parameters?.Offset is { Length: >= 1 } o ? o[0].ToString("F4") : "—";
-    public string OffsetY => CalculationResult?.Parameters?.Offset is { Length: >= 2 } o ? o[1].ToString("F4") : "—";
-    public string OffsetZ => CalculationResult?.Parameters?.Offset is { Length: >= 3 } o ? o[2].ToString("F4") : "—";
+    public string OffsetX => CalculationResult?.Parameters?.Offset is { Length: >= 1 } o ? o[0].ToString("G6") : "—";
+    public string OffsetY => CalculationResult?.Parameters?.Offset is { Length: >= 2 } o ? o[1].ToString("G6") : "—";
+    public string OffsetZ => CalculationResult?.Parameters?.Offset is { Length: >= 3 } o ? o[2].ToString("G6") : "—";
 
     // ========== Visualization Data ==========
 
@@ -805,13 +880,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
     }
 
     /// <summary>第二组质量评级</summary>
-    public string SecondQualityRating => SecondCalculationResult?.Quality switch
-    {
-        { ResidualStd: < 10 } => "优秀",
-        { ResidualStd: < 50 } => "良好",
-        { ResidualStd: < 200 } => "一般",
-        _ => "较差"
-    };
+    public string SecondQualityRating => RateQuality(SecondCalculationResult);
 
     public string SecondMatrixM00 => FormatSecondMatrixValue(0);
     public string SecondMatrixM01 => FormatSecondMatrixValue(1);
@@ -830,9 +899,9 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         return m[index].ToString("F6");
     }
 
-    public string SecondOffsetX => SecondCalculationResult?.Parameters?.Offset is { Length: >= 1 } o ? o[0].ToString("F4") : "—";
-    public string SecondOffsetY => SecondCalculationResult?.Parameters?.Offset is { Length: >= 2 } o ? o[1].ToString("F4") : "—";
-    public string SecondOffsetZ => SecondCalculationResult?.Parameters?.Offset is { Length: >= 3 } o ? o[2].ToString("F4") : "—";
+    public string SecondOffsetX => SecondCalculationResult?.Parameters?.Offset is { Length: >= 1 } o ? o[0].ToString("G6") : "—";
+    public string SecondOffsetY => SecondCalculationResult?.Parameters?.Offset is { Length: >= 2 } o ? o[1].ToString("G6") : "—";
+    public string SecondOffsetZ => SecondCalculationResult?.Parameters?.Offset is { Length: >= 3 } o ? o[2].ToString("G6") : "—";
 
     // ========== Step 4 - 保存配置 ==========
 
@@ -870,6 +939,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
             var parameters = new OrthogonalityParams
             {
                 Id = src.Id,
+                Unit = src.Unit,
                 Name = ProfileName,
                 SensorSerial = SensorSerial,
                 CreatedAt = src.CreatedAt,
@@ -886,12 +956,13 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
             SavedProfile = parameters;
 
             // Save second profile for DualTriaxial
-            if (SelectedSensorType == SensorType.DualTriaxialFluxgate && SecondCalculationResult?.Parameters != null)
+            if (SecondCalculationResult?.Parameters != null)
             {
                 var src2 = SecondCalculationResult.Parameters;
                 var secondParameters = new OrthogonalityParams
                 {
                     Id = src2.Id,
+                    Unit = src2.Unit,
                     Name = $"{ProfileName}_第二组",
                     SensorSerial = SensorSerial,
                     CreatedAt = src2.CreatedAt,
@@ -951,6 +1022,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
 
     public void Cleanup()
     {
+        _collectedGeneration++;
         if (IsCollecting)
         {
             _dataBus.ReadingReceived -= OnCalibrationDataReceived;
@@ -1035,13 +1107,13 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         {
             var p = SelectedSavedProfile;
             var sb = new System.Text.StringBuilder();
-            sb.AppendLine("name,sensor_serial,created_at,sample_count,residual_mean,residual_std," +
+            sb.AppendLine("name,sensor_serial,created_at,unit,sample_count,residual_mean,residual_std," +
                           "offset_x,offset_y,offset_z," +
                           "m00,m01,m02,m10,m11,m12,m20,m21,m22");
             string D(double v) => v.ToString("R", CultureInfo.InvariantCulture);
             string DN(double? v) => v.HasValue ? D(v.Value) : "";
             sb.Append($"\"{p.Name}\",\"{p.SensorSerial}\",{p.CreatedAt:yyyy-MM-dd HH:mm:ss},");
-            sb.Append($"{p.SampleCount},{DN(p.ResidualMean)},{DN(p.ResidualStd)},");
+            sb.Append($"{OrthogonalityParams.CanonicalUnit(p.Unit)},{p.SampleCount},{DN(p.ResidualMean)},{DN(p.ResidualStd)},");
             sb.Append($"{D(p.Offset[0])},{D(p.Offset[1])},{D(p.Offset[2])},");
             for (int i = 0; i < 9; i++)
             {
@@ -1081,15 +1153,15 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         var session = picker.SelectedSession;
         try
         {
+            bool dual = SelectedSensorType == SensorType.DualTriaxialFluxgate;
+            int requiredCols = dual ? 6 : 3;
+            var sourceUnit = SourceUnit(session.ChannelUnits, requiredCols);
             var readings = await _storageService.GetReadingsAsync(session.Id);
             if (readings.Count == 0)
             {
                 CollectionStatus = $"会话 '{session.Name}' 中没有数据";
                 return;
             }
-
-            bool dual = SelectedSensorType == SensorType.DualTriaxialFluxgate;
-            int requiredCols = dual ? 6 : 3;
 
             var importedData = new List<double[]>();
             var importedDataSecond = new List<double[]>();
@@ -1110,6 +1182,8 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
                 return;
             }
 
+            if (IsCollecting) StopCollecting();
+            SetCollectedUnit(sourceUnit, requiredCols);
             _collectedData.Clear();
             _collectedDataSecondGroup.Clear();
             CollectedData.Clear();

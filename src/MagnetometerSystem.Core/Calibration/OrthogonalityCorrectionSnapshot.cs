@@ -24,11 +24,11 @@ public sealed class OrthogonalityCorrectionSnapshot
         _second = second == null ? null : Copy(second);
         _firstChannels = firstChannels.ToArray();
         _secondChannels = secondChannels?.ToArray();
-        // Apply 实际读取的数值只有 Offset 和 CompensationMatrix。名称、备注等不改变计算身份。
+        // Apply 实际读取的数值只有 Offset 和 CompensationMatrix，Unit 决定这些数值的含义。名称、备注等不改变计算身份。
         var fingerprint = Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new
         {
-            First = new { _first.Id, _first.Offset, _first.CompensationMatrix, Channels = _firstChannels },
-            Second = _second == null ? null : new { _second.Id, _second.Offset, _second.CompensationMatrix, Channels = _secondChannels }
+            First = new { _first.Id, _first.Unit, _first.Offset, _first.CompensationMatrix, Channels = _firstChannels },
+            Second = _second == null ? null : new { _second.Id, _second.Unit, _second.Offset, _second.CompensationMatrix, Channels = _secondChannels }
         })));
         static string Group(OrthogonalityParams profile, int[] channels) =>
             $"{Uri.EscapeDataString(profile.Id)}[{string.Join(",", channels)}]";
@@ -40,7 +40,7 @@ public sealed class OrthogonalityCorrectionSnapshot
         source.Validate();
         return new OrthogonalityParams
         {
-            Id = source.Id, Name = source.Name,
+            Id = source.Id, Name = source.Name, Unit = OrthogonalityParams.CanonicalUnit(source.Unit),
             Offset = (double[])source.Offset.Clone(),
             CompensationMatrix = (double[])source.CompensationMatrix.Clone()
         };

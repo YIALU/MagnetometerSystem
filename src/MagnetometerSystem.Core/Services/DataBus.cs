@@ -93,6 +93,10 @@ public class DataBus
     /// <summary>当前活跃连接</summary>
     public IDeviceConnection? CurrentConnection { get; private set; }
 
+    private IReadOnlyList<string> _acquisitionChannelUnits = Array.AsReadOnly(Array.Empty<string>());
+    /// <summary>连接准备时冻结的采集通道单位；只读，不包含回放配置。</summary>
+    public IReadOnlyList<string> AcquisitionChannelUnits => _acquisitionChannelUnits;
+
     /// <summary>是否处于回放模式（回放时不写入数据库）</summary>
     public bool IsPlaybackMode { get; set; }
 
@@ -131,6 +135,7 @@ public class DataBus
     /// </summary>
     public async Task PublishAcquisitionStartingAsync(SensorConfig config, ConnectionConfig? connectionConfig = null)
     {
+        _acquisitionChannelUnits = Array.AsReadOnly(config.ChannelUnits.ToArray());
         AcquisitionConnectionConfig = connectionConfig;
         var handlers = AcquisitionStarting;
         if (handlers == null) return;
@@ -145,6 +150,7 @@ public class DataBus
 
     public void PublishAcquisitionStopped()
     {
+        _acquisitionChannelUnits = Array.AsReadOnly(Array.Empty<string>());
         AcquisitionStopped?.Invoke();
     }
 

@@ -418,8 +418,8 @@ public partial class ConnectionViewModel : ObservableObject
                             var first = ParseChannelSelection(FirstOrthogonalityChannelsText, raw.ChannelValues.Length);
                             var second = SecondOrthogonalityProfile is null ? null
                                 : ParseChannelSelection(SecondOrthogonalityChannelsText, raw.ChannelValues.Length);
-                            ValidateCorrectionUnits(first);
-                            if (second != null) ValidateCorrectionUnits(second);
+                            ValidateCorrectionUnits(first, ActiveOrthogonalityProfile);
+                            if (second != null) ValidateCorrectionUnits(second, SecondOrthogonalityProfile!);
                             display = _orthogonalityCorrector.ApplyToReading(
                                 ActiveOrthogonalityProfile, SecondOrthogonalityProfile, raw.DeepClone(), first, second);
                         }
@@ -470,11 +470,13 @@ public partial class ConnectionViewModel : ObservableObject
         return indices;
     }
 
-    private void ValidateCorrectionUnits(int[] channels)
+    private void ValidateCorrectionUnits(int[] channels, OrthogonalityParams profile)
     {
-        var units = channels.Select(i => i < _activeChannelUnits.Length ? _activeChannelUnits[i] : "").ToArray();
-        if (units.Distinct().Count() != 1 || units[0] is not ("nT" or "uT" or "µT" or "μT" or "mT" or "T"))
+        var units = channels.Select(i => OrthogonalityParams.CanonicalUnit(
+            i < _activeChannelUnits.Length ? _activeChannelUnits[i] : "")).ToArray();
+        if (units.Distinct().Count() != 1 || string.IsNullOrEmpty(units[0]))
             throw new ArgumentException("改正的三个通道必须具有相同磁场单位，不能包含温度或其他辅助通道");
+        profile.ValidateUnit(units[0]);
     }
 
     private void OnErrorOccurred(object? sender, string message)

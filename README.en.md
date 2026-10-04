@@ -35,7 +35,9 @@ A separate device-storage download workflow is not implemented. The ZDZ Read Sto
 | Device commands | Protocol-associated command groups, parameterized frames, ASCII/HEX transmission, communication logs |
 | Optional correction | Orthogonality collection and profiles, offset/gain calibration, historical correction; ordinary capture does not require these tools |
 
-Historical batch corrections are saved as separate versions identified by both profile IDs, channel mappings, and a fingerprint of the calculation parameters. Editing parameters under the same profile ID preserves earlier results. Select a saved correction version when exporting; the CSV `CorrectionVersion` column contains its full identifier. Legacy single-profile IDs remain selectable, and original readings are unchanged.
+Historical batch corrections are saved as separate versions identified by both profile IDs, channel mappings, fitting units, and a fingerprint of the calculation parameters. Editing parameters under the same profile ID preserves earlier results. Select a saved correction version when exporting; the CSV `CorrectionVersion` column contains its full identifier. Legacy single-profile IDs remain selectable, and original readings are unchanged.
+
+Orthogonality profiles require matching measurement units (`uT`, `µT`, and `μT` are equivalent); offsets are not converted automatically. Legacy profiles without fitting units remain unknown and require refitting or importing an explicitly unit-tagged profile before application. Live/session fitting uses recorded units, and imported CSV samples require an explicit unit declaration. Ordinary capture does not require a correction profile.
 
 **Written locally, acknowledged, and executed are different states.** A successful send call confirms a local write. Device acceptance and execution must be established using the protocol response or observed device behavior.
 

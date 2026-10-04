@@ -11,8 +11,9 @@ public interface IOrthogonalityService
     /// 从全方位旋转采集数据计算正交度补偿矩阵
     /// </summary>
     /// <param name="rawData">N x 3 矩阵（每行为 Bx, By, Bz）</param>
-    /// <param name="referenceFieldStrength">参考场强(nT)，null 则自动估计</param>
-    OrthogonalityResult Calculate(double[,] rawData, double? referenceFieldStrength = null);
+    /// <param name="referenceFieldStrength">参考场强（与输入相同单位），null 则自动估计</param>
+    /// <param name="unit">输入数据单位；未声明时结果单位保持未知。</param>
+    OrthogonalityResult Calculate(double[,] rawData, double? referenceFieldStrength = null, string? unit = null);
 
     /// <summary>
     /// 对单个三轴读数应用正交度校正
@@ -44,13 +45,13 @@ public class OrthogonalityResult
 /// <summary>拟合质量指标</summary>
 public class FitQuality
 {
-    /// <summary>残差均值 (nT)</summary>
+    /// <summary>残差均值（拟合输入单位）</summary>
     public double ResidualMean { get; set; }
 
-    /// <summary>残差标准差 (nT)</summary>
+    /// <summary>残差标准差（拟合输入单位）</summary>
     public double ResidualStd { get; set; }
 
-    /// <summary>最大残差绝对值 (nT)</summary>
+    /// <summary>最大残差绝对值（拟合输入单位）</summary>
     public double MaxResidual { get; set; }
 
     /// <summary>用于拟合的样本数</summary>

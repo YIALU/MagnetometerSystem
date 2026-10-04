@@ -42,6 +42,7 @@ CREATE INDEX IF NOT EXISTS idx_corrected_session_v2 ON corrected_readings(sessio
 CREATE INDEX IF NOT EXISTS idx_corrected_profile_v2 ON corrected_readings(session_id, correction_profile_id);
 
 CREATE TABLE IF NOT EXISTS orthogonality_profiles (
+    unit            TEXT NOT NULL DEFAULT '',
     id              TEXT PRIMARY KEY,
     name            TEXT NOT NULL,
     sensor_serial   TEXT,

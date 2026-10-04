@@ -82,15 +82,15 @@ dotnet test MagnetometerSystem.sln --no-build --no-restore -m:1 --verbosity mini
 
 ```powershell
 dotnet build MagnetometerSystem.sln -c Debug --no-restore --disable-build-servers -m:1 -nr:false -p:UseSharedCompilation=false -p:BuildInParallel=false
-dotnet test MagnetometerSystem.sln -c Debug --no-build --no-restore -m:1 --verbosity minimal --logger trx --results-directory .codex_tmp/TestResults-pr-versions-final
+dotnet test MagnetometerSystem.sln -c Debug --no-build --no-restore -m:1 --verbosity minimal --logger trx --results-directory .codex_tmp/TestResults-pr-units-final
 ```
 
 | 项目 | 通过 | 跳过 | 失败 | TRX 时间 |
 | --- | ---: | ---: | ---: | --- |
-| Core | 384 | 1 | 0 | 17_45_45 |
-| Infrastructure | 108 | 0 | 0 | 17_45_46 |
-| App | 55 | 0 | 0 | 17_45_54 |
-| 合计 | **547** | **1** | **0** | 2026-10-04，本机 `.codex_tmp/TestResults-pr-versions-final` |
+| Core | 394 | 1 | 0 | 18_07_29 |
+| Infrastructure | 113 | 0 | 0 | 18_07_31 |
+| App | 68 | 0 | 0 | 18_07_39 |
+| 合计 | **575** | **1** | **0** | 2026-10-04，本机 `.codex_tmp/TestResults-pr-units-final` |
 
 新增证据包括：默认采集/改正失败时真实 TCP 同时到达 SQLite 与图表；CTMBS 状态响应不入测量库、坏长头即时恢复；变长载荷的动态校验与帧尾；单位迁移、回放与异单位轴范围；真实 SQLite 写入失败后的安装阻止、恢复重试、正常关闭尾帧。`InstallerHandoffTests` 的三个真实进程测试验证应用及互斥锁退出后才启动替身安装器、超时不启动、失效进程不能完成交接。
 
@@ -103,6 +103,8 @@ dotnet test MagnetometerSystem.sln -c Debug --no-build --no-restore -m:1 --verbo
 CTMBS 通用重复长度封装中的合法状态/参数响应及多组 dat+5 响应不发布实时测量，也不计解析失败；损坏封装及可识别测量结构中的无效字段继续报错。单组 dat+5 若与实时帧完全相同且无请求标识，解析器无法区分来源，不能宣称实现批量请求隔离。新增播放/暂停转实时的完整三 ViewModel 回归，验证连接返回前的首帧进入新 SQLite 会话，历史数据不混入。
 
 改正版本新增真实 SQLite/CSV 验证：两组配置、通道重排、同 ID 的偏移/矩阵修改分别形成独立版本；同版本重试不重复，旧 ID 可读，原始导出不变，CSV 写入完整版本标识。计算前冻结参数，异步操作不受随后编辑影响。5 项 WPF 回归覆盖会话切换后的过期成功/失败、清除选择、并发刷新和旧 ID；下拉只查版本 ID，不加载整组改正数据。
+
+正交度单位新增 28 项回归：nT 参数拒绝 uT/mT/T 数据，µT/μT/uT 别名兼容；真实 TCP → ViewModel → SQLite 验证拒绝改正时仍保存和显示原始数据；历史回放及批量映射同样校验两组参数。真实 SQLite 旧表迁移和 JSON 保持缺单位参数为未知，不能自动标为 nT。50 uT 球样本执行实际拟合；WPF 验证输入单位冻结、参数保存、在途换数据后丢弃过期结果和清空旧参考场强，各单位下相同物理残差得到一致质量评级。
 
 更新验证新增 20 项 HTTP handler/临时文件测试：有效 SHA256 是缓存复用及新包改名的必要条件，缺清单/条目、坏哈希、HTTP 失败和取消均不接受包。另有 9 项发布附件选择测试，验证精确版本与 win-x64 文件名，避免误选旧包、其他产品或架构。没有访问真实更新服务或运行安装器。
 

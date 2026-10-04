@@ -51,6 +51,10 @@ public class DatabaseInitializer
         await connection.ExecuteAsync(LoadSchemaSql());
         await EnsureSessionColumnAsync(connection, "channel_units", "TEXT");
         await EnsureSessionColumnAsync(connection, "legacy_data_table", "TEXT");
+        var hasProfileUnit = await connection.ExecuteScalarAsync<long>(
+            "SELECT COUNT(*) FROM pragma_table_info('orthogonality_profiles') WHERE name = 'unit'");
+        if (hasProfileUnit == 0)
+            await connection.ExecuteAsync("ALTER TABLE orthogonality_profiles ADD COLUMN unit TEXT NOT NULL DEFAULT '';");
     }
 
     private static async Task EnsureSessionColumnAsync(SqliteConnection conn, string name, string type)

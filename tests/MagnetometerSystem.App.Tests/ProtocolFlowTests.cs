@@ -116,7 +116,7 @@ public class ProtocolFlowTests
             IpAddress = "127.0.0.1", Port = ((IPEndPoint)listener.LocalEndpoint).Port,
             SelectedSensorType = SensorType.ProtonMagnetometer, SampleRate = 1000,
             IsOrthogonalityCorrectionEnabled = true,
-            ActiveOrthogonalityProfile = new OrthogonalityParams { Offset = [1, 1, 1] },
+            ActiveOrthogonalityProfile = new OrthogonalityParams { Unit = "nT", Offset = [1, 1, 1] },
             FirstOrthogonalityChannelsText = "0,1,2",
         };
         vm.ProtocolConfig.FieldMappings.Add(new FieldMapping { Name = "T", Unit = "°C", ChannelIndex = 3, ByteOffset = 3 });
