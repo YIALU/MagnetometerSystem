@@ -44,20 +44,41 @@ public class CtmbsAcquisitionFlowTests
                 await vm.ConnectCommand.ExecuteAsync(null);
                 Assert.True(vm.IsConnected, vm.LastError);
                 using var peer = await accept.WaitAsync(TimeSpan.FromSeconds(3));
-                // ste and parameter responses share the telemetry envelope and may arrive
-                // between measurements. A false long header must not hold later frames.
-                byte[] bytes =
+                int receivedBytes = 0;
+                async Task SendAndReceiveAsync(byte[] bytes)
+                {
+                    await peer.GetStream().WriteAsync(bytes);
+                    receivedBytes += bytes.Length;
+                    var until = DateTime.UtcNow.AddSeconds(3);
+                    while (vm.ReceivedByteCount < receivedBytes && DateTime.UtcNow < until) await Task.Delay(10);
+                    // The UI counter is refreshed after parsing, so the next write cannot
+                    // hide a rejected partial response by coalescing TCP packets.
+                    Assert.Equal(receivedBytes, vm.ReceivedByteCount);
+                }
+
+                // ste and parameter responses may arrive between measurements. The clock
+                // response has no repeated length and must also survive fragmented delivery.
+                await SendAndReceiveAsync(
                 [
                     .. Frame(" 120000 SC01 X122PWZK0000 07 4 3125 3124 3123 3129 1 2 3 4"),
                     .. Frame(" 20261004120000 1 0 1 1 0 0 0 0 00 25.50"),
+                ]);
+                Assert.Equal(0, vm.ParseErrorCount);
+                foreach (string fragment in new[] { "$14\n20", "261004120000\n", "ac", "k\n" })
+                {
+                    await SendAndReceiveAsync(Encoding.ASCII.GetBytes(fragment));
+                    Assert.Equal(0, vm.ParseErrorCount);
+                    Assert.Equal(1, vm.ParsedReadingCount);
+                    Assert.Single(display);
+                }
+
+                // A false long header must not hold the following response or measurement.
+                await SendAndReceiveAsync(
+                [
                     .. Encoding.ASCII.GetBytes("$99999\n99"),
                     .. Frame(" 07 04 8 1 0 1 0 1 0 1 0"),
                     .. Frame(" 120001 SC01 X122PWZK0000 07 4 3125 3124 3123 3129 5 6 7 8"),
-                ];
-                await peer.GetStream().WriteAsync(bytes);
-                var until = DateTime.UtcNow.AddSeconds(3);
-                while (vm.ReceivedByteCount < bytes.Length && DateTime.UtcNow < until) await Task.Delay(10);
-                Assert.Equal(bytes.Length, vm.ReceivedByteCount);
+                ]);
                 await vm.StopAcquisitionAsync();
 
                 var session = Assert.Single(await storage.GetSessionsAsync());
@@ -67,6 +88,7 @@ public class CtmbsAcquisitionFlowTests
                 Assert.Equal(new[] { 1d, 2, 3, 4 }, saved[0].ChannelValues);
                 Assert.Equal(new[] { 5d, 6, 7, 8 }, saved[1].ChannelValues);
                 Assert.Equal(2, vm.ParsedReadingCount);
+                Assert.Equal(1, vm.ParseErrorCount);
                 Assert.Equal(2, display.Count);
                 Assert.Equal(saved[1].ChannelValues, display.Last().ChannelValues);
                 Assert.Null(sessions.ActiveSessionId);

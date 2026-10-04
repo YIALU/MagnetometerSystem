@@ -82,15 +82,15 @@ dotnet test MagnetometerSystem.sln --no-build --no-restore -m:1 --verbosity mini
 
 ```powershell
 dotnet build MagnetometerSystem.sln -c Debug --no-restore --disable-build-servers -m:1 -nr:false -p:UseSharedCompilation=false -p:BuildInParallel=false
-dotnet test MagnetometerSystem.sln -c Debug --no-build --no-restore -m:1 --verbosity minimal --logger trx --results-directory .codex_tmp/TestResults-pr-admission-final
+dotnet test MagnetometerSystem.sln -c Debug --no-build --no-restore -m:1 --verbosity minimal --logger trx --results-directory .codex_tmp/TestResults-pr-clock-final
 ```
 
 | 项目 | 通过 | 跳过 | 失败 | TRX 时间 |
 | --- | ---: | ---: | ---: | --- |
-| Core | 398 | 1 | 0 | 18_31_59 |
-| Infrastructure | 113 | 0 | 0 | 18_32_01 |
-| App | 71 | 0 | 0 | 18_32_08 |
-| 合计 | **582** | **1** | **0** | 2026-10-04，本机 `.codex_tmp/TestResults-pr-admission-final` |
+| Core | 401 | 1 | 0 | 18_43_45 |
+| Infrastructure | 113 | 0 | 0 | 18_43_46 |
+| App | 71 | 0 | 0 | 18_43_54 |
+| 合计 | **585** | **1** | **0** | 2026-10-04，本机 `.codex_tmp/TestResults-pr-clock-final` |
 
 新增证据包括：默认采集/改正失败时真实 TCP 同时到达 SQLite 与图表；CTMBS 状态响应不入测量库、坏长头即时恢复；变长载荷的动态校验与帧尾；单位迁移、回放与异单位轴范围；真实 SQLite 写入失败后的安装阻止、恢复重试、正常关闭尾帧。`InstallerHandoffTests` 的三个真实进程测试验证应用及互斥锁退出后才启动替身安装器、超时不启动、失效进程不能完成交接。
 
@@ -105,6 +105,8 @@ dotnet test MagnetometerSystem.sln -c Debug --no-build --no-restore -m:1 --verbo
 回放计时新增 6 项真实 SQLite/WPF 回归：标称 1000 Hz 与不均匀 0/4/10 秒记录、不同倍速、暂停续播、定位、动态及非法速度，以及 3000001 ticks 的精确末帧完成。会话标称采样率不用于重写记录时间轴。
 
 CTMBS 通用重复长度封装中的合法状态/参数响应及多组 dat+5 响应不发布实时测量，也不计解析失败；损坏封装及可识别测量结构中的无效字段继续报错。单组 dat+5 若与实时帧完全相同且无请求标识，解析器无法区分来源，不能宣称实现批量请求隔离。新增播放/暂停转实时的完整三 ViewModel 回归，验证连接返回前的首帧进入新 SQLite 会话，历史数据不混入。
+
+`pmr+clock` 使用文档明确规定的不重复长度格式 `$14\nYYYYMMDDHHMMSS\nack\n`，有效时间响应仅被消费，不产测量或报错；其他封装仍校验重复长度与帧尾。测试覆盖分割位置、逐字节输入、合法时间边界、无效时间/帧尾和损坏响应后的同步。真实 TCP 用逐片接收屏障验证时钟响应不增加计数或进入显示流，前后仅两条实际测量入库。
 
 改正版本新增真实 SQLite/CSV 验证：两组配置、通道重排、同 ID 的偏移/矩阵修改分别形成独立版本；同版本重试不重复，旧 ID 可读，原始导出不变，CSV 写入完整版本标识。计算前冻结参数，异步操作不受随后编辑影响。5 项 WPF 回归覆盖会话切换后的过期成功/失败、清除选择、并发刷新和旧 ID；下拉只查版本 ID，不加载整组改正数据。
 

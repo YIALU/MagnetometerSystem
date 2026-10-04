@@ -69,6 +69,93 @@ public class Ctmbs3X2000ParserTests
     }
 
     [Fact]
+    public void Parse_ClockAndStandardLength14Responses_AllSplitPointsRemainNonMeasurements()
+    {
+        var responses = new[]
+        {
+            "20261004120000", "20240229235959", "20000229000000",
+            "19000228010203", "00010101000000", "99991231235959", "14000101000000"
+        }.Select(time => Ascii($"$14\n{time}\nack\n"))
+            .Concat(new[] { Frame("status=ready"), Frame("001332256199") }).ToArray();
+        foreach (var response in responses)
+        {
+            Assert.Equal(23, response.Length);
+            for (int split = 0; split <= response.Length; split++)
+            {
+                var parser = new Ctmbs3X2000Parser(ProtocolConfig.CreateCtmbs3X2000());
+                parser.Feed(response, 0, split);
+                Assert.False(parser.TryParse(out _));
+                Assert.Equal(0, parser.RejectedFrameCount);
+                byte[] remainder = [.. response[split..], .. Frame()];
+                parser.Feed(remainder, 0, remainder.Length);
+                Assert.True(parser.TryParse(out var reading));
+                Assert.Equal(new[] { 1.23, 2.34, 3.45, 4.56 }, reading!.ChannelValues);
+                Assert.False(parser.TryParse(out _));
+                Assert.Equal(0, parser.RejectedFrameCount);
+                Assert.Null(parser.LastError);
+            }
+        }
+        var bytewise = new Ctmbs3X2000Parser(ProtocolConfig.CreateCtmbs3X2000());
+        byte[] mixed = [.. Frame(), .. responses[0], .. responses[1], .. Frame()];
+        int measurements = 0;
+        foreach (byte value in mixed)
+        {
+            bytewise.Feed([value], 0, 1);
+            while (bytewise.TryParse(out _)) measurements++;
+            Assert.Equal(0, bytewise.RejectedFrameCount);
+        }
+        Assert.Equal(2, measurements);
+    }
+
+    [Fact]
+    public void Parse_MalformedClockResponse_RejectsInvalidDateAsciiOrTailAndPreservesFollowingMeasurement()
+    {
+        string[] malformed =
+        [
+            "$14\n20260229120000\nack\n", "$14\n19000229120000\nack\n",
+            "$14\n00000101000000\nack\n", "$14\n20260001120000\nack\n",
+            "$14\n20261301120000\nack\n", "$14\n20260132120000\nack\n",
+            "$14\n20261004240000\nack\n", "$14\n20261004126000\nack\n",
+            "$14\n20261004120060\nack\n", "$14\n20261004X20000\nack\n",
+            "$14\n2026100412000\nack\n", "$14\n202610041200000\nack\n",
+            "$14\n20261004120000\nACK\n", "$14\n20261004120000\nackX"
+        ];
+        foreach (string response in malformed)
+        {
+            var parser = new Ctmbs3X2000Parser(ProtocolConfig.CreateCtmbs3X2000());
+            byte[] mixed = [.. Ascii(response), .. Frame()];
+            parser.Feed(mixed, 0, mixed.Length);
+            Assert.True(parser.TryParse(out var reading));
+            Assert.Equal(1.23, reading!.ChannelValues[0]);
+            Assert.False(parser.TryParse(out _));
+            Assert.Equal(1, parser.RejectedFrameCount);
+            Assert.NotNull(parser.LastError);
+        }
+    }
+
+    [Fact]
+    public void Parse_TruncatedClockResponse_ResynchronizesAsSoonAsNextDollarArrives()
+    {
+        byte[] clock = Ascii("$14\n20261004120000\nack\n");
+        for (int length = 4; length < clock.Length; length++)
+        {
+            var parser = new Ctmbs3X2000Parser(ProtocolConfig.CreateCtmbs3X2000());
+            parser.Feed(clock, 0, length);
+            Assert.False(parser.TryParse(out _));
+            Assert.Equal(0, parser.RejectedFrameCount);
+            byte[] live = Frame();
+            parser.Feed(live, 0, 1);
+            Assert.False(parser.TryParse(out _));
+            Assert.Equal(1, parser.RejectedFrameCount);
+            parser.Feed(live, 1, live.Length - 1);
+            Assert.True(parser.TryParse(out var reading));
+            Assert.Equal(1.23, reading!.ChannelValues[0]);
+            Assert.False(parser.TryParse(out _));
+            Assert.Equal(1, parser.RejectedFrameCount);
+        }
+    }
+
+    [Fact]
     public void Parse_DamagedCommandEnvelopeStillReportsFailureAndRecovers()
     {
         byte[] response = Frame(" 20261004120000 1 0 1 1 0 0 0 0 00 25.50");

@@ -76,10 +76,13 @@ public class Ctmbs3X2000Parser : IDataParser, IParserDiagnostics
             // 重复长度是帧体的首个锚点。已到达的每个字节立即核验，不能被
             // "$99999\n" 等坏头拖住，等满其声明的大帧后再吞掉后续合法数据。
             int bodyStart = 1 + digitCount + 1;
+            // §3.2 pmr+clock is the sole exception: $14\nYYYYMMDDHHMMSS\nack\n,
+            // with no repeated 14. Its total size still matches an ordinary L=14 response.
+            bool mayBeClockResponse = len == 14 && digitCount == 2;
             bool prefixMatches = len > digitCount;
             for (int i = 0; prefixMatches && i < digitCount && bodyStart + i < _ring.Count; i++)
                 prefixMatches = _ring.Peek(bodyStart + i) == _ring.Peek(1 + i);
-            if (!prefixMatches)
+            if (!prefixMatches && !mayBeClockResponse)
             {
                 _ring.Skip(1);
                 Reject("CTMBS 帧体重复长度无效");
@@ -92,7 +95,7 @@ public class Ctmbs3X2000Parser : IDataParser, IParserDiagnostics
             // 新帧头可以直接否定尚未结束的旧候选，无须等到它声称的巨大长度。
             // 只检查候选范围；合法帧之后粘连的下一 '$' 必须留给下一次解析。
             int nextHeader = -1;
-            for (int i = bodyStart + digitCount; i < Math.Min(_ring.Count, frameSize); i++)
+            for (int i = bodyStart; i < Math.Min(_ring.Count, frameSize); i++)
             {
                 if (_ring.Peek(i) != (byte)'$') continue;
                 nextHeader = i;
@@ -195,6 +198,16 @@ public class Ctmbs3X2000Parser : IDataParser, IParserDiagnostics
         if (bodyEnd + AckTail.Length > frame.Length) return PayloadKind.Invalid;
         for (int i = 0; i < AckTail.Length; i++)
             if (frame[bodyEnd + i] != AckTail[i]) return PayloadKind.Invalid;
+
+        if (len == 14 && digitCount == 2)
+        {
+            var clock = Encoding.ASCII.GetString(frame, bodyStart, len);
+            if (IsAsciiDigits(clock) && DateTime.TryParseExact(clock, "yyyyMMddHHmmss",
+                CultureInfo.InvariantCulture, DateTimeStyles.None, out _))
+                return PayloadKind.OtherResponse;
+            // Invalid/non-clock content may still be a standard repeated-length response.
+            // In particular, a body beginning with 14 is not uniquely identifiable as a clock.
+        }
 
         int payloadStart = bodyStart + digitCount;
         if (!frame.AsSpan(1, digitCount).SequenceEqual(frame.AsSpan(bodyStart, digitCount))) return PayloadKind.Invalid;
