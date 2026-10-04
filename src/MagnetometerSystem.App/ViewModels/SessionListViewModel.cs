@@ -197,11 +197,14 @@ public partial class SessionListViewModel : ObservableObject
         finally { _lifecycleGate.Release(); }
     }
 
-    private async Task OnAcquisitionStoppingAsync()
+    private Task OnAcquisitionStoppingAsync() => StopSessionAsync();
+
+    private async Task StopSessionAsync(string? expectedSessionId = null)
     {
         await _lifecycleGate.WaitAsync();
         try
         {
+            if (expectedSessionId != null && ActiveSessionId != expectedSessionId) return;
             lock (_bufferLock) _acceptingReadings = false;
             var flushTimer = Interlocked.Exchange(ref _flushTimer, null);
             if (flushTimer != null) await flushTimer.DisposeAsync();
@@ -336,8 +339,8 @@ public partial class SessionListViewModel : ObservableObject
             if (generation != Volatile.Read(ref _sessionGeneration)) return;
             if (!Volatile.Read(ref _acceptingReadings) && recoveredSessionId != null)
             {
-                await OnAcquisitionStoppingAsync();
-                // OnAcquisitionStoppingAsync has released _lifecycleGate. The connection
+                await StopSessionAsync(recoveredSessionId);
+                // StopSessionAsync has released _lifecycleGate. The connection
                 // owner can now take its gate and complete the same session's stop.
                 await _dataBus.PublishAcquisitionRecoveryCompletedAsync(recoveredSessionId);
             }
