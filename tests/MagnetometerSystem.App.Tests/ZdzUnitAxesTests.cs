@@ -35,6 +35,11 @@ public class ZdzUnitAxesTests
         Render(vm);
         var lines = vm.PlotControl.Plot.GetPlottables().OfType<ScottPlot.Plottables.Scatter>().ToArray();
         Assert.Equal(21, lines.Length);
+        if (!autoScale)
+        {
+            Assert.Equal(vm.YMin, vm.PlotControl.Plot.Axes.Left.Range.Min);
+            Assert.Equal(vm.YMax, vm.PlotControl.Plot.Axes.Left.Range.Max);
+        }
         for (int ch = 0; ch < lines.Length; ch++)
         {
             Assert.Equal(protocol.DerivedChannelUnits[ch], lines[ch].Axes.YAxis.Label.Text);
