@@ -537,10 +537,11 @@ public partial class HistoryPlaybackViewModel : ObservableObject, IDisposable
 
     private TimeSpan CurrentPlaybackPosition()
     {
-        var duration = _readings.Length == 0 ? 0 : (_readings[^1].Timestamp - _readings[0].Timestamp).TotalMilliseconds;
+        var duration = _readings.Length == 0 ? TimeSpan.Zero : _readings[^1].Timestamp - _readings[0].Timestamp;
         var speed = double.IsFinite(PlaybackSpeed) && PlaybackSpeed > 0 ? PlaybackSpeed : 1;
-        return TimeSpan.FromMilliseconds(Math.Min(duration,
-            _positionAtTimerStart.TotalMilliseconds + _playbackClock.Elapsed.TotalMilliseconds * speed));
+        var milliseconds = _positionAtTimerStart.TotalMilliseconds + _playbackClock.Elapsed.TotalMilliseconds * speed;
+        // Preserve the exact final timestamp even when a double conversion would lose a tick.
+        return milliseconds >= duration.TotalMilliseconds ? duration : TimeSpan.FromMilliseconds(milliseconds);
     }
 
     private void PublishPlaybackReading(MagnetometerReading source)

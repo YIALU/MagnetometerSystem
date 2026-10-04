@@ -82,21 +82,23 @@ dotnet test MagnetometerSystem.sln --no-build --no-restore -m:1 --verbosity mini
 
 ```powershell
 dotnet build MagnetometerSystem.sln -c Debug --no-restore --disable-build-servers -m:1 -nr:false -p:UseSharedCompilation=false -p:BuildInParallel=false
-dotnet test MagnetometerSystem.sln -c Debug --no-build --no-restore -m:1 --verbosity minimal --logger trx --results-directory .codex_tmp/TestResults-pr-protocol-final
+dotnet test MagnetometerSystem.sln -c Debug --no-build --no-restore -m:1 --verbosity minimal --logger trx --results-directory .codex_tmp/TestResults-pr-playback-final
 ```
 
 | 项目 | 通过 | 跳过 | 失败 | TRX 时间 |
 | --- | ---: | ---: | ---: | --- |
-| Core | 380 | 1 | 0 | 16_37_42 |
-| Infrastructure | 76 | 0 | 0 | 16_37_44 |
-| App | 42 | 0 | 0 | 16_37_51 |
-| 合计 | **498** | **1** | **0** | 2026-10-04，本机 `.codex_tmp/TestResults-pr-protocol-final` |
+| Core | 380 | 1 | 0 | 17_05_23 |
+| Infrastructure | 76 | 0 | 0 | 17_05_25 |
+| App | 48 | 0 | 0 | 17_05_33 |
+| 合计 | **504** | **1** | **0** | 2026-10-04，本机 `.codex_tmp/TestResults-pr-playback-final` |
 
 新增证据包括：默认采集/改正失败时真实 TCP 同时到达 SQLite 与图表；CTMBS 状态响应不入测量库、坏长头即时恢复；变长载荷的动态校验与帧尾；单位迁移、回放与异单位轴范围；真实 SQLite 写入失败后的安装阻止、恢复重试、正常关闭尾帧。`InstallerHandoffTests` 的三个真实进程测试验证应用及互斥锁退出后才启动替身安装器、超时不启动、失效进程不能完成交接。
 
 复审补充覆盖：CTMBS 无数据 ERR 不结束命令等待，损坏简单响应后重新同步，UTC 午夜/跨年日期选择；CSV 在导出中、末尾及空会话确定性取消并清理临时文件。`StorageFaultAcquisitionTests` 使用真实 SQLite 故障，验证 UI 阻塞/断连延迟时停止接收、同包故障后的剩余帧拒收、定时尾批屏障、旧任务不影响新会话，以及重试成功后恰一次停止通知和单击重连。
 
 进一步覆盖匹配但巨大的 CTMBS 长度头后立即恢复、`dat+0` 收到完整有效实时帧后不再误报超时，以及两个 ZDZ 预设的设备存储下载被拒发（以随后普通命令的 TCP 字节顺序证明未写出下载前缀）。设备内部历史下载未实现隔离流程，不属于已支持功能。区间导出的名称和单位与数值在同一数据锁内复制，后台写出不再读取当前会话单位。
+
+回放计时新增 6 项真实 SQLite/WPF 回归：标称 1000 Hz 与不均匀 0/4/10 秒记录、不同倍速、暂停续播、定位、动态及非法速度，以及 3000001 ticks 的精确末帧完成。会话标称采样率不用于重写记录时间轴。
 
 串口仍是环境跳过；未运行真实安装器、实体设备或长时间吞吐验收。便携 ZIP 另用 `build.ps1` 的实际 `Compress-Archive` 命令进行临时目录归档，检查可执行文件与 `portable.marker` 位于 ZIP 根目录并保留子目录；该检查不是一次正式发布。
 

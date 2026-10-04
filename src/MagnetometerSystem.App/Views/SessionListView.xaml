@@ -95,7 +95,7 @@
                 <DataGridTextColumn Header="开始时间" Binding="{Binding StartedAt, StringFormat=yyyy-MM-dd HH:mm:ss}" Width="160"/>
                 <DataGridTextColumn Header="结束时间" Binding="{Binding EndedAt, StringFormat=yyyy-MM-dd HH:mm:ss}" Width="160"/>
                 <DataGridTextColumn Header="通道数" Binding="{Binding ChannelCount}" Width="70"/>
-                <DataGridTextColumn Header="采样率" Binding="{Binding SampleRate, StringFormat={}{0} Hz}" Width="80"/>
+                <DataGridTextColumn Header="标称采样率" Binding="{Binding SampleRate, StringFormat={}{0} Hz}" Width="90"/>
                 <DataGridTemplateColumn Header="数据点数" Width="130">
                     <DataGridTemplateColumn.CellTemplate>
                         <DataTemplate>
