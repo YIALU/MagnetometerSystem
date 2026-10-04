@@ -29,6 +29,8 @@ public partial class CommandEditDialog : Window
 
         NameBox.Text = command.Name;
         DescriptionBox.Text = command.Description;
+        ExpectedResponseBox.Text = command.ExpectedResponse;
+        ExpectedResponseHex.IsChecked = command.ExpectedResponseIsHex;
 
         if (command.Encoding == CommandEncoding.AsciiTemplate)
             AsciiRadio.IsChecked = true;
@@ -55,6 +57,7 @@ public partial class CommandEditDialog : Window
         Min = p.Min,
         Max = p.Max,
         EnumOptions = new List<string>(p.EnumOptions),
+        EnumMap = p.EnumMap.Select(c => new EnumChoice(c.Label, c.Value)).ToList(),
         Endian = p.Endian,
         ByteLength = p.ByteLength,
     };
@@ -112,6 +115,8 @@ public partial class CommandEditDialog : Window
 
         _command.Name = NameBox.Text.Trim();
         _command.Description = DescriptionBox.Text ?? "";
+        _command.ExpectedResponse = ExpectedResponseBox.Text;
+        _command.ExpectedResponseIsHex = ExpectedResponseHex.IsChecked == true;
         _command.Encoding = (AsciiRadio.IsChecked == true)
             ? CommandEncoding.AsciiTemplate
             : CommandEncoding.BinaryFrame;

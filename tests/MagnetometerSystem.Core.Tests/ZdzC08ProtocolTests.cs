@@ -19,7 +19,7 @@ public class ZdzC08ProtocolTests
 
     // 仅测试字段布局：文档 CRC 参数未知，使用明确的测试 CRC 重写校验字节。
     // 这些测试不构成固件 CRC 参数或文档原始帧有效性的证明。
-    private static byte[] DocSample() => WithTestChecksum(ProtocolConfig.HexToBytes(DocSampleHex));
+    private static byte[] SyntheticDocumentFrame() => WithTestChecksum(ProtocolConfig.HexToBytes(DocSampleHex));
 
     private static byte[] WithTestChecksum(byte[] frame)
     {
@@ -73,18 +73,23 @@ public class ZdzC08ProtocolTests
     [Fact]
     public void Config_NoLengthFieldSegment_SoParserTakesFixedLengthPath()
     {
-        // 长度字段值恒为 92，但必须配成 Padding：若配成 LengthField，
-        // 解析器会走变长路径算出 非数据区(9) + 92 = 101 之外的帧长。
+        // 内置协议的长度恒为 92，作为固定锚点校验，保持 101 字节定长。
+        // 变长解析器也支持包含 Padding 的载荷，但该固有协议不接受变长。
         Assert.DoesNotContain(
             ProtocolConfig.CreateZdzC08().Segments,
             s => s.Type == SegmentType.LengthField);
     }
 
     [Fact]
-    public void Parse_DocumentSample_DecodesAllTwentyOneChannels()
+    public void Parse_OriginalDocumentSample_DecodesLayoutWithoutClaimingCrcValidation()
     {
-        var parser = new ConfigurableBinaryParser(WithTestChecksum(ProtocolConfig.CreateZdzC08()));
-        var frame = DocSample();
+        // 原始黄金帧不改写 CRC。这里只验证字段布局，不声称未知 CRC 参数已验证。
+        var config = ProtocolConfig.CreateZdzC08();
+        Assert.Throws<ArgumentException>(config.Validate);
+        config.RequireChecksum = false;
+        var parser = new ConfigurableBinaryParser(config);
+        var frame = ProtocolConfig.HexToBytes(DocSampleHex);
+        Assert.Equal(new byte[] { 0xBD, 0x67 }, frame[98..100]);
         Assert.Equal(101, frame.Length);
 
         parser.Feed(frame, 0, frame.Length);
@@ -120,7 +125,7 @@ public class ZdzC08ProtocolTests
         // 文档注 2：ΔX/ΔY/ΔZ 分别由 X1-X2 / Y1-Y2 / Z1-Z2 得出。
         // 这条不变量是"字段布局解释正确"的最强证据 —— 布局若错位，三个差值不可能同时对上。
         var parser = new ConfigurableBinaryParser(WithTestChecksum(ProtocolConfig.CreateZdzC08()));
-        var frame = DocSample();
+        var frame = SyntheticDocumentFrame();
         parser.Feed(frame, 0, frame.Length);
 
         Assert.True(parser.TryParse(out var reading));
@@ -136,7 +141,7 @@ public class ZdzC08ProtocolTests
     public void Parse_MagneticOnlyVariant_DecodesSameSixValues()
     {
         var parser = new ConfigurableBinaryParser(WithTestChecksum(ProtocolConfig.CreateZdzC08MagneticOnly()));
-        var frame = DocSample();
+        var frame = SyntheticDocumentFrame();
         parser.Feed(frame, 0, frame.Length);
 
         Assert.True(parser.TryParse(out var reading));
@@ -152,7 +157,7 @@ public class ZdzC08ProtocolTests
         // GPS 经纬度是本协议里唯一的 8 字节字段，也是全项目第一次真正用到 Double 段。
         // 样本包采集时无定位，值本身无意义，此处锁定的是字节序解释而非数值合理性。
         var parser = new ConfigurableBinaryParser(WithTestChecksum(ProtocolConfig.CreateZdzC08()));
-        var frame = DocSample();
+        var frame = SyntheticDocumentFrame();
         parser.Feed(frame, 0, frame.Length);
 
         Assert.True(parser.TryParse(out var reading));
@@ -168,7 +173,7 @@ public class ZdzC08ProtocolTests
     public void Parse_LeadingGarbage_ResyncsToFrameHeader()
     {
         var parser = new ConfigurableBinaryParser(WithTestChecksum(ProtocolConfig.CreateZdzC08()));
-        var frame = DocSample();
+        var frame = SyntheticDocumentFrame();
         var stream = new byte[] { 0x11, 0x22, 0x33, 0xFF, 0x00 }.Concat(frame).ToArray();
 
         parser.Feed(stream, 0, stream.Length);
@@ -182,7 +187,7 @@ public class ZdzC08ProtocolTests
     public void Parse_TwoBackToBackFrames_BothDecode()
     {
         var parser = new ConfigurableBinaryParser(WithTestChecksum(ProtocolConfig.CreateZdzC08()));
-        var frame = DocSample();
+        var frame = SyntheticDocumentFrame();
         var stream = frame.Concat(frame).ToArray();
 
         parser.Feed(stream, 0, stream.Length);
@@ -198,7 +203,7 @@ public class ZdzC08ProtocolTests
     public void Parse_IncompleteFrame_ReturnsFalseWithoutConsuming()
     {
         var parser = new ConfigurableBinaryParser(WithTestChecksum(ProtocolConfig.CreateZdzC08()));
-        var frame = DocSample();
+        var frame = SyntheticDocumentFrame();
 
         // 先喂 100 字节（差一个字节），再补上剩余部分
         parser.Feed(frame, 0, 100);
@@ -215,7 +220,7 @@ public class ZdzC08ProtocolTests
     {
         // 信息 ID 打开了 ValidateFixedValue，篡改后该帧必须被拒。
         var parser = new ConfigurableBinaryParser(WithTestChecksum(ProtocolConfig.CreateZdzC08()));
-        var frame = DocSample();
+        var frame = SyntheticDocumentFrame();
         frame[2] = 0xAE;
 
         parser.Feed(frame, 0, frame.Length);
@@ -227,7 +232,7 @@ public class ZdzC08ProtocolTests
     public void Parse_WrongDataLengthField_RejectsFrame()
     {
         var parser = new ConfigurableBinaryParser(WithTestChecksum(ProtocolConfig.CreateZdzC08()));
-        var frame = DocSample();
+        var frame = SyntheticDocumentFrame();
         frame[4] = 0x5D;
 
         parser.Feed(frame, 0, frame.Length);
@@ -242,7 +247,7 @@ public class ZdzC08ProtocolTests
         // 验证信息 ID / 长度锚点能让解析器跳过诱饵并最终锁上真正的帧。
         //
         var parser = new ConfigurableBinaryParser(WithTestChecksum(ProtocolConfig.CreateZdzC08()));
-        var frame = DocSample();
+        var frame = SyntheticDocumentFrame();
         var decoy = new byte[] { 0xFF, 0x5A, 0x00, 0x11, 0x22, 0x33 };
         var stream = decoy.Concat(frame).ToArray();
 
@@ -258,7 +263,7 @@ public class ZdzC08ProtocolTests
     public void Parse_WrongTail_RejectsFrame()
     {
         var parser = new ConfigurableBinaryParser(WithTestChecksum(ProtocolConfig.CreateZdzC08()));
-        var frame = DocSample();
+        var frame = SyntheticDocumentFrame();
         frame[100] = 0x34;
 
         parser.Feed(frame, 0, frame.Length);
@@ -267,7 +272,7 @@ public class ZdzC08ProtocolTests
     }
 
     [Fact]
-    public void Parse_RealDeviceRecord_GradientInvariantHolds()
+    public void Parse_OriginalDeviceRecord_DecodesLayoutWithoutClaimingCrcValidation()
     {
         // 第二个独立黄金样本：取自 ZDZ_C08 设备实测导出的 512B 存储包中的一条 101B 记录
         // （包内偏移 7）。与文档样本包不同源、数值量级也完全不同（个位数 nT vs 20000 nT），
@@ -278,8 +283,13 @@ public class ZdzC08ProtocolTests
             "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 " +
             "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 C6 48 33";
 
-        var parser = new ConfigurableBinaryParser(WithTestChecksum(ProtocolConfig.CreateZdzC08()));
-        var frame = WithTestChecksum(ProtocolConfig.HexToBytes(realRecordHex));
+        // 保留设备记录的 C6 48；此测试只验证载荷布局，不验证未知固件 CRC。
+        var config = ProtocolConfig.CreateZdzC08();
+        Assert.Throws<ArgumentException>(config.Validate);
+        config.RequireChecksum = false;
+        var parser = new ConfigurableBinaryParser(config);
+        var frame = ProtocolConfig.HexToBytes(realRecordHex);
+        Assert.Equal(new byte[] { 0xC6, 0x48 }, frame[98..100]);
         Assert.Equal(101, frame.Length);
 
         parser.Feed(frame, 0, frame.Length);
@@ -317,7 +327,7 @@ public class ZdzC08ProtocolTests
         Assert.Equal(original.DerivedChannelUnits, restored.DerivedChannelUnits);
         Assert.Throws<ArgumentException>(() => new ConfigurableBinaryParser(restored));
         var parser = new ConfigurableBinaryParser(WithTestChecksum(restored));
-        var frame = DocSample();
+        var frame = SyntheticDocumentFrame();
         parser.Feed(frame, 0, frame.Length);
         Assert.True(parser.TryParse(out var reading));
         Assert.NotNull(reading);
@@ -330,9 +340,12 @@ public class ZdzC08ProtocolTests
     {
         var config = magneticOnly ? ProtocolConfig.CreateZdzC08MagneticOnly() : ProtocolConfig.CreateZdzC08();
         Assert.True(config.RequireChecksum);
+        Assert.Contains("CRC 参数待确认", Assert.Throws<ArgumentException>(config.Validate).Message);
         Assert.Contains("CRC 参数待确认", Assert.Throws<ArgumentException>(() => new ConfigurableBinaryParser(config)).Message);
         var restored = ProtocolConfig.FromJson(config.ToJson())!;
+        Assert.Throws<ArgumentException>(restored.Validate);
         Assert.Throws<ArgumentException>(() => new ConfigurableBinaryParser(restored));
+        WithTestChecksum(restored).Validate();
     }
 
     [Theory]
@@ -344,9 +357,9 @@ public class ZdzC08ProtocolTests
     public void Parse_CorruptThenValidFrameInOneReceive_DeliversValidFrameImmediately(int corruptedOffset)
     {
         var parser = new ConfigurableBinaryParser(WithTestChecksum(ProtocolConfig.CreateZdzC08()));
-        var invalid = DocSample();
+        var invalid = SyntheticDocumentFrame();
         invalid[corruptedOffset] ^= 1;
-        var stream = invalid.Concat(DocSample()).ToArray();
+        var stream = invalid.Concat(SyntheticDocumentFrame()).ToArray();
         parser.Feed(stream, 0, stream.Length);
         var readings = new List<MagnetometerReading>();
         while (parser.TryParse(out var reading)) readings.Add(reading!);

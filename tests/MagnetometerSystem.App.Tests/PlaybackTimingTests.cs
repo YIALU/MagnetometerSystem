@@ -199,13 +199,14 @@ public class PlaybackTimingTests
             vm.SelectedSession = Assert.Single(await storage.GetSessionsAsync());
             await vm.LoadSessionCommand.ExecuteAsync(null);
             var fixture = new Fixture { Vm = vm, Bus = bus, Storage = storage, Path = path };
-            bus.ReadingReceived += fixture.Displayed.Add;
+            bus.ProcessedReadingReceived += fixture.Displayed.Add;
             return fixture;
         }
 
         public ValueTask DisposeAsync()
         {
             Vm.StopCommand.Execute(null);
+            Vm.Dispose();
             Storage.Dispose();
             SqliteConnection.ClearAllPools();
             foreach (string suffix in new[] { "", "-wal", "-shm" }) File.Delete(Path + suffix);

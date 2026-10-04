@@ -45,6 +45,12 @@ public class ConnectionConfig
     /// <summary>连接超时 (毫秒)</summary>
     public int ConnectTimeoutMs { get; set; } = 5000;
 
+    /// <summary>单次传输写出超时，不代表设备执行确认超时。</summary>
+    public int SendTimeoutMs { get; set; } = 5000;
+
+    /// <summary>TCP 重连初始等待时间，指数退避最大为 30 秒。</summary>
+    public int ReconnectDelayMs { get; set; } = 1000;
+
     /// <summary>是否启用自动重连</summary>
     public bool AutoReconnect { get; set; } = true;
 

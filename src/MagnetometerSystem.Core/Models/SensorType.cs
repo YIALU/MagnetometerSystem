@@ -15,5 +15,8 @@ public enum SensorType
     DualTriaxialFluxgate,
 
     /// <summary>质子磁力仪</summary>
-    ProtonMagnetometer
+    ProtonMagnetometer,
+
+    /// <summary>通用协议采集；通道由协议定义，不受设备类型约束</summary>
+    Generic
 }

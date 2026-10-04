@@ -14,6 +14,7 @@ public class SensorAdapterFactory
     {
         return config.Type switch
         {
+            SensorType.Generic => new GenericSensorAdapter(config),
             SensorType.SingleAxisFluxgate => new SingleAxisFluxgateAdapter(config),
             SensorType.TriaxialFluxgate => new TriaxialFluxgateAdapter(config),
             SensorType.DualTriaxialFluxgate => new DualTriaxialFluxgateAdapter(config),

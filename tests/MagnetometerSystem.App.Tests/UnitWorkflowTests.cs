@@ -28,7 +28,7 @@ public class UnitWorkflowTests
         await storage.SaveReadingsAsync([new() { SessionId = id, Timestamp = DateTime.Now, ChannelValues = [100, 30, 25] }]);
         await storage.EndSessionAsync(id);
         using var chart = new RealtimeChartViewModel(bus) { PlotControl = new WpfPlot() };
-        var replay = new HistoryPlaybackViewModel(storage, bus, new OrthogonalityCorrector(), new SqliteCalibrationRepository(db));
+        using var replay = new HistoryPlaybackViewModel(storage, bus, new OrthogonalityCorrector(), new SqliteCalibrationRepository(db));
         replay.SelectedSession = Assert.Single(await storage.GetSessionsAsync());
         await replay.LoadSessionCommand.ExecuteAsync(null);
         // Changing the selector must not relabel the data already loaded into the player.
@@ -87,7 +87,7 @@ public class UnitWorkflowTests
         chart.AddComputedChannelCommand.Execute(null);
         var custom = chart.ComputedChannels[^1];
         Assert.Equal("CH0", custom.Formula);
-        Assert.Equal("nT", custom.Unit);
+        Assert.Empty(custom.Unit);
         bool notified = false;
         custom.PropertyChanged += (_, e) => notified |= e.PropertyName == nameof(custom.Unit);
         custom.Formula = "CH3";
@@ -95,9 +95,8 @@ public class UnitWorkflowTests
         Assert.True(notified);
         var start = DateTime.Now;
         for (int i = 0; i < 3; i++)
-            bus.PublishReading(new MagnetometerReading { Timestamp = start.AddMilliseconds(i * 10), ChannelValues = [100, 200, 300, 25, 1, 2, 3] });
-        typeof(RealtimeChartViewModel).GetMethod("OnRenderTick", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .Invoke(chart, new object?[] { null, EventArgs.Empty });
+            bus.PublishProcessedReading(new MagnetometerReading { Timestamp = start.AddMilliseconds(i * 10), ChannelValues = [100, 200, 300, 25, 1, 2, 3] });
+        chart.RefreshPlot();
         var lines = chart.PlotControl.Plot.GetPlottables().OfType<ScottPlot.Plottables.Scatter>().ToArray();
         Assert.Equal(11, lines.Length);
         Assert.Equal("°C", lines[^1].Axes.YAxis.Label.Text);

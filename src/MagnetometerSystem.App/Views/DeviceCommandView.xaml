@@ -198,6 +198,10 @@
 
                     <!-- 发送 -->
                     <StackPanel Grid.Row="5" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
+                        <TextBlock Text="{Binding WriteStatus}" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                        <TextBlock Text="{Binding ResponseStatus}" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                        <TextBlock Text="响应超时(ms)" VerticalAlignment="Center"/>
+                        <TextBox Text="{Binding ResponseTimeoutMs}" Width="65" Margin="6,0,12,0"/>
                         <Button Content="发送"
                                 Padding="20,6"
                                 FontWeight="Bold"
@@ -257,9 +261,9 @@
                 <CheckBox Grid.Column="1" Content="Hex"
                           IsChecked="{Binding FreeIsHexMode}"
                           VerticalAlignment="Center" Margin="8,0"/>
-                <CheckBox Grid.Column="2" Content="换行"
-                          IsChecked="{Binding FreeAppendNewline}"
-                          VerticalAlignment="Center" Margin="0,0,8,0"/>
+                <ComboBox Grid.Column="2" ItemsSource="{Binding FreeLineEndings}"
+                          SelectedItem="{Binding FreeLineEnding}" Width="80"
+                          VerticalAlignment="Center" Margin="0,0,8,0" ToolTip="发送行尾：None 表示不追加"/>
                 <Button Grid.Column="3" Content="发送"
                         Padding="14,4"
                         Command="{Binding SendFreeCommandCommand}"

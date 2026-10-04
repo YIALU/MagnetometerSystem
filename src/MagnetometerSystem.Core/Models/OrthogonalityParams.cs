@@ -13,6 +13,30 @@ public class OrthogonalityParams
     /// <summary>配置名称</summary>
     public string Name { get; set; } = string.Empty;
 
+    /// <summary>拟合输入、偏移和输出的磁场单位；空表示旧配置单位未知，不能直接用于改正。</summary>
+    public string Unit { get; set; } = "";
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string UnitDisplay => CanonicalUnit(Unit) is { Length: > 0 } unit ? unit : "未知";
+
+    public static string CanonicalUnit(string? unit) => unit?.Trim() switch
+    {
+        "nT" => "nT", "uT" or "µT" or "μT" => "uT", "mT" => "mT", "T" => "T", _ => ""
+    };
+
+    /// <summary>应用前要求输入与拟合单位一致；此方法不隐式换算数值。</summary>
+    public void ValidateUnit(string? inputUnit)
+    {
+        var profileUnit = CanonicalUnit(Unit);
+        var sourceUnit = CanonicalUnit(inputUnit);
+        if (profileUnit.Length == 0)
+            throw new ArgumentException("改正配置的拟合单位未知，请使用单位明确的配置重新拟合。");
+        if (sourceUnit.Length == 0)
+            throw new ArgumentException("待改正通道的磁场单位未知，无法安全应用改正。");
+        if (profileUnit != sourceUnit)
+            throw new ArgumentException($"改正配置单位 {profileUnit} 与通道单位 {sourceUnit} 不一致；请使用相同单位的配置。");
+    }
+
     /// <summary>关联传感器序列号</summary>
     public string? SensorSerial { get; set; }
 
@@ -45,6 +69,7 @@ public class OrthogonalityParams
     /// </summary>
     public Matrix<double> GetMatrix()
     {
+        Validate();
         return Matrix<double>.Build.DenseOfRowMajor(3, 3, CompensationMatrix);
     }
 
@@ -53,6 +78,7 @@ public class OrthogonalityParams
     /// </summary>
     public Vector<double> GetOffsetVector()
     {
+        Validate();
         return Vector<double>.Build.DenseOfArray(Offset);
     }
 
@@ -62,10 +88,34 @@ public class OrthogonalityParams
     /// </summary>
     public double[] Apply(double x, double y, double z)
     {
+        Validate();
+        if (!double.IsFinite(x) || !double.IsFinite(y) || !double.IsFinite(z))
+            throw new ArgumentException("正交度输入必须是有限数值。");
         var raw = Vector<double>.Build.DenseOfArray([x, y, z]);
         var offset = GetOffsetVector();
         var matrix = GetMatrix();
         var corrected = matrix * (raw - offset);
-        return corrected.ToArray();
+        var result = corrected.ToArray();
+        if (result.Any(v => !double.IsFinite(v)))
+            throw new ArithmeticException("正交度结果超出有限数值范围。");
+        return result;
+    }
+
+    /// <summary>拒绝缺失、非有限或不可逆参数，避免把无效改正结果送入显示或存储。</summary>
+    public void Validate()
+    {
+        if (Offset is not { Length: 3 } || CompensationMatrix is not { Length: 9 })
+            throw new ArgumentException("正交度参数必须包含 3 个偏移量和 9 个矩阵元素。");
+        if (Offset.Any(v => !double.IsFinite(v)) || CompensationMatrix.Any(v => !double.IsFinite(v)))
+            throw new ArgumentException("正交度参数不能包含 NaN 或无穷大。");
+        var scale = CompensationMatrix.Max(Math.Abs);
+        if (scale == 0)
+            throw new ArgumentException("正交度补偿矩阵不可逆。");
+        var m = CompensationMatrix.Select(v => v / scale).ToArray();
+        var determinant = m[0] * (m[4] * m[8] - m[5] * m[7])
+            - m[1] * (m[3] * m[8] - m[5] * m[6])
+            + m[2] * (m[3] * m[7] - m[4] * m[6]);
+        if (!double.IsFinite(determinant) || Math.Abs(determinant) < 1e-12)
+            throw new ArgumentException("正交度补偿矩阵不可逆或病态。");
     }
 }

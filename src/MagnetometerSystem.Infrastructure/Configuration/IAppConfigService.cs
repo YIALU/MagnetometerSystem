@@ -39,4 +39,5 @@ public class AppSettings
     public bool AutoSaveEnabled { get; set; } = true;
     public int ChartRefreshRate { get; set; } = 30;
     public string ThemeName { get; set; } = "Default";
+    public Dictionary<string, bool> WorkbenchPanels { get; set; } = new();
 }

@@ -14,10 +14,12 @@ public class OrthogonalityCalculator : IOrthogonalityService
     private const double ConditionNumberThreshold = 1e12;
 
     /// <inheritdoc />
-    public OrthogonalityResult Calculate(double[,] rawData, double? referenceFieldStrength = null)
+    public OrthogonalityResult Calculate(double[,] rawData, double? referenceFieldStrength = null, string? unit = null)
     {
         try
         {
+            if (!string.IsNullOrWhiteSpace(unit) && OrthogonalityParams.CanonicalUnit(unit).Length == 0)
+                throw new ArgumentException("拟合单位必须为 nT、uT、mT 或 T。");
             // Step 0: 数据预处理 — 自动剔除突变异常点（总场偏离均值 > 3σ）
             var dataList = MatrixToList(rawData);
             var filteredList = CalibrationDataValidator.RemoveOutliers(dataList);
@@ -153,6 +155,7 @@ public class OrthogonalityCalculator : IOrthogonalityService
             // Step 9: 组装输出参数
             var parameters = new OrthogonalityParams
             {
+                Unit = OrthogonalityParams.CanonicalUnit(unit),
                 Offset = center.ToArray(),
                 CompensationMatrix = MatrixToRowMajor(T),
                 SampleCount = n

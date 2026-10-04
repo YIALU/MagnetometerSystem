@@ -1,148 +1,118 @@
+using System.Globalization;
 using System.Text;
 using MagnetometerSystem.Core.Models;
 using MagnetometerSystem.Core.Storage;
 
 namespace MagnetometerSystem.Infrastructure.Export;
 
-/// <summary>
-/// CSV 格式数据导出器
-/// </summary>
-public class CsvExporter : IDataExporter
+/// <summary>按会话通道顺序导出 CSV，完成前不覆盖目标文件。</summary>
+public class CsvExporter(IDataStorageService storageService) : IDataExporter
 {
-    private readonly IDataStorageService _storageService;
-
     public string Format => "CSV";
 
-    public CsvExporter(IDataStorageService storageService)
+    public async Task ExportAsync(string sessionId, string filePath, ExportOptions options,
+        IProgress<double>? progress = null, CancellationToken ct = default)
     {
-        _storageService = storageService;
-    }
-
-    public async Task ExportAsync(
-        string sessionId,
-        string filePath,
-        ExportOptions options,
-        IProgress<double>? progress = null,
-        CancellationToken ct = default)
-    {
+        ArgumentNullException.ThrowIfNull(options);
         ct.ThrowIfCancellationRequested();
-
-        // 1. 获取会话信息以确定通道配置
-        var sessions = await _storageService.GetSessionsAsync();
-        ct.ThrowIfCancellationRequested();
-        var session = sessions.FirstOrDefault(s => s.Id == sessionId)
+        if (options.StartTime > options.EndTime)
+            throw new ArgumentException("导出起始时间不能晚于结束时间。");
+        if (options.DecimalPlaces is < 0 or > 15)
+            throw new ArgumentOutOfRangeException(nameof(options.DecimalPlaces));
+        var session = (await storageService.GetSessionsAsync()).FirstOrDefault(s => s.Id == sessionId)
             ?? throw new ArgumentException($"会话不存在: {sessionId}");
-
-        // 2. 确定要导出的通道
-        var channelIndices = options.ChannelIndices?.Length > 0
-            ? options.ChannelIndices
-            : Enumerable.Range(0, session.ChannelCount).ToArray();
-        var channelNames = session.ChannelNames;
-
-        // 3. 获取数据（用于进度计算）
-        var allReadings = await _storageService.GetReadingsAsync(
-            sessionId, options.StartTime, options.EndTime);
+        var indices = options.ChannelIndices is { Length: > 0 }
+            ? options.ChannelIndices.ToArray() : Enumerable.Range(0, session.ChannelCount).ToArray();
+        if (indices.Any(i => i < 0 || i >= session.ChannelCount) || indices.Distinct().Count() != indices.Length)
+            throw new ArgumentException("导出通道索引越界或重复。");
+        var readings = await storageService.GetReadingsAsync(sessionId, options.StartTime, options.EndTime);
         ct.ThrowIfCancellationRequested();
-        var totalCount = allReadings.Count;
-
-        // 4. 流式写入
+        var corrections = new Dictionary<long, CorrectedReading>();
+        if (options.Source != ExportDataSource.Raw)
+        {
+            var corrected = await storageService.GetCorrectedReadingsAsync(sessionId, options.CorrectionProfileId);
+            if (corrected.Select(r => r.CorrectionProfileId).Distinct().Skip(1).Any())
+                throw new ArgumentException("存在多个改正版本，请选择已保存的改正版本。");
+            foreach (var item in corrected.OrderBy(r => r.CorrectedAt).ThenBy(r => r.Id))
+                corrections[item.OriginalReadingId] = item;
+            if (readings.Any(r => !corrections.ContainsKey(r.Id)))
+                throw new InvalidOperationException("所选区间未全部生成指定版本的改正结果。");
+        }
+        var fullPath = Path.GetFullPath(filePath);
+        var tempPath = fullPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {
-            // UTF-8 with BOM, CRLF 换行
-            using var stream = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.None);
-            using var writer = new StreamWriter(stream, new UTF8Encoding(true))
+            await using (var stream = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            await using (var writer = new StreamWriter(stream, new UTF8Encoding(true)) { NewLine = "\r\n" })
             {
-                NewLine = "\r\n"
-            };
-
-            // 写入头行
-            if (options.IncludeHeader)
-            {
-                var header = BuildHeaderLine(channelNames, channelIndices, options);
-                await writer.WriteLineAsync(header.AsMemory(), ct);
-            }
-
-            // 写入数据行
-            var written = 0;
-            foreach (var reading in allReadings)
-            {
-                ct.ThrowIfCancellationRequested();
-
-                var line = BuildDataLine(reading, channelIndices, options);
-                await writer.WriteLineAsync(line.AsMemory(), ct);
-
-                written++;
-                if (written % 1000 == 0 && written < totalCount)
+                if (options.IncludeHeader)
+                    await writer.WriteLineAsync(BuildHeader(session, indices, options).AsMemory(), ct);
+                for (var i = 0; i < readings.Count; i++)
                 {
-                    progress?.Report((double)written / totalCount);
+                    ct.ThrowIfCancellationRequested();
+                    corrections.TryGetValue(readings[i].Id, out var corrected);
+                    await writer.WriteLineAsync(BuildLine(readings[i], corrected, indices, options).AsMemory(), ct);
+                    if ((i + 1) % 1000 == 0 && i + 1 < readings.Count)
+                        progress?.Report((double)(i + 1) / readings.Count);
                 }
+                await writer.FlushAsync(ct);
             }
-
-            // Empty sessions and the last row use the same cancellation/cleanup path.
-            await writer.FlushAsync(ct);
             ct.ThrowIfCancellationRequested();
-            progress?.Report(1.0);
+            progress?.Report(1);
             ct.ThrowIfCancellationRequested();
+            File.Move(tempPath, fullPath, overwrite: true);
         }
-        catch (OperationCanceledException)
+        finally
         {
-            // 取消时删除不完整文件
-            if (File.Exists(filePath))
-            {
-                File.Delete(filePath);
-            }
-            throw;
+            if (File.Exists(tempPath)) File.Delete(tempPath);
         }
     }
 
-    private static string BuildHeaderLine(
-        string[] channelNames, int[] channelIndices, ExportOptions options)
+    private static string BuildHeader(SessionInfo session, int[] indices, ExportOptions options)
     {
-        var parts = new List<string> { "Timestamp" };
-
-        foreach (var idx in channelIndices)
+        var fields = new List<string> { "Timestamp" };
+        foreach (var index in indices)
         {
-            parts.Add(idx < channelNames.Length ? channelNames[idx] : $"CH{idx}");
-        }
-
-        if (options.IncludeCalibratedData)
-        {
-            parts.Add("IsCalibrated");
-            parts.Add("IsOrthoCorrected");
-        }
-
-        return string.Join(",", parts);
-    }
-
-    private static string BuildDataLine(
-        MagnetometerReading reading, int[] channelIndices, ExportOptions options)
-    {
-        var sb = new StringBuilder();
-
-        // 时间戳 - ISO 8601 round-trip format
-        // 简洁格式：年-月-日 时:分:秒.毫秒（本地时间，DB 已统一在读取时转为本地）
-        sb.Append(reading.Timestamp.ToString("yyyy-MM-dd HH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture));
-
-        // 通道值
-        foreach (var idx in channelIndices)
-        {
-            sb.Append(',');
-            if (idx < reading.ChannelValues.Length)
+            var name = index < session.ChannelNames.Length ? session.ChannelNames[index] : $"CH{index}";
+            var unit = options.IncludeUnits && index < session.ChannelUnits.Length && !string.IsNullOrEmpty(session.ChannelUnits[index])
+                ? $" [{session.ChannelUnits[index]}]" : "";
+            if (options.Source == ExportDataSource.RawAndCorrected)
             {
-                sb.Append(reading.ChannelValues[idx].ToString("R")); // Round-trip 全精度
+                fields.Add(name + "_raw" + unit);
+                fields.Add(name + "_corrected" + unit);
             }
-            // 超出范围则输出空
+            else fields.Add(name + unit);
         }
-
-        // 校准状态列
-        if (options.IncludeCalibratedData)
-        {
-            sb.Append(',');
-            sb.Append(reading.IsCalibrated ? '1' : '0');
-            sb.Append(',');
-            sb.Append(reading.IsOrthogonalityCorrected ? '1' : '0');
-        }
-
-        return sb.ToString();
+        if (options.IncludeCalibratedData) fields.AddRange(["IsCalibrated", "IsOrthoCorrected"]);
+        if (options.Source != ExportDataSource.Raw) fields.Add("CorrectionVersion");
+        return string.Join(",", fields.Select(Escape));
     }
+
+    private static string BuildLine(MagnetometerReading reading, CorrectedReading? corrected,
+        int[] indices, ExportOptions options)
+    {
+        var rawValues = reading.OriginalChannelValues ?? reading.ChannelValues;
+        if (options.Source != ExportDataSource.Corrected &&
+            (reading.IsCalibrated || reading.IsOrthogonalityCorrected) && reading.OriginalChannelValues == null)
+            throw new InvalidOperationException("历史记录只有处理后数据，不能将其标记为原始数据导出。");
+        var fields = new List<string> { reading.Timestamp.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture) };
+        string Value(double[] values, int index)
+        {
+            if (index >= values.Length || !double.IsFinite(values[index]))
+                throw new InvalidDataException("导出数据缺少通道或包含非有限数值。");
+            return values[index].ToString(options.DecimalPlaces is int places ? $"F{places}" : "R", CultureInfo.InvariantCulture);
+        }
+        foreach (var index in indices)
+        {
+            fields.Add(Value(options.Source == ExportDataSource.Corrected ? corrected!.CorrectedValues : rawValues, index));
+            if (options.Source == ExportDataSource.RawAndCorrected) fields.Add(Value(corrected!.CorrectedValues, index));
+        }
+        if (options.IncludeCalibratedData)
+            fields.AddRange(["0", options.Source == ExportDataSource.Raw ? "0" : "1"]);
+        if (options.Source != ExportDataSource.Raw) fields.Add(corrected!.CorrectionProfileId);
+        return string.Join(",", fields.Select(Escape));
+    }
+
+    private static string Escape(string text) => text.IndexOfAny([',', '"', '\r', '\n']) >= 0
+        ? '"' + text.Replace("\"", "\"\"") + '"' : text;
 }

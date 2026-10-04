@@ -35,7 +35,15 @@ public partial class CalibrationVisualizationControl : UserControl
             typeof(CalibrationVisualizationControl),
             new PropertyMetadata(null, OnDataChanged));
 
-    /// <summary>参考场强 (nT)</summary>
+    public static readonly DependencyProperty UnitProperty = DependencyProperty.Register(
+        nameof(Unit), typeof(string), typeof(CalibrationVisualizationControl), new PropertyMetadata("", OnDataChanged));
+    public string Unit
+    {
+        get => (string)GetValue(UnitProperty);
+        set => SetValue(UnitProperty, value);
+    }
+
+    /// <summary>参考场强（与数据同单位）</summary>
     public static readonly DependencyProperty ReferenceFieldStrengthProperty =
         DependencyProperty.Register(
             nameof(ReferenceFieldStrength),
@@ -111,9 +119,9 @@ public partial class CalibrationVisualizationControl : UserControl
         if (RawData.GetLength(1) < 3 || CorrectedData.GetLength(1) < 3)
             return;
 
-        UpdateProjectionPlot(XYPlot, 0, 1, "Bx (nT)", "By (nT)");
-        UpdateProjectionPlot(XZPlot, 0, 2, "Bx (nT)", "Bz (nT)");
-        UpdateProjectionPlot(YZPlot, 1, 2, "By (nT)", "Bz (nT)");
+        UpdateProjectionPlot(XYPlot, 0, 1, $"Bx ({Unit})", $"By ({Unit})");
+        UpdateProjectionPlot(XZPlot, 0, 2, $"Bx ({Unit})", $"Bz ({Unit})");
+        UpdateProjectionPlot(YZPlot, 1, 2, $"By ({Unit})", $"Bz ({Unit})");
         UpdateTotalFieldPlot();
         UpdateResidualHistogram();
     }
@@ -253,7 +261,7 @@ public partial class CalibrationVisualizationControl : UserControl
 
         plot.Axes.AutoScale();
         plot.Axes.Bottom.Label.Text = "样本序号";
-        plot.Axes.Left.Label.Text = "|B| (nT)";
+        plot.Axes.Left.Label.Text = $"|B| ({Unit})";
         plot.Legend.IsVisible = true;
 
         TotalFieldPlot.Refresh();
@@ -334,10 +342,10 @@ public partial class CalibrationVisualizationControl : UserControl
         meanLine.Color = Colors.Red;
         meanLine.LinePattern = LinePattern.Dashed;
         meanLine.LineWidth = 1;
-        meanLine.LegendText = $"均值: {mean:F2} nT";
+        meanLine.LegendText = $"均值: {mean:F2} {Unit}";
 
         plot.Axes.AutoScale();
-        plot.Axes.Bottom.Label.Text = "残差 (nT)";
+        plot.Axes.Bottom.Label.Text = $"残差 ({Unit})";
         plot.Axes.Left.Label.Text = "频次";
         plot.Legend.IsVisible = true;
 

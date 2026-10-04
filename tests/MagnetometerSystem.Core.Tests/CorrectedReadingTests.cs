@@ -5,6 +5,14 @@ namespace MagnetometerSystem.Core.Tests;
 public class CorrectedReadingTests
 {
     [Fact]
+    public void GenericChannels_DoNotInferTotalFieldFromTemperatureAndTwoAxes()
+    {
+        var source = new MagnetometerReading { SensorType = SensorType.Generic, ChannelValues = [24, 3, 4] };
+        var result = CorrectedReading.FromOriginal(source, [24, 3, 4], "profile");
+        Assert.Null(result.CorrectedTotalField);
+    }
+
+    [Fact]
     public void CorrectedReading_PreservesOriginalId()
     {
         var original = new MagnetometerReading

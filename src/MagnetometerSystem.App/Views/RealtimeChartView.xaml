@@ -25,14 +25,11 @@
             <sys:String>#FF808080</sys:String>
         </x:Array>
     </UserControl.Resources>
-    <Grid Margin="10">
-        <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="*"/>
-            <ColumnDefinition Width="Auto"/>
-        </Grid.ColumnDefinitions>
+    <Grid Margin="0">
+        <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
 
         <!-- 左侧主区域 -->
-        <Grid Grid.Column="0">
+        <Grid Grid.Row="0">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="*"/>
@@ -40,7 +37,9 @@
             </Grid.RowDefinitions>
 
             <!-- 工具栏 -->
-            <WrapPanel Grid.Row="0" Margin="0,0,0,8">
+            <WrapPanel Grid.Row="0" Margin="8,8,8,4">
+                <TextBlock Text="实时曲线" FontSize="16" FontWeight="SemiBold" Margin="0,0,18,6" VerticalAlignment="Center"/>
+                <CheckBox Content="填满绘图区" IsChecked="{Binding IsChartHeightAutomatic}" VerticalAlignment="Center" Margin="0,0,12,6"/>
                 <Button Padding="10,5" Margin="0,0,8,6" Command="{Binding TogglePauseCommand}">
                     <Button.Style>
                         <Style TargetType="Button">
@@ -165,13 +164,15 @@
             </WrapPanel>
 
             <!-- ScottPlot 图表区 -->
-            <Grid Grid.Row="1">
-                <Border BorderBrush="#CCC" BorderThickness="1" x:Name="SinglePlotBorder"
-                        Height="{Binding SinglePlotHeight}">
+            <Grid Grid.Row="1" x:Name="PlotArea" SizeChanged="OnPlotAreaSizeChanged">
+                <Border BorderBrush="#CCC" BorderThickness="1" x:Name="SinglePlotBorder" MinHeight="140">
                     <Border.Style>
                         <Style TargetType="Border">
                             <Setter Property="Visibility" Value="Visible"/>
+                            <Setter Property="Height" Value="{Binding SinglePlotHeight}"/>
                             <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsChartHeightAutomatic}" Value="True"><Setter Property="Height" Value="Auto"/></DataTrigger>
+                                <DataTrigger Binding="{Binding WorkspaceLayout.IsFocused}" Value="True"><Setter Property="Height" Value="Auto"/></DataTrigger>
                                 <DataTrigger Binding="{Binding IsMultiPlotMode}" Value="True">
                                     <Setter Property="Visibility" Value="Collapsed"/>
                                 </DataTrigger>
@@ -202,27 +203,11 @@
                 </Border>
             </Grid>
 
-            <!-- 底部统计栏 -->
-            <Border Grid.Row="2" Margin="0,5,0,0" Padding="8,4" Background="#F8F8F8" CornerRadius="3">
-                <DockPanel>
-                    <TextBlock DockPanel.Dock="Right" VerticalAlignment="Center" Margin="10,0,0,0">
-                        <Run Text="数据点: "/>
-                        <Run Text="{Binding DataPointCount, Mode=OneWay}"/>
-                    </TextBlock>
-                    <TextBlock Text="{Binding StatisticsText}" VerticalAlignment="Center"
-                               FontFamily="Consolas" FontSize="11.5" TextTrimming="CharacterEllipsis"/>
-                </DockPanel>
-            </Border>
         </Grid>
 
         <!-- 右侧配置面板 -->
-        <Border Grid.Column="1" Width="260" Margin="8,0,0,0" Background="#FAFAFA"
-                BorderBrush="#D0D0D0" BorderThickness="1" CornerRadius="3" Padding="8">
-            <ScrollViewer VerticalScrollBarVisibility="Auto">
-                <StackPanel>
-                    <!-- ======== 通道设置 ======== -->
-                    <Expander Header="通道设置" IsExpanded="True" Margin="0,0,0,6">
-                        <StackPanel Margin="0,4,0,0">
+                    <Expander Grid.Row="1" Header="实时通道与显示" IsExpanded="{Binding WorkspaceLayout.ChannelsExpanded}" Margin="0,0,0,6">
+                        <ScrollViewer MaxHeight="125" VerticalScrollBarVisibility="Auto"><StackPanel Margin="8">
                             <ItemsControl ItemsSource="{Binding ChannelConfigs}">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
@@ -241,7 +226,8 @@
                                                           IsChecked="{Binding Visible}" VerticalAlignment="Center" Margin="0,0,4,0"/>
                                                 <StackPanel Grid.Column="1" Grid.Row="0" Orientation="Horizontal">
                                                     <TextBlock Text="{Binding Name}" VerticalAlignment="Center"
-                                                               FontWeight="SemiBold" Width="40"/>
+                                                               FontWeight="SemiBold" MinWidth="70"/>
+                                                    <TextBlock Text="{Binding LatestValue}" Margin="12,0" VerticalAlignment="Center" MinWidth="100"/>
                                                     <ComboBox Width="50" Height="20" Margin="4,0,0,0"
                                                               ItemsSource="{StaticResource PresetColors}"
                                                               SelectedItem="{Binding ColorHex}"
@@ -275,10 +261,27 @@
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
                         </StackPanel>
+                        </ScrollViewer>
                     </Expander>
+        <Expander Grid.Row="2" Header="统计与分析 · 计算通道 / 滤波 / 区间 / 改正" IsExpanded="{Binding WorkspaceLayout.AnalysisExpanded}" Margin="0,6,0,0">
+            <ScrollViewer MaxHeight="180" VerticalScrollBarVisibility="Auto">
+                <StackPanel Margin="8">            <!-- 底部统计栏 -->
+            <Border Margin="0,5,0,0" Padding="8,4" Background="#F8F8F8" CornerRadius="3">
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Right" VerticalAlignment="Center" Margin="10,0,0,0">
+                        <Run Text="数据点: "/>
+                        <Run Text="{Binding DataPointCount, Mode=OneWay}"/>
+                    </TextBlock>
+                    <TextBlock Text="{Binding StatisticsText}" VerticalAlignment="Center"
+                               FontFamily="Consolas" FontSize="11.5" TextTrimming="CharacterEllipsis"/>
+                </DockPanel>
+            </Border>
+
+                    <!-- ======== 通道设置 ======== -->
+
 
                     <!-- ======== 计算通道 ======== -->
-                    <Expander Header="计算通道" IsExpanded="True" Margin="0,0,0,6">
+                    <Expander Header="计算通道" IsExpanded="False" Margin="0,0,0,6">
                         <StackPanel Margin="0,4,0,0">
                             <!-- 已有计算通道列表 -->
                             <ItemsControl ItemsSource="{Binding ComputedChannels}">
@@ -311,18 +314,14 @@
                                                 </StackPanel>
                                                 <TextBox FontSize="11" Margin="20,2,0,0"
                                                          Text="{Binding Formula, UpdateSourceTrigger=LostFocus}"
-                                                         ToolTip="公式: CH0~CH7, +,-,*,/, sqrt(), abs(), pow()"/>
-                                                <StackPanel Orientation="Horizontal" Margin="20,2,0,0">
-                                                    <TextBlock Text="单位:" VerticalAlignment="Center" FontSize="11" Margin="0,0,3,0"/>
-                                                    <TextBox Width="80" FontSize="11" Text="{Binding Unit, UpdateSourceTrigger=LostFocus}"
-                                                             ToolTip="按公式含义填写单位；留空表示无量纲。修改单位不会换算数值。"/>
-                                                </StackPanel>
+                                                         ToolTip="公式: CH0、CH1…, +,-,*,/, sqrt(), abs(), pow()"/>
                                                 <!-- 偏移 + 自动偏移 -->
                                                 <StackPanel Orientation="Horizontal" Margin="20,2,0,0">
                                                     <TextBlock Text="偏移:" VerticalAlignment="Center" FontSize="11" Margin="0,0,3,0"/>
                                                     <TextBox Width="65" FontSize="11" VerticalAlignment="Center"
                                                              Text="{Binding DisplayOffset, UpdateSourceTrigger=LostFocus}"/>
-                                                    <TextBlock Text="{Binding Unit}" VerticalAlignment="Center" FontSize="11" Margin="3,0,3,0" Foreground="Gray"/>
+                                                    <TextBlock Text="单位:" VerticalAlignment="Center" FontSize="11" Margin="8,0,3,0"/>
+                                                    <TextBox Width="65" FontSize="11" Text="{Binding Unit, UpdateSourceTrigger=LostFocus}" ToolTip="按公式含义填写单位；修改标签不会换算数值，用于分配纵轴"/>
                                                     <Button Content="自动" FontSize="10" Padding="4,1" VerticalAlignment="Center"
                                                             ToolTip="根据计算通道平均值自动设置偏移，使数据趋近于 0"
                                                             Command="{Binding DataContext.AutoOffsetComputedChannelCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
@@ -441,7 +440,7 @@
                                 </StackPanel>
                             </Border>
 
-                            <TextBlock Text="变量: CH0~CH7" FontSize="10" Foreground="Gray" Margin="0,6,0,0"/>
+                            <TextBlock Text="变量: CH0、CH1…（按当前协议通道）" FontSize="10" Foreground="Gray" Margin="0,6,0,0"/>
                             <TextBlock Text="运算: + - * / sqrt abs pow" FontSize="10" Foreground="Gray"/>
                         </StackPanel>
                     </Expander>
@@ -532,12 +531,17 @@
                                           DisplayMemberPath="Name"/>
                             </StackPanel>
 
+                            <TextBlock Text="第一组三轴索引（例：0,1,2）" Margin="0,6,0,2"/>
+                            <TextBox Width="180" HorizontalAlignment="Left" Text="{Binding DataContext.ConnectionVM.FirstOrthogonalityChannelsText, RelativeSource={RelativeSource AncestorType=Window}, UpdateSourceTrigger=LostFocus}"/>
+                            <TextBlock Text="第二组配置及索引（可选）" Margin="0,6,0,2"/>
+                            <ComboBox Width="180" HorizontalAlignment="Left" ItemsSource="{Binding DataContext.ConnectionVM.AvailableOrthogonalityProfiles, RelativeSource={RelativeSource AncestorType=Window}}" SelectedItem="{Binding DataContext.ConnectionVM.SecondOrthogonalityProfile, RelativeSource={RelativeSource AncestorType=Window}}" DisplayMemberPath="Name"/>
+                            <TextBox Width="180" HorizontalAlignment="Left" Margin="0,4,0,0" Text="{Binding DataContext.ConnectionVM.SecondOrthogonalityChannelsText, RelativeSource={RelativeSource AncestorType=Window}, UpdateSourceTrigger=LostFocus}"/>
                             <Button Content="刷新配置" FontSize="11" Padding="6,2" Margin="0,4,0,0"
                                     HorizontalAlignment="Left"
                                     Command="{Binding DataContext.ConnectionVM.LoadOrthogonalityProfilesCommand,
                                     RelativeSource={RelativeSource AncestorType=Window}}"/>
 
-                            <TextBlock Text="校正在数据源端进行" FontSize="10" Foreground="Gray" Margin="0,4,0,0"/>
+                            <TextBlock Text="仅生成改正预览；原始保存及统计不受影响。索引从 0 开始。" FontSize="10" Foreground="Gray" Margin="0,4,0,0"/>
                         </StackPanel>
                     </Expander>
 
@@ -545,6 +549,6 @@
                     <TextBlock Text="Ctrl+滚轮: 缩放Y轴" FontSize="10" Foreground="Gray" Margin="0,2,0,0"/>
                 </StackPanel>
             </ScrollViewer>
-        </Border>
+        </Expander>
     </Grid>
 </UserControl>

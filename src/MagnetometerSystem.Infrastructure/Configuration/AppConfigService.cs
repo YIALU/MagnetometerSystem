@@ -69,6 +69,7 @@ public class AppConfigService : IAppConfigService
                 "storage.autoSave",
                 "chart.refreshRate",
                 "ui.theme",
+                "ui.workbenchPanels",
             }});
 
         var map = rows.ToDictionary(r => r.Key, r => r.Value);
@@ -99,6 +100,7 @@ public class AppConfigService : IAppConfigService
         if (refreshRate is > 0) settings.ChartRefreshRate = refreshRate.Value;
 
         settings.ThemeName = Get<string>("ui.theme") ?? "Default";
+        settings.WorkbenchPanels = Get<Dictionary<string, bool>>("ui.workbenchPanels") ?? new();
 
         return settings;
     }
@@ -113,5 +115,6 @@ public class AppConfigService : IAppConfigService
         await SetAsync("storage.autoSave", settings.AutoSaveEnabled);
         await SetAsync("chart.refreshRate", settings.ChartRefreshRate);
         await SetAsync("ui.theme", settings.ThemeName);
+        await SetAsync("ui.workbenchPanels", settings.WorkbenchPanels);
     }
 }

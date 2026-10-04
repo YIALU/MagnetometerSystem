@@ -7,22 +7,25 @@ namespace MagnetometerSystem.Core.Storage;
 /// </summary>
 public interface IDataStorageService
 {
+    StorageWriteStatus WriteStatus { get; }
+    event Action<StorageWriteStatus>? WriteStatusChanged;
+
     /// <summary>开始新的采集会话</summary>
     Task<string> StartSessionAsync(string name, SensorConfig sensorConfig, ConnectionConfig connectionConfig);
 
     /// <summary>结束采集会话</summary>
     Task EndSessionAsync(string sessionId);
 
-    /// <summary>批量保存读数</summary>
+    /// <summary>批量入队；返回任务在事务成功提交后完成，失败时抛出并保留待写数据。</summary>
     Task SaveReadingsAsync(IEnumerable<MagnetometerReading> readings);
 
     /// <summary>
     /// 等待后台写入队列把当前已入队的读数全部落库（用于结束会话前确保计数准确）。
-    /// 写入失败或超时会抛出异常，不能继续宣称已保存；等待本身不会重试失败批次。
+    /// 超时或写入失败时抛出，不能将未保存数据视为已完成。
     /// </summary>
     Task WaitForPendingWritesAsync(int timeoutMs = 5000);
 
-    /// <summary>用户修复故障后，显式重试保留的批次并等待落库。</summary>
+    /// <summary>修复存储问题后重试内存中保留的失败批次。</summary>
     Task RetryPendingWritesAsync();
 
     /// <summary>获取所有会话列表</summary>
@@ -47,6 +50,9 @@ public interface IDataStorageService
     Task<IReadOnlyList<CorrectedReading>> GetCorrectedReadingsAsync(
         string sessionId, string? correctionProfileId = null);
 
+    /// <summary>列出会话已保存的改正版本，不加载每条改正数值。</summary>
+    Task<IReadOnlyList<string>> GetCorrectionVersionIdsAsync(string sessionId);
+
     /// <summary>删除指定会话的校正读数，可按校正配置 ID 筛选</summary>
     Task DeleteCorrectedReadingsAsync(string sessionId, string? correctionProfileId = null);
 
@@ -69,8 +75,11 @@ public class SessionInfo
     public int ChannelCount { get; set; }
     public string[] ChannelNames { get; set; } = [];
     public string[] ChannelUnits { get; set; } = [];
+    public string? LegacyDataTable { get; set; }
     public string? DeviceInfo { get; set; }
     public ConnectionType ConnectionType { get; set; }
     public string? Notes { get; set; }
     public long TotalReadings { get; set; }
 }
+
+public sealed record StorageWriteStatus(long SavedReadings, long PendingReadings, string? LastError);

@@ -1,3 +1,5 @@
+using MagnetometerSystem.Core.Models;
+
 namespace MagnetometerSystem.Core.Calibration;
 
 public class CalibrationDataValidation
@@ -41,7 +43,7 @@ public static class CalibrationDataValidator
     /// 所有检查项均为警告，不阻止用户继续操作。
     /// 用户可能只需要部分旋转时段的数据，或从外部导入已筛选的数据。
     /// </summary>
-    public static CalibrationDataValidation Validate(List<double[]> data)
+    public static CalibrationDataValidation Validate(List<double[]> data, string unit = "nT")
     {
         var result = new CalibrationDataValidation();
         result.SampleCount = data.Count;
@@ -75,9 +77,12 @@ public static class CalibrationDataValidator
         result.TotalFieldCoeffOfVariation = cv;
 
         // 3. 总场范围检查（仅警告）
-        if (mean < MinFieldStrength || mean > MaxFieldStrength)
+        var canonicalUnit = OrthogonalityParams.CanonicalUnit(unit);
+        var scaleToNt = canonicalUnit switch { "nT" => 1d, "uT" => 1e3, "mT" => 1e6, "T" => 1e9, _ => double.NaN };
+        if (!double.IsFinite(scaleToNt)) result.Warnings.Add("数据单位未知，无法核对典型地磁场范围");
+        else if (mean * scaleToNt < MinFieldStrength || mean * scaleToNt > MaxFieldStrength)
         {
-            result.Warnings.Add($"平均总场 {mean:F0} nT 超出典型地磁场范围 ({MinFieldStrength}~{MaxFieldStrength} nT)，请确认传感器单位和环境");
+            result.Warnings.Add($"平均总场 {mean:G6} {canonicalUnit} 超出典型地磁场范围 ({MinFieldStrength}~{MaxFieldStrength} nT)，请确认传感器单位和环境");
         }
 
         // 4. 总场一致性检查（变异系数）

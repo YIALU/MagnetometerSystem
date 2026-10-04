@@ -80,18 +80,19 @@ public class SessionUnitsAndWriteRecoveryTests
         await connection.ExecuteAsync("CREATE TRIGGER fail_save BEFORE INSERT ON readings BEGIN SELECT RAISE(FAIL, 'test write failure'); END;");
         try
         {
-            await storage.SaveReadingsAsync(Enumerable.Range(0, 3).Select(i => new MagnetometerReading
+            var save = storage.SaveReadingsAsync(Enumerable.Range(0, 3).Select(i => new MagnetometerReading
                 { SessionId = id, Timestamp = DateTime.Now.AddSeconds(i), ChannelValues = [i] }));
-            var error = await Assert.ThrowsAsync<InvalidOperationException>(() => storage.WaitForPendingWritesAsync());
-            Assert.Contains("保存失败", error.Message);
-            Assert.Equal(3, storage.PendingWriteCount);
+            await Assert.ThrowsAsync<SqliteException>(() => save);
+            await Assert.ThrowsAsync<IOException>(() => storage.WaitForPendingWritesAsync());
+            Assert.NotNull(storage.WriteStatus.LastError);
+            Assert.Equal(3, storage.WriteStatus.PendingReadings);
             Assert.Null(Assert.Single(await storage.GetSessionsAsync()).EndedAt);
             Assert.Empty(await storage.GetReadingsAsync(id));
         }
         finally { await connection.ExecuteAsync("DROP TRIGGER fail_save;"); }
         await storage.RetryPendingWritesAsync();
         await storage.EndSessionAsync(id);
-        Assert.Equal(0, storage.PendingWriteCount);
+        Assert.Equal(0, storage.WriteStatus.PendingReadings);
         Assert.Equal(new[] { 0d, 1d, 2d }, (await storage.GetReadingsAsync(id)).Select(r => r.ChannelValues[0]));
         Assert.Equal(3, Assert.Single(await storage.GetSessionsAsync()).TotalReadings);
     }
@@ -102,18 +103,21 @@ public class SessionUnitsAndWriteRecoveryTests
         var db = Database();
         await db.InitializeAsync();
         using var storage = new SqliteStorageService(db, new DataBus());
-        string id = await storage.StartSessionAsync("timeout", new SensorConfig(), new());
+        string id = await storage.StartSessionAsync("timeout", new SensorConfig
+            { ChannelCountOverride = 1, ChannelNamesOverride = ["B"], ChannelUnitsOverride = ["nT"] }, new());
         using var blocker = new SqliteConnection(db.ConnectionString);
         await blocker.OpenAsync();
+        Task save;
         using (var transaction = blocker.BeginTransaction())
         {
-            await storage.SaveReadingsAsync([new() { SessionId = id, Timestamp = DateTime.Now, ChannelValues = [42] }]);
+            save = storage.SaveReadingsAsync([new() { SessionId = id, Timestamp = DateTime.Now, ChannelValues = [42] }]);
             await Assert.ThrowsAsync<TimeoutException>(() => storage.WaitForPendingWritesAsync(30));
-            Assert.Equal(1, storage.PendingWriteCount);
+            Assert.Equal(1, storage.WriteStatus.PendingReadings);
             transaction.Rollback();
         }
+        await save;
         await storage.WaitForPendingWritesAsync();
         Assert.Equal(42, Assert.Single(await storage.GetReadingsAsync(id)).ChannelValues[0]);
-        Assert.Equal(0, storage.PendingWriteCount);
+        Assert.Equal(0, storage.WriteStatus.PendingReadings);
     }
 }

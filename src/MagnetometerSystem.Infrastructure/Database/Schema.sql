@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     channel_count   INTEGER NOT NULL,
     channel_names   TEXT,
     channel_units   TEXT,
+    legacy_data_table TEXT,
     device_info     TEXT,
     connection_type TEXT,
     notes           TEXT,
@@ -24,7 +25,7 @@ CREATE TABLE IF NOT EXISTS readings (
     data        TEXT NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_readings_session_time
+CREATE INDEX IF NOT EXISTS idx_readings_session_time_v2
     ON readings(session_id, timestamp);
 
 CREATE TABLE IF NOT EXISTS corrected_readings (
@@ -37,10 +38,11 @@ CREATE TABLE IF NOT EXISTS corrected_readings (
     corrected_at            TEXT NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_corrected_session ON corrected_readings(session_id);
-CREATE INDEX IF NOT EXISTS idx_corrected_profile ON corrected_readings(session_id, correction_profile_id);
+CREATE INDEX IF NOT EXISTS idx_corrected_session_v2 ON corrected_readings(session_id);
+CREATE INDEX IF NOT EXISTS idx_corrected_profile_v2 ON corrected_readings(session_id, correction_profile_id);
 
 CREATE TABLE IF NOT EXISTS orthogonality_profiles (
+    unit            TEXT NOT NULL DEFAULT '',
     id              TEXT PRIMARY KEY,
     name            TEXT NOT NULL,
     sensor_serial   TEXT,

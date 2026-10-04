@@ -3,177 +3,158 @@ using MagnetometerSystem.Core.Models;
 
 namespace MagnetometerSystem.Core.Communication;
 
-/// <summary>
-/// 串口设备连接实现（使用 DataReceived 事件模式）
-/// </summary>
-public class SerialDeviceConnection : IDeviceConnection
+/// <summary>串口接收、写出及关闭共享 I/O 锁，避免关闭后访问端口或帧交错。</summary>
+public sealed class SerialDeviceConnection : IDeviceConnection
 {
+    private readonly SemaphoreSlim _lifecycle = new(1, 1);
+    private readonly object _ioGate = new();
     private SerialPort? _serialPort;
     private bool _disposed;
-
     public event EventHandler<byte[]>? DataReceived;
     public event EventHandler<string>? ErrorOccurred;
     public event EventHandler<bool>? ConnectionStateChanged;
-
-    public bool IsConnected => _serialPort?.IsOpen == true;
+    public bool IsConnected { get { lock (_ioGate) return _serialPort?.IsOpen == true; } }
     public ConnectionConfig Config { get; }
+    public SerialDeviceConnection(ConnectionConfig config) => Config = config ?? throw new ArgumentNullException(nameof(config));
 
-    public SerialDeviceConnection(ConnectionConfig config)
+    public async Task ConnectAsync(CancellationToken ct = default)
     {
-        Config = config ?? throw new ArgumentNullException(nameof(config));
-    }
-
-    public Task ConnectAsync(CancellationToken ct = default)
-    {
-        if (IsConnected)
-            return Task.CompletedTask;
-
+        await _lifecycle.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            _serialPort = new SerialPort
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (IsConnected) return;
+            await Task.Run(() =>
             {
-                PortName = Config.PortName,
-                BaudRate = Config.BaudRate,
-                DataBits = Config.DataBits,
-                StopBits = Config.StopBits switch
+                ct.ThrowIfCancellationRequested();
+                var port = new SerialPort
                 {
-                    1.0 => System.IO.Ports.StopBits.One,
-                    1.5 => System.IO.Ports.StopBits.OnePointFive,
-                    2.0 => System.IO.Ports.StopBits.Two,
-                    _ => System.IO.Ports.StopBits.One
-                },
-                Parity = Config.Parity?.ToLower() switch
-                {
-                    "odd" => System.IO.Ports.Parity.Odd,
-                    "even" => System.IO.Ports.Parity.Even,
-                    "mark" => System.IO.Ports.Parity.Mark,
-                    "space" => System.IO.Ports.Parity.Space,
-                    _ => System.IO.Ports.Parity.None
-                },
-                ReadBufferSize = 65536,
-                ReceivedBytesThreshold = 1,
-            };
-
-            _serialPort.DataReceived += OnSerialDataReceived;
-            _serialPort.ErrorReceived += OnSerialErrorReceived;
-
-            _serialPort.Open();
-            _serialPort.DiscardInBuffer();
-
-            ConnectionStateChanged?.Invoke(this, true);
-        }
-        catch (Exception ex)
-        {
-            ErrorOccurred?.Invoke(this, $"串口连接失败: {ex.Message}");
-            throw;
-        }
-
-        return Task.CompletedTask;
-    }
-
-    private void OnSerialDataReceived(object sender, SerialDataReceivedEventArgs e)
-    {
-        try
-        {
-            if (_serialPort?.IsOpen != true)
-                return;
-
-            int bytesToRead = _serialPort.BytesToRead;
-            if (bytesToRead <= 0)
-                return;
-
-            var buffer = new byte[bytesToRead];
-            int bytesRead = _serialPort.Read(buffer, 0, bytesToRead);
-
-            if (bytesRead > 0)
-            {
-                if (bytesRead < buffer.Length)
-                {
-                    var data = new byte[bytesRead];
-                    Array.Copy(buffer, data, bytesRead);
-                    DataReceived?.Invoke(this, data);
-                }
-                else
-                {
-                    DataReceived?.Invoke(this, buffer);
-                }
-            }
-        }
-        catch (IOException ex)
-        {
-            ErrorOccurred?.Invoke(this, $"串口读取错误（设备可能已断开）: {ex.Message}");
-            ConnectionStateChanged?.Invoke(this, false);
-        }
-        catch (InvalidOperationException ex)
-        {
-            ErrorOccurred?.Invoke(this, $"串口已关闭: {ex.Message}");
-            ConnectionStateChanged?.Invoke(this, false);
-        }
-        catch (UnauthorizedAccessException ex)
-        {
-            ErrorOccurred?.Invoke(this, $"串口访问被拒绝: {ex.Message}");
-            ConnectionStateChanged?.Invoke(this, false);
-        }
-        catch (Exception ex)
-        {
-            ErrorOccurred?.Invoke(this, $"串口读取异常: {ex.Message}");
-        }
-    }
-
-    private void OnSerialErrorReceived(object sender, SerialErrorReceivedEventArgs e)
-    {
-        ErrorOccurred?.Invoke(this, $"串口硬件错误: {e.EventType}");
-    }
-
-    public Task DisconnectAsync()
-    {
-        if (_serialPort != null)
-        {
-            _serialPort.DataReceived -= OnSerialDataReceived;
-            _serialPort.ErrorReceived -= OnSerialErrorReceived;
-
-            if (_serialPort.IsOpen)
-            {
+                    PortName = Config.PortName, BaudRate = Config.BaudRate, DataBits = Config.DataBits,
+                    StopBits = Config.StopBits switch { 1 => System.IO.Ports.StopBits.One, 1.5 => System.IO.Ports.StopBits.OnePointFive, 2 => System.IO.Ports.StopBits.Two, _ => throw new ArgumentException("停止位无效") },
+                    Parity = Enum.TryParse<Parity>(Config.Parity, true, out var parity) ? parity : throw new ArgumentException("串口校验位无效"),
+                    ReadBufferSize = 65536, ReceivedBytesThreshold = 1,
+                    ReadTimeout = 1000, WriteTimeout = Config.SendTimeoutMs,
+                };
                 try
                 {
-                    _serialPort.Close();
+                    lock (_ioGate)
+                    {
+                        _serialPort = port;
+                        port.DataReceived += OnSerialDataReceived;
+                        port.ErrorReceived += OnSerialErrorReceived;
+                        port.Open();
+                        // 不清空输入缓冲：Open 后到达的首帧同样必须解析和保存。
+                    }
+                    Raise(ConnectionStateChanged, true);
                 }
-                catch (Exception ex)
+                catch
                 {
-                    ErrorOccurred?.Invoke(this, $"串口关闭异常: {ex.Message}");
+                    lock (_ioGate) _serialPort = null;
+                    port.DataReceived -= OnSerialDataReceived;
+                    port.ErrorReceived -= OnSerialErrorReceived;
+                    port.Dispose();
+                    throw;
                 }
-            }
-
-            _serialPort.Dispose();
-            _serialPort = null;
+            }, ct).ConfigureAwait(false);
         }
-
-        ConnectionStateChanged?.Invoke(this, false);
-        return Task.CompletedTask;
+        finally { _lifecycle.Release(); }
     }
+
+    private void OnSerialDataReceived(object sender, SerialDataReceivedEventArgs args)
+    {
+        ReadAndPublishData(() =>
+        {
+            var port = _serialPort;
+            if (!ReferenceEquals(sender, port) || port?.IsOpen != true) return null;
+            int count = port.BytesToRead;
+            if (count == 0) return null;
+            var data = new byte[count];
+            int read = port.Read(data, 0, data.Length);
+            return read > 0 ? (read == data.Length ? data : data[..read]) : null;
+        });
+    }
+
+    private void ReadAndPublishData(Func<byte[]?> readAvailable)
+    {
+        try
+        {
+            byte[]? data;
+            // Only port access and copying belong under the I/O gate. A subscriber may
+            // synchronously dispatch to the UI, where DisconnectAsync also needs this gate.
+            lock (_ioGate) data = readAvailable();
+            if (data is { Length: > 0 }) Raise(DataReceived, data);
+        }
+        catch (Exception ex)
+        {
+            // The I/O gate has been released before any external error/state callback.
+            Raise(ErrorOccurred, $"串口读取失败: {ex.Message}");
+            Raise(ConnectionStateChanged, false);
+        }
+    }
+
+    private void OnSerialErrorReceived(object sender, SerialErrorReceivedEventArgs args) => Raise(ErrorOccurred, $"串口硬件错误: {args.EventType}");
 
     public Task SendAsync(byte[] data, CancellationToken ct = default)
     {
-        if (_serialPort?.IsOpen != true)
-            throw new InvalidOperationException("串口未连接");
+        ArgumentNullException.ThrowIfNull(data);
+        SerialPort? requestedPort;
+        lock (_ioGate) requestedPort = _serialPort;
+        return Task.Run(() =>
+        {
+            lock (_ioGate)
+            {
+                ct.ThrowIfCancellationRequested();
+                if (requestedPort is null || !ReferenceEquals(requestedPort, _serialPort) || !requestedPort.IsOpen)
+                    throw new InvalidOperationException("串口未连接或连接已改变");
+                requestedPort.Write(data, 0, data.Length);
+            }
+        }, ct);
+    }
 
-        _serialPort.Write(data, 0, data.Length);
-        return Task.CompletedTask;
+    public async Task DisconnectAsync()
+    {
+        await _lifecycle.WaitAsync().ConfigureAwait(false);
+        try { await CloseAsync().ConfigureAwait(false); }
+        finally { _lifecycle.Release(); }
+    }
+
+    private async Task CloseAsync()
+    {
+        SerialPort? port;
+        lock (_ioGate)
+        {
+            port = _serialPort;
+            _serialPort = null;
+            if (port != null)
+            {
+                port.DataReceived -= OnSerialDataReceived;
+                port.ErrorReceived -= OnSerialErrorReceived;
+            }
+        }
+        // SerialPort.Close 等待内部事件完成，不能持有事件也需要的 I/O 锁。
+        if (port != null) await Task.Run(port.Dispose).ConfigureAwait(false);
+        Raise(ConnectionStateChanged, false);
+    }
+
+    private void Raise<T>(EventHandler<T>? handlers, T value)
+    {
+        if (handlers is null) return;
+        foreach (EventHandler<T> handler in handlers.GetInvocationList())
+            try { handler(this, value); }
+            catch (Exception ex) { System.Diagnostics.Trace.TraceError($"串口事件处理失败: {ex}"); }
     }
 
     public async ValueTask DisposeAsync()
     {
-        if (_disposed) return;
-        _disposed = true;
-        await DisconnectAsync();
+        await _lifecycle.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (_disposed) return;
+            _disposed = true;
+            await CloseAsync().ConfigureAwait(false);
+        }
+        finally { _lifecycle.Release(); }
         GC.SuppressFinalize(this);
     }
-
-    /// <summary>
-    /// 获取系统可用的串口列表
-    /// </summary>
-    public static string[] GetAvailablePorts()
-    {
-        return SerialPort.GetPortNames();
-    }
+    public static string[] GetAvailablePorts() => SerialPort.GetPortNames();
 }

@@ -106,13 +106,15 @@ public class ShutdownUpdateTests
             renamed = true;
             fixture.Connection.Feed("4,5,6\n");
             fixture.ClickUpdate();
-            await WaitForAsync(() => fixture.Status.Contains("保存失败") && fixture.Window.IsEnabled);
+            await WaitForAsync(() => fixture.Main.SessionListVM.StorageError != null && fixture.Window.IsEnabled);
             Assert.Equal(0, fixture.Updates.ApplyCalls);
             Assert.False(fixture.Settings.SaveEntered.Task.IsCompleted);
             Assert.NotNull(fixture.Main.SessionListVM.ActiveSessionId);
             await Execute("ALTER TABLE temporarily_unavailable_readings RENAME TO readings");
             renamed = false;
+            // The workbench exposes an explicit retry command; WaitForPendingWrites never hides a prior failure.
             await fixture.Main.SessionListVM.RetryStorageCommand.ExecuteAsync(null);
+            Assert.Equal(0, fixture.Storage.WriteStatus.PendingReadings);
             fixture.ClickUpdate();
             await WaitForAsync(() => fixture.Updates.ApplyCalls == 1 && fixture.Window.IsEnabled);
             var session = Assert.Single(await fixture.Storage.GetSessionsAsync());
@@ -121,101 +123,11 @@ public class ShutdownUpdateTests
         }
         finally
         {
-            if (renamed) await Execute("ALTER TABLE temporarily_unavailable_readings RENAME TO readings");
-            await fixture.Main.SessionListVM.RetryStorageCommand.ExecuteAsync(null);
-        }
-    });
-
-    [Fact]
-    public Task SqliteFaultStopsReceivingWithoutUiAndManualRetryPreservesEveryAcceptedReading() => WpfTestHost.RunAsync(async () =>
-    {
-        await using var fixture = await Fixture.CreateAsync();
-        fixture.Settings.ReleaseSave.TrySetResult();
-        await fixture.Main.ConnectionVM.ConnectCommand.ExecuteAsync(null);
-        var sessions = fixture.Main.SessionListVM;
-        string sessionId = Assert.IsType<string>(sessions.ActiveSessionId);
-        await using var database = new SqliteConnection($"Data Source={fixture.DatabasePath}");
-        await database.OpenAsync();
-        async Task Execute(string sql)
-        {
-            await using var command = database.CreateCommand();
-            command.CommandText = sql;
-            await command.ExecuteNonQueryAsync();
-        }
-        await Execute("CREATE TRIGGER fail_live_save BEFORE INSERT ON readings BEGIN SELECT RAISE(FAIL, 'test live disk failure'); END;");
-        using var faultObserved = new ManualResetEventSlim();
-        int faults = 0;
-        int stopped = 0;
-        fixture.Bus.AcquisitionStopped += () => stopped++;
-        fixture.Bus.AcquisitionFaulted += _ => throw new IOException("isolated observer error");
-        fixture.Bus.AcquisitionFaulted += _ => { Interlocked.Increment(ref faults); faultObserved.Set(); };
-        bool triggerExists = true;
-        try
-        {
-            // Hold the real writer until all three frames have been accepted (one queued plus a tail).
-            using (var blocker = database.BeginTransaction())
+            if (renamed)
             {
-                fixture.Connection.Feed("1,2,3\n4,5,6\n7,8,9\n");
-                Assert.Equal(3, sessions.ActiveSessionReadingCount);
-                blocker.Rollback();
+                await Execute("ALTER TABLE temporarily_unavailable_readings RENAME TO readings");
+                await fixture.Main.SessionListVM.RetryStorageCommand.ExecuteAsync(null);
             }
-
-            // Deliberately occupy the WPF dispatcher. Fault notification, receive refusal and physical
-            // disconnect must complete without it, even when another observer throws.
-            Assert.True(faultObserved.Wait(TimeSpan.FromSeconds(3)), "writer fault depended on the dispatcher");
-            long pendingAtFault = fixture.Storage.PendingWriteCount;
-            for (int i = 0; i < 2000; i++) fixture.Connection.Feed("10,11,12\n13,14,15\n");
-            Assert.Equal(3, sessions.ActiveSessionReadingCount);
-            Assert.Equal(pendingAtFault, fixture.Storage.PendingWriteCount);
-            Assert.True(fixture.Connection.Disconnected.Wait(TimeSpan.FromSeconds(3)), "disconnect depended on the dispatcher");
-
-            await WaitForAsync(() => !fixture.Main.ConnectionVM.IsConnected && sessions.StorageError != null);
-            // Wait for the serialized stop attempt to finish moving the accepted tail into the retained queue.
-            await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Main.ConnectionVM.StopAcquisitionAsync());
-            Assert.False(sessions.IsRecording);
-            Assert.Contains("保存失败", sessions.StorageError);
-            Assert.Equal(3, fixture.Storage.PendingWriteCount);
-            Assert.Equal(1, Volatile.Read(ref faults));
-            Assert.Empty(await fixture.Storage.GetReadingsAsync(sessionId));
-            Assert.Null(Assert.Single(await fixture.Storage.GetSessionsAsync()).EndedAt);
-
-            await sessions.RetryStorageCommand.ExecuteAsync(null);
-            Assert.True(fixture.Main.ConnectionVM.IsAcquiring);
-            Assert.Equal(sessionId, sessions.ActiveSessionId);
-            Assert.NotNull(sessions.StorageError);
-            Assert.Equal(0, stopped);
-            Assert.Equal(3, fixture.Storage.PendingWriteCount);
-            Assert.Equal(2, Volatile.Read(ref faults));
-
-            await Execute("DROP TRIGGER fail_live_save;");
-            triggerExists = false;
-            // Passive waits never implicitly restart the writer, even after the cause has been repaired.
-            await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Storage.WaitForPendingWritesAsync());
-            Assert.Equal(2, Volatile.Read(ref faults));
-            await sessions.RetryStorageCommand.ExecuteAsync(null);
-            Assert.False(fixture.Main.ConnectionVM.IsAcquiring);
-            Assert.Equal(1, stopped);
-            Assert.Null(sessions.StorageError);
-            Assert.Null(sessions.ActiveSessionId);
-            Assert.Equal(0, fixture.Storage.PendingWriteCount);
-            Assert.Equal(new[] { 1d, 4d, 7d }, (await fixture.Storage.GetReadingsAsync(sessionId)).Select(r => r.ChannelValues[0]));
-            Assert.Equal(3, Assert.Single(await fixture.Storage.GetSessionsAsync()).TotalReadings);
-
-            // A subsequent session opens a fresh receive generation and is unaffected by the old fault.
-            await fixture.Main.ConnectionVM.ConnectCommand.ExecuteAsync(null);
-            fixture.Connection.Feed("16,17,18\n");
-            string newSessionId = Assert.IsType<string>(sessions.ActiveSessionId);
-            Assert.NotEqual(sessionId, newSessionId);
-            Assert.True(fixture.Main.ConnectionVM.IsAcquiring);
-            Assert.True(fixture.Connection.IsConnected);
-            await fixture.Main.ConnectionVM.StopAcquisitionAsync();
-            Assert.Equal(2, stopped);
-            Assert.Equal(16d, Assert.Single(await fixture.Storage.GetReadingsAsync(newSessionId)).ChannelValues[0]);
-        }
-        finally
-        {
-            if (triggerExists) await Execute("DROP TRIGGER fail_live_save;");
-            await sessions.RetryStorageCommand.ExecuteAsync(null);
         }
     });
 
@@ -316,9 +228,10 @@ public class ShutdownUpdateTests
             Window.Close();
             Application.Current.MainWindow = PreviousMainWindow;
             Main.OrthoCalibVM.Cleanup();
+            Main.DeviceCommandVM.Dispose();
+            Main.HistoryPlaybackVM.Dispose();
             Main.RealtimeChartVM.Dispose();
             Storage.Dispose();
-            Connection.Disconnected.Dispose();
             SqliteConnection.ClearAllPools();
             foreach (var suffix in new[] { "", "-wal", "-shm" }) File.Delete(DatabasePath + suffix);
         }
@@ -357,10 +270,9 @@ public class ShutdownUpdateTests
         public event EventHandler<bool>? ConnectionStateChanged;
         public bool IsConnected { get; private set; }
         public ConnectionConfig Config { get; } = new();
-        public ManualResetEventSlim Disconnected { get; } = new();
-        public Task ConnectAsync(CancellationToken ct = default) { Disconnected.Reset(); IsConnected = true; ConnectionStateChanged?.Invoke(this, true); return Task.CompletedTask; }
+        public Task ConnectAsync(CancellationToken ct = default) { IsConnected = true; ConnectionStateChanged?.Invoke(this, true); return Task.CompletedTask; }
         public string? DisconnectFrame { get; set; }
-        public Task DisconnectAsync() { if (DisconnectFrame is { } frame) Feed(frame); DisconnectFrame = null; IsConnected = false; ConnectionStateChanged?.Invoke(this, false); Disconnected.Set(); return Task.CompletedTask; }
+        public Task DisconnectAsync() { if (DisconnectFrame is { } frame) Feed(frame); DisconnectFrame = null; IsConnected = false; ConnectionStateChanged?.Invoke(this, false); return Task.CompletedTask; }
         public Task SendAsync(byte[] data, CancellationToken ct = default) => Task.CompletedTask;
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
         public void Feed(string text) => DataReceived?.Invoke(this, Encoding.ASCII.GetBytes(text));

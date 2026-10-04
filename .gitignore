@@ -77,3 +77,6 @@ installer/*.bin
 
 ## Python 辅助工具（不入版本库）
 python_tools/
+
+## Local implementation scratch files and UI verification images
+.codex_tmp/

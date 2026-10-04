@@ -11,24 +11,35 @@ namespace MagnetometerSystem.Infrastructure.Database;
 
 /// <summary>
 /// 基于 SQLite + Dapper 的数据存储服务实现。
-/// readings / corrected_readings 的通道数据以 JSON 形式存入 data 列：
-///   { "values": {"X":1.0,...}, "original": {...}, "isCalibrated": 0|1, "isOrthoCorrected": 0|1 }
-/// 通道名来自会话的 channel_names，读取时按名字顺序还原为 double[]。
+/// 新读数以有序数组写入 JSON，保留重名通道和辅助通道；兼容读取旧版按名称存储的字典。
+/// 入队与提交分别计数，失败批次保留在内存并公开错误，等待明确重试。
 /// </summary>
 public class SqliteStorageService : IDataStorageService, IDisposable
 {
     private readonly DatabaseInitializer _dbInit;
     private readonly DataBus _dataBus;
-    private readonly Channel<MagnetometerReading> _writeChannel;
+    private readonly Channel<PendingBatch> _writeChannel;
     private readonly Task _consumerTask;
-    private readonly CancellationTokenSource _cts = new();
     private bool _disposed;
+    private readonly object _writeLock = new();
+    private readonly List<PendingBatch> _failedBatches = [];
+    private long _pendingReadings;
+    private long _savedReadings;
+    private int _queuedBatches;
+    private Exception? _writeError;
+    private sealed record PendingBatch(MagnetometerReading[] Readings)
+    {
+        public TaskCompletionSource Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
 
-    private readonly object _writerStateLock = new();
-    private readonly SemaphoreSlim _retryWrite = new(0, 1);
-    private Exception? _writeFailure;
-    private long _pendingWriteCount;
-    public long PendingWriteCount => Interlocked.Read(ref _pendingWriteCount);
+    public event Action<StorageWriteStatus>? WriteStatusChanged;
+    public StorageWriteStatus WriteStatus
+    {
+        get { lock (_writeLock) return new(_savedReadings, _pendingReadings, _writeError?.Message); }
+    }
+
+    // 仅用于等待失败队列转入保留列表；落库确认依据待保存读数计数。
+    private volatile bool _writerIdle;
 
     // 缓存 session_id -> 通道名（一个会话不会变）
     private readonly Dictionary<string, string[]> _channelNamesCache = new();
@@ -41,7 +52,7 @@ public class SqliteStorageService : IDataStorageService, IDisposable
         _dbInit = dbInit;
         _dataBus = dataBus;
 
-        _writeChannel = Channel.CreateUnbounded<MagnetometerReading>(
+        _writeChannel = Channel.CreateUnbounded<PendingBatch>(
             new UnboundedChannelOptions { SingleReader = true });
 
         _consumerTask = Task.Run(ConsumeWriteQueueAsync);
@@ -51,7 +62,14 @@ public class SqliteStorageService : IDataStorageService, IDisposable
     public async Task<string> StartSessionAsync(string name, SensorConfig sensorConfig, ConnectionConfig connectionConfig)
     {
         var sessionId = Guid.NewGuid().ToString();
-        var channelNames = sensorConfig.ChannelNames;
+        var channelNames = sensorConfig.ChannelNames.ToArray();
+        var channelUnits = sensorConfig.ChannelUnits.ToArray();
+        if (!double.IsFinite(sensorConfig.SampleRate) || sensorConfig.SampleRate <= 0)
+            throw new ArgumentException("采样率必须是正有限数值。", nameof(sensorConfig));
+        if (channelNames.Length == 0 || channelNames.Length != sensorConfig.ChannelCount)
+            throw new ArgumentException("会话通道名称数量必须与通道数一致。", nameof(sensorConfig));
+        if (channelUnits.Length != channelNames.Length)
+            throw new ArgumentException("会话通道单位数量必须与通道数一致。", nameof(sensorConfig));
 
         using var conn = new SqliteConnection(_dbInit.ConnectionString);
         await conn.OpenAsync();
@@ -72,7 +90,7 @@ public class SqliteStorageService : IDataStorageService, IDisposable
             SampleRate = sensorConfig.SampleRate,
             ChannelCount = sensorConfig.ChannelCount,
             ChannelNames = JsonSerializer.Serialize(channelNames),
-            ChannelUnits = JsonSerializer.Serialize(sensorConfig.ChannelUnits),
+            ChannelUnits = JsonSerializer.Serialize(channelUnits),
             DeviceInfo = sensorConfig.SerialNumber,
             ConnectionType = connectionConfig.Type.ToString(),
         });
@@ -116,56 +134,85 @@ public class SqliteStorageService : IDataStorageService, IDisposable
     /// <inheritdoc />
     public Task SaveReadingsAsync(IEnumerable<MagnetometerReading> readings)
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-        foreach (var reading in readings)
+        ArgumentNullException.ThrowIfNull(readings);
+        var snapshot = readings.Select(r => r.DeepClone()).ToArray();
+        if (snapshot.Length == 0) return Task.CompletedTask;
+        var tasks = new List<Task>();
+        lock (_writeLock)
         {
-            // Count before enqueue: a concurrent consumer cannot make a pending write invisible.
-            Interlocked.Increment(ref _pendingWriteCount);
-            if (!_writeChannel.Writer.TryWrite(reading))
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            foreach (var chunk in snapshot.Chunk(BatchSize))
             {
-                Interlocked.Decrement(ref _pendingWriteCount);
-                throw new InvalidOperationException("保存队列已关闭，读数未入队。");
+                var batch = new PendingBatch(chunk);
+                _pendingReadings += chunk.Length;
+                if (_writeError != null)
+                {
+                    _failedBatches.Add(batch);
+                    batch.Completion.TrySetException(_writeError);
+                }
+                else if (!_writeChannel.Writer.TryWrite(batch))
+                {
+                    throw new InvalidOperationException("存储写入队列已关闭。");
+                }
+                else Interlocked.Increment(ref _queuedBatches);
+                tasks.Add(batch.Completion.Task);
             }
         }
-        return Task.CompletedTask;
+        PublishWriteStatus();
+        return Task.WhenAll(tasks);
     }
 
     /// <inheritdoc />
     public async Task WaitForPendingWritesAsync(int timeoutMs = 5000)
     {
-        ArgumentOutOfRangeException.ThrowIfNegative(timeoutMs);
-        long started = Environment.TickCount64;
+        if (timeoutMs <= 0) throw new ArgumentOutOfRangeException(nameof(timeoutMs));
+        var elapsed = System.Diagnostics.Stopwatch.StartNew();
         while (true)
         {
-            lock (_writerStateLock)
+            lock (_writeLock)
             {
-                if (_writeFailure != null)
-                    throw new InvalidOperationException(
-                        "保存失败，未写入批次仍保留在内存中。采集已停止，请修复原因后点击“重试保存”。", _writeFailure);
+                if (_writeError != null)
+                    throw new IOException("读数尚未全部保存，请修复存储问题后重试。", _writeError);
+                if (_pendingReadings == 0) return;
             }
-            if (PendingWriteCount == 0) return;
-            if (_consumerTask.IsFaulted)
-                throw new InvalidOperationException("后台保存任务已失败，仍有读数未写入。", _consumerTask.Exception);
-            long remaining = timeoutMs - (Environment.TickCount64 - started);
-            if (remaining <= 0)
-                throw new TimeoutException($"等待保存超时（{timeoutMs}ms），仍有 {PendingWriteCount} 条读数未确认落库。");
-            await Task.Delay((int)Math.Min(15, remaining));
+            if (elapsed.ElapsedMilliseconds >= timeoutMs)
+                throw new TimeoutException($"等待落库超过 {timeoutMs} ms；仍有 {WriteStatus.PendingReadings} 条待保存。");
+            await Task.Delay(15).ConfigureAwait(false);
         }
     }
 
-    /// <inheritdoc />
     public async Task RetryPendingWritesAsync()
     {
-        // Only a deliberate user retry releases the retained failed batch.
-        lock (_writerStateLock)
+        // 失败后新批次直接留在内存，等待消费者把先前队列转入保留列表。
+        while (Volatile.Read(ref _queuedBatches) > 0 || !_writerIdle)
+            await Task.Delay(15).ConfigureAwait(false);
+        Task[] tasks;
+        lock (_writeLock)
         {
-            if (_writeFailure != null)
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            tasks = _failedBatches.Select(old => new PendingBatch(old.Readings)).Select(batch =>
             {
-                _writeFailure = null;
-                _retryWrite.Release();
-            }
+                _writeChannel.Writer.TryWrite(batch);
+                Interlocked.Increment(ref _queuedBatches);
+                return batch.Completion.Task;
+            }).ToArray();
+            _failedBatches.Clear();
+            _writeError = null;
         }
-        await WaitForPendingWritesAsync();
+        PublishWriteStatus();
+        await Task.WhenAll(tasks).ConfigureAwait(false);
+        await WaitForPendingWritesAsync().ConfigureAwait(false);
+    }
+
+    private void PublishWriteStatus()
+    {
+        var status = WriteStatus;
+        if (WriteStatusChanged is not { } handlers) return;
+        foreach (Action<StorageWriteStatus> handler in handlers.GetInvocationList())
+        {
+            try { handler(status); }
+            catch (Exception ex) { System.Diagnostics.Trace.TraceError($"存储状态订阅者异常: {ex}"); }
+        }
     }
 
     /// <inheritdoc />
@@ -177,10 +224,9 @@ public class SqliteStorageService : IDataStorageService, IDisposable
         const string sql = """
             SELECT id, name, started_at, ended_at, sensor_type, sample_rate,
                    channel_count, channel_names, channel_units, device_info, connection_type,
-                   notes, total_readings
+                   notes, total_readings, legacy_data_table
             FROM sessions
             ORDER BY started_at DESC
-            LIMIT 100
             """;
 
         var rows = await conn.QueryAsync(sql);
@@ -201,7 +247,15 @@ public class SqliteStorageService : IDataStorageService, IDisposable
         using var conn = new SqliteConnection(_dbInit.ConnectionString);
         await conn.OpenAsync();
 
+        var sensorTypeName = await conn.ExecuteScalarAsync<string?>(
+            "SELECT sensor_type FROM sessions WHERE id = @Id", new { Id = sessionId });
+        if (sensorTypeName == null) return [];
+        var legacyTable = await conn.ExecuteScalarAsync<string?>(
+            "SELECT legacy_data_table FROM sessions WHERE id = @Id", new { Id = sessionId });
+        if (legacyTable != null)
+            throw new NotSupportedException($"旧版原始数据保留在 {legacyTable}，需迁移后读取。");
         var channelNames = await GetChannelNamesAsync(conn, sessionId);
+        Enum.TryParse<SensorType>(sensorTypeName, out var sensorType);
 
         var sql = "SELECT id, session_id, timestamp, data FROM readings WHERE session_id = @SessionId";
 
@@ -210,24 +264,24 @@ public class SqliteStorageService : IDataStorageService, IDisposable
 
         if (startTime.HasValue)
         {
-            sql += " AND timestamp >= @StartTime";
-            parameters.Add("StartTime", startTime.Value.ToString("O"));
+            sql += " AND julianday(timestamp) >= julianday(@StartTime)";
+            parameters.Add("StartTime", startTime.Value.ToUniversalTime().ToString("O"));
         }
 
         if (endTime.HasValue)
         {
-            sql += " AND timestamp <= @EndTime";
-            parameters.Add("EndTime", endTime.Value.ToString("O"));
+            sql += " AND julianday(timestamp) <= julianday(@EndTime)";
+            parameters.Add("EndTime", endTime.Value.ToUniversalTime().ToString("O"));
         }
 
-        sql += " ORDER BY timestamp ASC";
+        sql += " ORDER BY julianday(timestamp), id";
 
         var rows = await conn.QueryAsync(sql, parameters);
         var readings = new List<MagnetometerReading>();
 
         foreach (var row in rows)
         {
-            readings.Add(MapRowToReading(row, channelNames));
+            readings.Add(MapRowToReading(row, channelNames, sensorType));
         }
 
         return readings;
@@ -239,6 +293,10 @@ public class SqliteStorageService : IDataStorageService, IDisposable
         using var conn = new SqliteConnection(_dbInit.ConnectionString);
         await conn.OpenAsync();
         await conn.ExecuteAsync("PRAGMA foreign_keys=ON;");
+        var legacyTable = await conn.ExecuteScalarAsync<string?>(
+            "SELECT legacy_data_table FROM sessions WHERE id = @Id", new { Id = sessionId });
+        if (legacyTable != null)
+            throw new NotSupportedException("旧版数据尚未迁移，不能删除保留的原始会话。");
 
         await conn.ExecuteAsync(
             "DELETE FROM sessions WHERE id = @Id",
@@ -268,15 +326,23 @@ public class SqliteStorageService : IDataStorageService, IDisposable
     /// <inheritdoc />
     public async Task SaveCorrectedReadingsAsync(IEnumerable<CorrectedReading> readings)
     {
-        var readingsList = readings.ToList();
+        ArgumentNullException.ThrowIfNull(readings);
+        var readingsList = readings.Select(r => new CorrectedReading
+        {
+            Id = r.Id, OriginalReadingId = r.OriginalReadingId, SessionId = r.SessionId,
+            Timestamp = r.Timestamp, CorrectionProfileId = r.CorrectionProfileId,
+            CorrectedValues = (double[])r.CorrectedValues.Clone(),
+            CorrectedTotalField = r.CorrectedTotalField,
+            IsOrthogonalityCorrected = r.IsOrthogonalityCorrected, CorrectedAt = r.CorrectedAt
+        }).ToList();
         if (readingsList.Count == 0) return;
 
         using var conn = new SqliteConnection(_dbInit.ConnectionString);
         await conn.OpenAsync();
 
-        var sessionId = readingsList[0].SessionId;
-        var channelNames = await GetChannelNamesAsync(conn, sessionId);
-
+        var sessionNames = new Dictionary<string, string[]>();
+        foreach (var sessionId in readingsList.Select(r => r.SessionId).Distinct())
+            sessionNames[sessionId] = await GetChannelNamesAsync(conn, sessionId);
         using var tx = conn.BeginTransaction();
 
         const string sql = """
@@ -290,7 +356,19 @@ public class SqliteStorageService : IDataStorageService, IDisposable
 
         foreach (var reading in readingsList)
         {
+            var channelNames = sessionNames[reading.SessionId];
+            var original = await conn.ExecuteScalarAsync<string?>(
+                "SELECT data FROM readings WHERE id = @Id AND session_id = @SessionId",
+                new { Id = reading.OriginalReadingId, reading.SessionId }, tx);
+            if (original == null)
+                throw new ArgumentException("改正结果必须引用同一会话中已保存的原始读数。");
+            var originalValues = ParseDataJson(original, channelNames).values;
+            if (reading.CorrectedValues.Length != originalValues.Length)
+                throw new ArgumentException("改正结果必须保留原始数据的全部通道。");
             var param = MapCorrectedReadingToParam(reading, channelNames);
+            await conn.ExecuteAsync(
+                "DELETE FROM corrected_readings WHERE original_reading_id=@OriginalReadingId AND session_id=@SessionId AND correction_profile_id=@CorrectionProfileId",
+                new { reading.OriginalReadingId, reading.SessionId, reading.CorrectionProfileId }, tx);
             await conn.ExecuteAsync(sql, param, tx);
         }
 
@@ -305,6 +383,9 @@ public class SqliteStorageService : IDataStorageService, IDisposable
         await conn.OpenAsync();
 
         var channelNames = await GetChannelNamesAsync(conn, sessionId);
+        var sensorTypeName = await conn.ExecuteScalarAsync<string?>(
+            "SELECT sensor_type FROM sessions WHERE id = @Id", new { Id = sessionId });
+        Enum.TryParse<SensorType>(sensorTypeName, out var sensorType);
 
         var sql = """
             SELECT id, original_reading_id, session_id, timestamp, correction_profile_id,
@@ -319,9 +400,20 @@ public class SqliteStorageService : IDataStorageService, IDisposable
         var result = new List<CorrectedReading>();
         foreach (var row in rows)
         {
-            result.Add(MapRowToCorrectedReading(row, channelNames));
+            result.Add(MapRowToCorrectedReading(row, channelNames, sensorType));
         }
         return result;
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<string>> GetCorrectionVersionIdsAsync(string sessionId)
+    {
+        using var conn = new SqliteConnection(_dbInit.ConnectionString);
+        await conn.OpenAsync();
+        var ids = await conn.QueryAsync<string>(
+            "SELECT DISTINCT correction_profile_id FROM corrected_readings WHERE session_id = @SessionId ORDER BY correction_profile_id",
+            new { SessionId = sessionId });
+        return ids.ToArray();
     }
 
     /// <inheritdoc />
@@ -354,47 +446,56 @@ public class SqliteStorageService : IDataStorageService, IDisposable
 
     private async Task ConsumeWriteQueueAsync()
     {
-        var batch = new List<MagnetometerReading>(BatchSize);
         var reader = _writeChannel.Reader;
-        try
+        while (true)
         {
-            while (await reader.WaitToReadAsync(_cts.Token))
+            _writerIdle = true;
+            if (!await reader.WaitToReadAsync().ConfigureAwait(false)) break;
+            _writerIdle = false;
+            while (reader.TryRead(out var batch))
             {
-                batch.Clear();
-                while (batch.Count < BatchSize && reader.TryRead(out var item)) batch.Add(item);
-                if (batch.Count == 0) continue;
-                while (true)
+                try
                 {
-                    try
+                    lock (_writeLock)
                     {
-                        await WriteBatchAsync(batch);
-                        Interlocked.Add(ref _pendingWriteCount, -batch.Count);
-                        break;
+                        if (_writeError != null)
+                            throw new IOException("存储已暂停，待写批次保留到重试。", _writeError);
                     }
-                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    await WriteBatchAsync(batch.Readings).ConfigureAwait(false);
+                    lock (_writeLock)
                     {
-                        // Keep this exact batch and the remaining queue until an explicit retry.
-                        // WriteBatchOnceAsync uses a transaction, so a failed attempt cannot partially commit.
-                        lock (_writerStateLock) _writeFailure = ex;
-                        _dataBus.PublishAcquisitionFault(ex);
-                        System.Diagnostics.Trace.TraceError(
-                            $"后台保存失败，保留 {batch.Count} 条读数等待重试: {ex.Message}");
-                        await _retryWrite.WaitAsync(_cts.Token);
+                        _pendingReadings -= batch.Readings.Length;
+                        _savedReadings += batch.Readings.Length;
                     }
+                    batch.Completion.TrySetResult();
                 }
+                catch (Exception ex)
+                {
+                    bool firstFailure;
+                    lock (_writeLock)
+                    {
+                        firstFailure = _writeError == null;
+                        _writeError ??= ex;
+                        _failedBatches.Add(batch);
+                    }
+                    // Stop producers synchronously before scheduling any UI notification.
+                    // Accepted batches remain available for the explicit retry operation.
+                    if (firstFailure) _dataBus.PublishAcquisitionFault(ex);
+                    batch.Completion.TrySetException(ex);
+                    System.Diagnostics.Trace.TraceError($"保存失败，保留 {batch.Readings.Length} 条待重试: {ex}");
+                }
+                PublishWriteStatus();
+                Interlocked.Decrement(ref _queuedBatches);
             }
         }
-        catch (OperationCanceledException) when (_cts.IsCancellationRequested)
-        {
-            System.Diagnostics.Trace.TraceError($"保存任务被取消，仍有 {PendingWriteCount} 条未写入读数。");
-        }
+        _writerIdle = true;
     }
 
     // SQLite 瞬时错误码：忙 / 被锁。多进程或长事务下可能短暂出现，退避重试通常即可成功。
     private const int SqliteBusy = 5;    // SQLITE_BUSY
     private const int SqliteLocked = 6;  // SQLITE_LOCKED
 
-    private async Task WriteBatchAsync(List<MagnetometerReading> batch)
+    private async Task WriteBatchAsync(IReadOnlyList<MagnetometerReading> batch)
     {
         const int maxAttempts = 3;
         for (int attempt = 1; attempt <= maxAttempts; attempt++)
@@ -413,17 +514,10 @@ public class SqliteStorageService : IDataStorageService, IDisposable
                     $"SqliteStorageService.WriteBatchAsync 第 {attempt}/{maxAttempts} 次 busy/locked，{delayMs}ms 后重试: {ex.Message}");
                 await Task.Delay(delayMs);
             }
-            catch (Exception ex)
-            {
-                // 非瞬时错误或重试耗尽：向消费者传播，保留批次并阻止成功退出。
-                System.Diagnostics.Trace.TraceError(
-                    $"SqliteStorageService.WriteBatchAsync failed ({batch.Count} readings, attempt {attempt}): {ex.Message}");
-                throw;
-            }
         }
     }
 
-    private async Task WriteBatchOnceAsync(List<MagnetometerReading> batch)
+    private async Task WriteBatchOnceAsync(IReadOnlyList<MagnetometerReading> batch)
     {
         using var conn = new SqliteConnection(_dbInit.ConnectionString);
         await conn.OpenAsync();
@@ -431,6 +525,8 @@ public class SqliteStorageService : IDataStorageService, IDisposable
         var sessionToNames = new Dictionary<string, string[]>();
         foreach (var r in batch)
         {
+            if (string.IsNullOrWhiteSpace(r.SessionId))
+                throw new ArgumentException("读数缺少采集会话 ID。");
             if (!sessionToNames.ContainsKey(r.SessionId))
             {
                 sessionToNames[r.SessionId] = await GetChannelNamesAsync(conn, r.SessionId);
@@ -446,6 +542,8 @@ public class SqliteStorageService : IDataStorageService, IDisposable
 
         foreach (var r in batch)
         {
+            if (r.ChannelValues.Length != sessionToNames[r.SessionId].Length)
+                throw new ArgumentException("读数通道数与会话不一致，数据已保留待处理。");
             var param = MapReadingToParam(r, sessionToNames[r.SessionId]);
             await conn.ExecuteAsync(sql, param, tx);
         }
@@ -469,6 +567,8 @@ public class SqliteStorageService : IDataStorageService, IDisposable
             "SELECT channel_names FROM sessions WHERE id = @Id",
             new { Id = sessionId });
 
+        if (json == null)
+            throw new ArgumentException($"会话不存在或缺少通道定义: {sessionId}");
         string[] names;
         if (!string.IsNullOrEmpty(json))
         {
@@ -486,42 +586,15 @@ public class SqliteStorageService : IDataStorageService, IDisposable
         return names;
     }
 
-    private static string[] EffectiveNames(string[] names, int count)
-    {
-        if (names.Length >= count) return names;
-        var result = new string[count];
-        for (int i = 0; i < count; i++)
-        {
-            result[i] = i < names.Length ? names[i] : $"CH{i}";
-        }
-        return result;
-    }
-
     private static string BuildDataJson(double[] values, double[]? original, string[] channelNames, bool isCalibrated, bool isOrthoCorrected)
     {
-        var names = EffectiveNames(channelNames, values.Length);
-
-        var valuesDict = new Dictionary<string, double>(values.Length);
-        for (int i = 0; i < values.Length; i++)
-        {
-            valuesDict[names[i]] = values[i];
-        }
-
-        Dictionary<string, double>? originalDict = null;
-        if (original != null && original.Length > 0)
-        {
-            var origNames = EffectiveNames(channelNames, original.Length);
-            originalDict = new Dictionary<string, double>(original.Length);
-            for (int i = 0; i < original.Length; i++)
-            {
-                originalDict[origNames[i]] = original[i];
-            }
-        }
+        if (values.Any(v => !double.IsFinite(v)) || original?.Any(v => !double.IsFinite(v)) == true)
+            throw new ArgumentException("不能保存包含 NaN 或无穷大的读数。");
 
         var payload = new Dictionary<string, object?>
         {
-            ["values"] = valuesDict,
-            ["original"] = originalDict,
+            ["values"] = values,
+            ["original"] = original,
             ["isCalibrated"] = isCalibrated ? 1 : 0,
             ["isOrthoCorrected"] = isOrthoCorrected ? 1 : 0,
         };
@@ -529,22 +602,19 @@ public class SqliteStorageService : IDataStorageService, IDisposable
         return JsonSerializer.Serialize(payload);
     }
 
-    private sealed class ReadingDataDto
-    {
-        public Dictionary<string, double>? values { get; set; }
-        public Dictionary<string, double>? original { get; set; }
-        public int isCalibrated { get; set; }
-        public int isOrthoCorrected { get; set; }
-    }
-
     private static (double[] values, double[]? original, bool isCalibrated, bool isOrthoCorrected) ParseDataJson(string json, string[] channelNames)
     {
-        var dto = JsonSerializer.Deserialize<ReadingDataDto>(json) ?? new ReadingDataDto();
-        var values = ExtractOrdered(dto.values, channelNames);
-        var original = dto.original != null && dto.original.Count > 0
-            ? ExtractOrdered(dto.original, channelNames)
-            : null;
-        return (values, original, dto.isCalibrated == 1, dto.isOrthoCorrected == 1);
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+        double[] ReadValues(JsonElement element) => element.ValueKind == JsonValueKind.Array
+            ? element.EnumerateArray().Select(v => v.GetDouble()).ToArray()
+            : ExtractOrdered(element.Deserialize<Dictionary<string, double>>(), channelNames);
+        var values = ReadValues(root.GetProperty("values"));
+        var original = root.TryGetProperty("original", out var raw) && raw.ValueKind != JsonValueKind.Null
+            ? ReadValues(raw) : null;
+        return (values, original,
+            root.TryGetProperty("isCalibrated", out var cal) && cal.GetInt32() == 1,
+            root.TryGetProperty("isOrthoCorrected", out var ortho) && ortho.GetInt32() == 1);
     }
 
     private static double[] ExtractOrdered(Dictionary<string, double>? dict, string[] channelNames)
@@ -556,11 +626,13 @@ public class SqliteStorageService : IDataStorageService, IDisposable
             var result = new List<double>(channelNames.Length);
             foreach (var name in channelNames)
             {
-                if (dict.TryGetValue(name, out var v))
-                    result.Add(v);
+                result.Add(dict.TryGetValue(name, out var v) ? v : double.NaN);
             }
-            // 若协议定义的通道名在 JSON 中完全没命中，退回到原字典顺序
-            if (result.Count > 0) return result.ToArray();
+            if (channelNames.Any(dict.ContainsKey))
+            {
+                result.AddRange(dict.Where(pair => !channelNames.Contains(pair.Key)).Select(pair => pair.Value));
+                return result.ToArray();
+            }
         }
 
         // Fallback: 按 CH0/CH1/... 或字典本身顺序
@@ -572,12 +644,12 @@ public class SqliteStorageService : IDataStorageService, IDisposable
         return new
         {
             r.SessionId,
-            Timestamp = r.Timestamp.ToString("O"),
+            Timestamp = r.Timestamp.ToUniversalTime().ToString("O"),
             Data = BuildDataJson(r.ChannelValues, r.OriginalChannelValues, channelNames, r.IsCalibrated, r.IsOrthogonalityCorrected),
         };
     }
 
-    private static MagnetometerReading MapRowToReading(dynamic row, string[] channelNames)
+    private static MagnetometerReading MapRowToReading(dynamic row, string[] channelNames, SensorType sensorType)
     {
         var dataJson = (string)row.data;
         var (values, original, isCal, isOrtho) = ParseDataJson(dataJson, channelNames);
@@ -588,6 +660,7 @@ public class SqliteStorageService : IDataStorageService, IDisposable
             SessionId = (string)row.session_id,
             Timestamp = ParseUtcAsLocal((string)row.timestamp),
             ChannelValues = values,
+            SensorType = sensorType,
             OriginalChannelValues = original,
             IsCalibrated = isCal,
             IsOrthogonalityCorrected = isOrtho,
@@ -605,10 +678,9 @@ public class SqliteStorageService : IDataStorageService, IDisposable
         int channelCount = (int)(long)row.channel_count;
         string[] savedUnits = row.channel_units is string unitsJson && !string.IsNullOrWhiteSpace(unitsJson)
             ? JsonSerializer.Deserialize<string[]>(unitsJson) ?? [] : [];
-        // A missing old unit is unknown; guessing nT would mislabel mixed-unit recordings.
+        // Missing historical units are unknown, not implicitly nT or dimensionless.
         string[] channelUnits = Enumerable.Range(0, channelCount)
             .Select(i => i < savedUnits.Length ? savedUnits[i] ?? "未知单位" : "未知单位").ToArray();
-
         _ = Enum.TryParse<SensorType>((string)row.sensor_type, out var sensorType);
         _ = Enum.TryParse<ConnectionType>((string?)row.connection_type ?? "", out var connectionType);
 
@@ -625,6 +697,7 @@ public class SqliteStorageService : IDataStorageService, IDisposable
             ChannelCount = (int)(long)row.channel_count,
             ChannelNames = channelNames,
             ChannelUnits = channelUnits,
+            LegacyDataTable = row.legacy_data_table as string,
             DeviceInfo = row.device_info as string,
             ConnectionType = connectionType,
             Notes = row.notes as string,
@@ -638,20 +711,21 @@ public class SqliteStorageService : IDataStorageService, IDisposable
         {
             reading.OriginalReadingId,
             reading.SessionId,
-            Timestamp = reading.Timestamp.ToString("O"),
+            Timestamp = reading.Timestamp.ToUniversalTime().ToString("O"),
             reading.CorrectionProfileId,
             Data = BuildDataJson(reading.CorrectedValues, null, channelNames, false, reading.IsOrthogonalityCorrected),
-            CorrectedAt = reading.CorrectedAt.ToString("O"),
+            CorrectedAt = reading.CorrectedAt.ToUniversalTime().ToString("O"),
         };
     }
 
-    private static CorrectedReading MapRowToCorrectedReading(dynamic row, string[] channelNames)
+    private static CorrectedReading MapRowToCorrectedReading(dynamic row, string[] channelNames, SensorType sensorType)
     {
         var dataJson = (string)row.data;
         var (values, _, _, isOrtho) = ParseDataJson(dataJson, channelNames);
 
         double? totalField = null;
-        if (values.Length >= 3)
+        if ((sensorType == SensorType.TriaxialFluxgate && values.Length == 3) ||
+            (sensorType == SensorType.DualTriaxialFluxgate && values.Length == 6))
         {
             totalField = Math.Sqrt(values[0] * values[0] + values[1] * values[1] + values[2] * values[2]);
         }
@@ -689,22 +763,14 @@ public class SqliteStorageService : IDataStorageService, IDisposable
     public void Dispose()
     {
         if (_disposed) return;
-        _disposed = true;
-
-        // 标记不再写入。消费循环会把队列内剩余读数全部落库后自然退出。
-        _writeChannel.Writer.Complete();
-
-        // 正常退出应等待队列排空，不能用固定短超时直接丢尾部数据。
-        // 不在此处 Cancel —— Cancel 会中断排空；仅当排空异常缓慢（30s 未完成）才兜底取消。
-        if (!_consumerTask.Wait(TimeSpan.FromSeconds(30)))
+        // 未保存数据仍可在修复后重试，不因关闭失败而释放保留队列。
+        WaitForPendingWritesAsync(30000).GetAwaiter().GetResult();
+        lock (_writeLock)
         {
-            System.Diagnostics.Trace.TraceWarning(
-                "SqliteStorageService.Dispose: 写入队列 30s 内未排空，强制取消，可能丢失尾部数据");
-            _cts.Cancel();
-            try { _consumerTask.Wait(TimeSpan.FromSeconds(5)); } catch { /* 退出阶段忽略 */ }
+            _disposed = true;
+            _writeChannel.Writer.Complete();
         }
-
-        _cts.Dispose();
+        _consumerTask.GetAwaiter().GetResult();
     }
 
     #endregion

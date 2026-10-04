@@ -135,17 +135,15 @@ public partial class SettingsViewModel : ObservableObject
     {
         try
         {
-            var settings = new AppSettings
-            {
-                DefaultPortName = DefaultPortName,
-                DefaultBaudRate = DefaultBaudRate,
-                DefaultIpAddress = DefaultIpAddress,
-                DefaultPort = DefaultPort,
-                DataStoragePath = DataStoragePath,
-                AutoSaveEnabled = AutoSaveEnabled,
-                ChartRefreshRate = ChartRefreshRate,
-                ThemeName = ThemeName,
-            };
+            var settings = await _configService.LoadSettingsAsync();
+            settings.DefaultPortName = DefaultPortName;
+            settings.DefaultBaudRate = DefaultBaudRate;
+            settings.DefaultIpAddress = DefaultIpAddress;
+            settings.DefaultPort = DefaultPort;
+            settings.DataStoragePath = DataStoragePath;
+            settings.AutoSaveEnabled = AutoSaveEnabled;
+            settings.ChartRefreshRate = ChartRefreshRate;
+            settings.ThemeName = ThemeName;
 
             await _configService.SaveSettingsAsync(settings);
             StatusMessage = "设置已保存（部分设置需重启生效）";

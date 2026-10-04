@@ -8,41 +8,93 @@ namespace MagnetometerSystem.App.Views;
 
 public partial class RealtimeChartView : UserControl
 {
+    private RealtimeChartViewModel? _boundViewModel;
+    private readonly HashSet<Core.Models.ChannelDisplayConfig> _subscribedChannels = new();
+    private readonly HashSet<Core.Models.ComputedChannelDefinition> _subscribedComputed = new();
     public RealtimeChartView()
     {
         InitializeComponent();
+        Unloaded += OnUnloaded;
     }
 
     private void OnLoaded(object sender, System.Windows.RoutedEventArgs e)
     {
         if (DataContext is RealtimeChartViewModel vm)
         {
+            if (ReferenceEquals(_boundViewModel, vm)) return;
+            DetachViewModel();
+            _boundViewModel = vm;
             vm.PlotControl = WpfPlot1;
             ChartFontHelper.Apply(WpfPlot1.Plot);
             vm.PropertyChanged += OnViewModelPropertyChanged;
             vm.ChannelConfigs.CollectionChanged += OnChannelConfigsChanged;
             vm.ComputedChannels.CollectionChanged += OnComputedChannelsChanged;
+            vm.WorkspaceLayout.PropertyChanged += OnWorkspaceLayoutChanged;
+            vm.StatisticsConfig.PropertyChanged += OnStatisticsChanged;
 
             // 订阅已存在的通道配置的属性变化
-            foreach (var config in vm.ChannelConfigs)
-                config.PropertyChanged += OnChannelConfigPropertyChanged;
+            SyncItemSubscriptions();
 
             // 恢复多图表视图（如果之前是多图表模式）
             if (vm.IsMultiPlotMode)
             {
                 RebuildMultiPlotControls();
             }
+            vm.RefreshPlot();
         }
+    }
+
+    private void OnUnloaded(object sender, System.Windows.RoutedEventArgs e) => DetachViewModel();
+
+    private void DetachViewModel()
+    {
+        if (_boundViewModel is not { } vm) return;
+        vm.PropertyChanged -= OnViewModelPropertyChanged;
+        vm.ChannelConfigs.CollectionChanged -= OnChannelConfigsChanged;
+        vm.ComputedChannels.CollectionChanged -= OnComputedChannelsChanged;
+        vm.WorkspaceLayout.PropertyChanged -= OnWorkspaceLayoutChanged;
+        vm.StatisticsConfig.PropertyChanged -= OnStatisticsChanged;
+        foreach (var cfg in _subscribedChannels) cfg.PropertyChanged -= OnChannelConfigPropertyChanged;
+        foreach (var cfg in _subscribedComputed) cfg.PropertyChanged -= OnComputedPropertyChanged;
+        _subscribedChannels.Clear();
+        _subscribedComputed.Clear();
+        if (ReferenceEquals(vm.PlotControl, WpfPlot1))
+        { vm.PlotControl = null; vm.MultiPlotControls.Clear(); }
+        _boundViewModel = null;
+    }
+
+    private void SyncItemSubscriptions()
+    {
+        if (_boundViewModel is not { } vm) return;
+        foreach (var cfg in _subscribedChannels) cfg.PropertyChanged -= OnChannelConfigPropertyChanged;
+        foreach (var cfg in _subscribedComputed) cfg.PropertyChanged -= OnComputedPropertyChanged;
+        _subscribedChannels.Clear(); _subscribedComputed.Clear();
+        foreach (var cfg in vm.ChannelConfigs) { cfg.PropertyChanged += OnChannelConfigPropertyChanged; _subscribedChannels.Add(cfg); }
+        foreach (var cfg in vm.ComputedChannels) { cfg.PropertyChanged += OnComputedPropertyChanged; _subscribedComputed.Add(cfg); }
+    }
+
+    private void OnComputedPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(Core.Models.ComputedChannelDefinition.Enabled)) RebuildMultiPlotControls();
+        _boundViewModel?.RefreshPlot();
+    }
+
+    private void OnWorkspaceLayoutChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(WorkspaceLayoutViewModel.IsFocused)) RebuildMultiPlotControls();
+    }
+
+    private void OnStatisticsChanged(object? sender, PropertyChangedEventArgs e) => _boundViewModel?.RefreshPlot();
+
+    private void OnPlotAreaSizeChanged(object sender, System.Windows.SizeChangedEventArgs e)
+    {
+        if (_boundViewModel is { IsMultiPlotMode: true } vm && (vm.IsChartHeightAutomatic || vm.WorkspaceLayout.IsFocused))
+            RebuildMultiPlotControls();
     }
 
     private void OnChannelConfigsChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
     {
-        if (e.OldItems != null)
-            foreach (Core.Models.ChannelDisplayConfig config in e.OldItems)
-                config.PropertyChanged -= OnChannelConfigPropertyChanged;
-        if (e.NewItems != null)
-            foreach (Core.Models.ChannelDisplayConfig config in e.NewItems)
-                config.PropertyChanged += OnChannelConfigPropertyChanged;
+        SyncItemSubscriptions();
 
         if (DataContext is RealtimeChartViewModel vm && vm.IsMultiPlotMode)
             RebuildMultiPlotControls();
@@ -52,10 +104,12 @@ public partial class RealtimeChartView : UserControl
     {
         if (e.PropertyName == nameof(Core.Models.ChannelDisplayConfig.Visible))
             RebuildMultiPlotControls();
+        if (e.PropertyName != nameof(Core.Models.ChannelDisplayConfig.LatestValue)) _boundViewModel?.RefreshPlot();
     }
 
     private void OnComputedChannelsChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
     {
+        SyncItemSubscriptions();
         if (DataContext is RealtimeChartViewModel vm && vm.IsMultiPlotMode)
         {
             RebuildMultiPlotControls();
@@ -66,10 +120,15 @@ public partial class RealtimeChartView : UserControl
     {
         if (e.PropertyName is nameof(RealtimeChartViewModel.IsMultiPlotMode) or
             nameof(RealtimeChartViewModel.MultiPlotColumnCount) or
-            nameof(RealtimeChartViewModel.MultiPlotHeight))
+            nameof(RealtimeChartViewModel.MultiPlotHeight) or nameof(RealtimeChartViewModel.IsChartHeightAutomatic))
         {
             RebuildMultiPlotControls();
         }
+        if (e.PropertyName is nameof(RealtimeChartViewModel.AutoScaleY) or nameof(RealtimeChartViewModel.YMin) or nameof(RealtimeChartViewModel.YMax) or nameof(RealtimeChartViewModel.TimeWindowSeconds) or nameof(RealtimeChartViewModel.IsPaused)
+            or nameof(RealtimeChartViewModel.ShowGrid) or nameof(RealtimeChartViewModel.AutoScroll)
+            or nameof(RealtimeChartViewModel.IsFilterEnabled) or nameof(RealtimeChartViewModel.FilterWindowSize)
+            or nameof(RealtimeChartViewModel.SelectedFilterType) or nameof(RealtimeChartViewModel.DownsampleTargetCount))
+            _boundViewModel?.RefreshPlot();
     }
 
     private void RebuildMultiPlotControls()
@@ -79,7 +138,7 @@ public partial class RealtimeChartView : UserControl
         MultiPlotPanel.Children.Clear();
         vm.MultiPlotControls.Clear();
 
-        if (!vm.IsMultiPlotMode) return;
+        if (!vm.IsMultiPlotMode) { vm.RefreshPlot(); return; }
 
         // 统计可见通道数和启用的计算通道数
         int visibleChannelCount = vm.ChannelConfigs.Count(c => c.Visible);
@@ -92,6 +151,8 @@ public partial class RealtimeChartView : UserControl
         int columnCount = Math.Max(1, vm.MultiPlotColumnCount);
         int rowCount = (int)Math.Ceiling((double)totalPlotCount / columnCount);
         double plotHeight = vm.MultiPlotHeight;
+        if ((vm.IsChartHeightAutomatic || vm.WorkspaceLayout.IsFocused) && PlotArea.ActualHeight > 0)
+            plotHeight = Math.Max(150, (PlotArea.ActualHeight - 8) / rowCount);
 
         // 创建网格布局
         var grid = new System.Windows.Controls.Grid();
@@ -163,6 +224,7 @@ public partial class RealtimeChartView : UserControl
         }
 
         MultiPlotPanel.Children.Add(grid);
+        vm.RefreshPlot();
     }
 
     private void OnPlotMouseWheel(object sender, MouseWheelEventArgs e)

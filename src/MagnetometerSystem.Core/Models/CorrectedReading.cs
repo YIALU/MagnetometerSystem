@@ -18,7 +18,7 @@ public class CorrectedReading
     /// <summary>原始时间戳</summary>
     public DateTime Timestamp { get; set; }
 
-    /// <summary>校正配置 ID</summary>
+    /// <summary>改正版本键（配置、映射及参数指纹）；兼容旧记录中的单配置 ID。</summary>
     public string CorrectionProfileId { get; set; } = "";
 
     /// <summary>校正后的通道值</summary>
@@ -38,26 +38,31 @@ public class CorrectedReading
     /// </summary>
     /// <param name="original">原始读数</param>
     /// <param name="correctedValues">校正后的通道值</param>
-    /// <param name="correctionProfileId">校正配置 ID</param>
+    /// <param name="correctionProfileId">改正版本键，或旧记录的单配置 ID</param>
     /// <returns>校正读数实例</returns>
     public static CorrectedReading FromOriginal(
         MagnetometerReading original,
         double[] correctedValues,
         string correctionProfileId)
     {
+        ArgumentNullException.ThrowIfNull(original);
+        ArgumentNullException.ThrowIfNull(correctedValues);
+        if (correctedValues.Length != original.ChannelValues.Length || correctedValues.Any(v => !double.IsFinite(v)))
+            throw new ArgumentException("改正结果必须保留全部原始通道，并且只能包含有限数值。", nameof(correctedValues));
         var result = new CorrectedReading
         {
             OriginalReadingId = original.Id,
             SessionId = original.SessionId,
             Timestamp = original.Timestamp,
             CorrectionProfileId = correctionProfileId,
-            CorrectedValues = correctedValues,
+            CorrectedValues = (double[])correctedValues.Clone(),
             IsOrthogonalityCorrected = true,
             CorrectedAt = DateTime.UtcNow
         };
 
-        // 对三轴及以上通道数计算总场
-        if (correctedValues.Length >= 3)
+        // 仅兼容布局明确的旧三轴设备；任意协议必须显式定义总场计算通道。
+        if ((original.SensorType == SensorType.TriaxialFluxgate && correctedValues.Length == 3) ||
+            (original.SensorType == SensorType.DualTriaxialFluxgate && correctedValues.Length == 6))
         {
             result.CorrectedTotalField = Math.Sqrt(
                 correctedValues[0] * correctedValues[0] +

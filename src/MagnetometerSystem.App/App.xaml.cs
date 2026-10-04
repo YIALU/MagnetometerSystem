@@ -111,6 +111,7 @@ public partial class App : Application
             {
                 if (loadedSettings != null)
                 {
+                    mainVm.WorkspaceLayout.Restore(loadedSettings.WorkbenchPanels);
                     if (loadedSettings.ChartRefreshRate > 0)
                         mainVm.RealtimeChartVM.RefreshRate = loadedSettings.ChartRefreshRate;
                     if (!string.IsNullOrEmpty(loadedSettings.DefaultPortName))
@@ -177,6 +178,7 @@ public partial class App : Application
         settings.DefaultBaudRate = mainVm.ConnectionVM.BaudRate;
         settings.DefaultIpAddress = mainVm.ConnectionVM.IpAddress;
         settings.DefaultPort = mainVm.ConnectionVM.Port;
+        settings.WorkbenchPanels = mainVm.WorkspaceLayout.GetPersistedPanels();
         await configService.SaveSettingsAsync(settings);
     }
 

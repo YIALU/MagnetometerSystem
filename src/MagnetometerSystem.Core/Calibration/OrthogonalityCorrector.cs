@@ -32,43 +32,76 @@ public class OrthogonalityCorrector
         OrthogonalityParams firstGroup, OrthogonalityParams? secondGroup,
         MagnetometerReading reading)
     {
+        ArgumentNullException.ThrowIfNull(reading);
+        ArgumentNullException.ThrowIfNull(firstGroup);
         // 仅对三轴和双三轴传感器有效
         if (reading.SensorType != SensorType.TriaxialFluxgate &&
             reading.SensorType != SensorType.DualTriaxialFluxgate)
             return reading;
 
-        if (reading.ChannelValues.Length < 3)
-            return reading;
+        var expectedCount = reading.SensorType == SensorType.DualTriaxialFluxgate ? 6 : 3;
+        if (reading.ChannelValues.Length != expectedCount)
+            throw new ArgumentException("通道布局不明确，请显式选择要改正的三个通道。");
+        return ApplyToReading(firstGroup, secondGroup, reading, [0, 1, 2],
+            secondGroup != null && expectedCount == 6 ? [3, 4, 5] : null);
+    }
 
-        var values = (double[])reading.ChannelValues.Clone();
-
-        // 第一组三轴 (通道 0, 1, 2)
-        var c1 = firstGroup.Apply(values[0], values[1], values[2]);
-        values[0] = c1[0];
-        values[1] = c1[1];
-        values[2] = c1[2];
-
-        // 双三轴第二组 (通道 3, 4, 5)
-        if (reading.SensorType == SensorType.DualTriaxialFluxgate
-            && values.Length >= 6 && secondGroup != null)
+    /// <summary>按显式索引改正三通道组，保留温度等未选中通道和最初原始值。</summary>
+    public MagnetometerReading ApplyToReading(OrthogonalityParams firstGroup,
+        OrthogonalityParams? secondGroup, MagnetometerReading reading,
+        IReadOnlyList<int> firstChannels, IReadOnlyList<int>? secondChannels = null)
+    {
+        ArgumentNullException.ThrowIfNull(reading);
+        ArgumentNullException.ThrowIfNull(firstGroup);
+        firstGroup.Validate();
+        ValidateChannels(firstChannels, reading.ChannelValues.Length);
+        if ((secondGroup is null) != (secondChannels is null))
+            throw new ArgumentException("第二组参数与通道映射必须同时提供。");
+        if (secondChannels != null)
         {
-            var c2 = secondGroup.Apply(values[3], values[4], values[5]);
-            values[3] = c2[0];
-            values[4] = c2[1];
-            values[5] = c2[2];
+            secondGroup!.Validate();
+            ValidateChannels(secondChannels, reading.ChannelValues.Length);
+            if (firstChannels.Intersect(secondChannels).Any())
+                throw new ArgumentException("两组正交度通道不能重叠。");
         }
+        var result = reading.DeepClone();
+        result.OriginalChannelValues ??= (double[])reading.ChannelValues.Clone();
+        ApplyGroup(firstGroup, firstChannels, result.ChannelValues);
+        if (secondChannels != null)
+            ApplyGroup(secondGroup!, secondChannels, result.ChannelValues);
+        result.IsOrthogonalityCorrected = true;
+        return result;
+    }
 
-        // 创建新的不可变实例，不修改原始 reading
-        return new MagnetometerReading
+    private static void ValidateChannels(IReadOnlyList<int> channels, int count)
+    {
+        if (channels is not { Count: 3 } || channels.Distinct().Count() != 3 ||
+            channels.Any(i => i < 0 || i >= count))
+            throw new ArgumentException("正交度改正需要三个不重复且有效的通道索引。");
+    }
+
+    private static void ApplyGroup(OrthogonalityParams parameters, IReadOnlyList<int> channels, double[] values)
+    {
+        var corrected = parameters.Apply(values[channels[0]], values[channels[1]], values[channels[2]]);
+        for (var i = 0; i < 3; i++) values[channels[i]] = corrected[i];
+    }
+
+    public Task<BatchCorrectionResult> ApplyBatchAsync(OrthogonalityParams firstGroup,
+        OrthogonalityParams? secondGroup, IReadOnlyList<MagnetometerReading> readings,
+        IReadOnlyList<int> firstChannels, IReadOnlyList<int>? secondChannels = null,
+        IProgress<int>? progress = null, CancellationToken cancellationToken = default)
+    {
+        return Task.Run(() =>
         {
-            Id = reading.Id,
-            Timestamp = reading.Timestamp,
-            SessionId = reading.SessionId,
-            SensorType = reading.SensorType,
-            ChannelValues = values,
-            IsCalibrated = reading.IsCalibrated,
-            IsOrthogonalityCorrected = true
-        };
+            var result = new List<MagnetometerReading>(readings.Count);
+            foreach (var reading in readings)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                result.Add(ApplyToReading(firstGroup, secondGroup, reading, firstChannels, secondChannels));
+                progress?.Report(result.Count * 100 / readings.Count);
+            }
+            return new BatchCorrectionResult { CorrectedReadings = result, ProcessedCount = result.Count };
+        }, cancellationToken);
     }
 
     /// <summary>

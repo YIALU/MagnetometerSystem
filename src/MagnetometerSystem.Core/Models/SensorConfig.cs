@@ -6,7 +6,7 @@ namespace MagnetometerSystem.Core.Models;
 public class SensorConfig
 {
     /// <summary>传感器类型</summary>
-    public SensorType Type { get; set; }
+    public SensorType Type { get; set; } = SensorType.Generic;
 
     /// <summary>
     /// 采样率 (Hz)。
@@ -37,7 +37,7 @@ public class SensorConfig
         SensorType.TriaxialFluxgate => 3,
         SensorType.DualTriaxialFluxgate => 6,
         SensorType.ProtonMagnetometer => 1,
-        _ => 1
+        _ => 0
     };
 
     /// <summary>通道名称（优先使用覆盖值，否则根据传感器类型确定）</summary>
@@ -47,7 +47,7 @@ public class SensorConfig
         SensorType.TriaxialFluxgate => ["X", "Y", "Z"],
         SensorType.DualTriaxialFluxgate => ["X1", "Y1", "Z1", "X2", "Y2", "Z2"],
         SensorType.ProtonMagnetometer => ["Total"],
-        _ => ["CH0"]
+        _ => []
     };
 
     /// <summary>协议类型标识（如 "ASCII_CSV", "BINARY_FRAME"）</summary>
@@ -60,18 +60,10 @@ public class SensorConfig
     public string? SerialNumber { get; set; }
 
     /// <summary>允许的最大采样率 (Hz)</summary>
-    public double MaxSampleRate => Type switch
-    {
-        SensorType.ProtonMagnetometer => 10.0,
-        _ => 500.0
-    };
+    public double MaxSampleRate => double.MaxValue;
 
     /// <summary>允许的最小采样率 (Hz)</summary>
-    public double MinSampleRate => Type switch
-    {
-        SensorType.ProtonMagnetometer => 0.1,
-        _ => 0.1
-    };
+    public double MinSampleRate => double.Epsilon;
 
     /// <summary>预设采样率列表</summary>
     public static readonly double[] PresetSampleRates =
@@ -80,6 +72,6 @@ public class SensorConfig
     /// <summary>验证采样率是否在合法范围内</summary>
     public bool ValidateSampleRate()
     {
-        return SampleRate >= MinSampleRate && SampleRate <= MaxSampleRate;
+        return double.IsFinite(SampleRate) && SampleRate > 0;
     }
 }

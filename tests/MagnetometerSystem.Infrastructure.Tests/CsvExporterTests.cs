@@ -195,8 +195,7 @@ public class CsvExporterTests : IAsyncLifetime
             progressValues.Add(value);
             // The exporter calls IProgress synchronously after writing rows. Cancel here rather
             // than racing a timer against machine speed. The output must already exist on disk.
-            Assert.True(File.Exists(_csvPath));
-            Assert.True(new FileInfo(_csvPath).Length > 0);
+            AssertTemporaryExportExists();
             cts.Cancel();
         });
 
@@ -206,6 +205,7 @@ public class CsvExporterTests : IAsyncLifetime
         Assert.Equal(cancellationProgress, Assert.Single(progressValues));
         Assert.True(cts.IsCancellationRequested);
         Assert.False(File.Exists(_csvPath));
+        Assert.Empty(TemporaryExportFiles());
         // Cancellation deletes only the incomplete export, leaving the stored session intact.
         Assert.Equal(readingCount, (await _storageService.GetReadingsAsync(sessionId)).Count);
     }
@@ -236,7 +236,8 @@ public class CsvExporterTests : IAsyncLifetime
         var progress = new InlineProgress<double>(value =>
         {
             Assert.Equal(1.0, value);
-            outputCreated = File.Exists(_csvPath) && new FileInfo(_csvPath).Length > 0;
+            AssertTemporaryExportExists();
+            outputCreated = true;
             cts.Cancel();
         });
 
@@ -245,6 +246,19 @@ public class CsvExporterTests : IAsyncLifetime
 
         Assert.True(outputCreated);
         Assert.False(File.Exists(_csvPath));
+        Assert.Empty(TemporaryExportFiles());
+    }
+
+    private string[] TemporaryExportFiles() => Directory.GetFiles(
+        Path.GetDirectoryName(_csvPath)!, Path.GetFileName(_csvPath) + ".*.tmp");
+
+    private void AssertTemporaryExportExists()
+    {
+        // The workbench exports atomically: cancellation cleans only the staged
+        // file and must not replace the destination before completion.
+        Assert.False(File.Exists(_csvPath));
+        var staged = Assert.Single(TemporaryExportFiles());
+        Assert.True(new FileInfo(staged).Length > 0);
     }
 
     private sealed class InlineProgress<T>(Action<T> report) : IProgress<T>

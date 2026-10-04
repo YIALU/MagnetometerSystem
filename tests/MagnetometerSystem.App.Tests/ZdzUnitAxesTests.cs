@@ -1,4 +1,3 @@
-using System.Reflection;
 using MagnetometerSystem.App.ViewModels;
 using MagnetometerSystem.Core.Models;
 using MagnetometerSystem.Core.Services;
@@ -27,12 +26,12 @@ public class ZdzUnitAxesTests
         vm.ChannelConfigs.Move(20, 0);
         var start = DateTime.Now;
         for (int i = 0; i < 4; i++)
-            bus.PublishReading(new MagnetometerReading
+            bus.PublishProcessedReading(new MagnetometerReading
             {
                 Timestamp = start.AddMilliseconds(i * 10),
                 ChannelValues = Enumerable.Range(0, 21).Select(ch => ch * 1000.0 + i).ToArray(),
             });
-        Render(vm);
+        vm.RefreshPlot();
         var lines = vm.PlotControl.Plot.GetPlottables().OfType<ScottPlot.Plottables.Scatter>().ToArray();
         Assert.Equal(21, lines.Length);
         if (!autoScale)
@@ -57,14 +56,11 @@ public class ZdzUnitAxesTests
         Assert.Equal("设备单位", lines[17].Axes.YAxis.Label.Text);
         Assert.Equal("m", lines[20].Axes.YAxis.Label.Text);
         foreach (var config in vm.ChannelConfigs) config.Visible = config.Unit == "nT";
-        Render(vm);
+        vm.RefreshPlot();
         Assert.Equal(9, vm.PlotControl.Plot.GetPlottables().OfType<ScottPlot.Plottables.Scatter>().Count());
         Assert.Single(vm.PlotControl.Plot.GetPlottables().OfType<ScottPlot.Plottables.Scatter>().Select(s => s.Axes.YAxis).Distinct());
         bus.PublishAcquisitionStopped();
         await WpfTestHost.PumpAsync();
     });
 
-    private static void Render(RealtimeChartViewModel vm) =>
-        typeof(RealtimeChartViewModel).GetMethod("OnRenderTick", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .Invoke(vm, new object?[] { null, EventArgs.Empty });
 }

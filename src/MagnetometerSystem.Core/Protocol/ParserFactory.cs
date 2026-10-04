@@ -12,6 +12,16 @@ public static class ParserFactory
     /// </summary>
     public static IDataParser Create(ProtocolConfig config)
     {
+        // 显式指定的专用解析器优先于 Category 分发（固有协议帧格式无法用可配置解析器表达时）
+        if (config.ParserKind != ParserKind.Auto)
+        {
+            return config.ParserKind switch
+            {
+                ParserKind.Ctmbs3X2000 => new Ctmbs3X2000Parser(config),
+                _ => new ConfigurableAsciiParser(config),
+            };
+        }
+
         return config.Category switch
         {
             ProtocolCategory.Ascii => new ConfigurableAsciiParser(config),

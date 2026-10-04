@@ -45,6 +45,8 @@ public class FrameSegment : INotifyPropertyChanged
     /// <summary>显示名称（如 "X通道"、"帧头"）</summary>
     public string Name { get; set; } = "";
 
+    public string Unit { get; set; } = "nT";
+
     /// <summary>该段占用字节数</summary>
     private int _byteCount;
     public int ByteCount
@@ -109,9 +111,6 @@ public class FrameSegment : INotifyPropertyChanged
     }
 
     // ---- DataField 专用 ----
-
-    /// <summary>通道物理单位。</summary>
-    public string Unit { get; set; } = "nT";
 
     /// <summary>数据类型</summary>
     private FieldDataType _dataType = FieldDataType.Float;

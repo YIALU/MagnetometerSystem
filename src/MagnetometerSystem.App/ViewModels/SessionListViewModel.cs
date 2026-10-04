@@ -27,11 +27,41 @@ public partial class SessionListViewModel : ObservableObject
     // ---- 读数缓冲 ----
     private readonly List<MagnetometerReading> _readingBuffer = new(500);
     private readonly object _bufferLock = new();
-    private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
-    private bool _acceptingReadings;
     private DateTime _lastFlushTime = DateTime.MinValue;
     private const int FlushBatchSize = 500;
     private const int FlushIntervalMs = 200;
+    private System.Threading.Timer? _flushTimer;
+    private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
+    private bool _acceptingReadings;
+    private int _storageFaulted;
+    private long _sessionGeneration;
+    private long _savedBaseline;
+    private long _acceptedReadingCount;
+    private int _readingCountUiPending;
+
+    [ObservableProperty] private string _storageStatus = "就绪";
+    [ObservableProperty] private string? _storageError;
+    [ObservableProperty] private long _pendingReadingCount;
+    [ObservableProperty] private long _savedReadingCount;
+    [ObservableProperty] private string _firstCorrectionChannels = "";
+    [ObservableProperty] private string _secondCorrectionChannels = "";
+    [ObservableProperty] private DateTime? _exportStartTime;
+    [ObservableProperty] private DateTime? _exportEndTime;
+    [ObservableProperty] private string _exportChannelIndices = "";
+    [ObservableProperty] private ExportDataSource _exportSource = ExportDataSource.Raw;
+    [ObservableProperty] private bool _exportIncludeUnits = true;
+    [ObservableProperty] private bool _exportIncludeHeader = true;
+    [ObservableProperty] private int? _exportDecimalPlaces;
+    public ObservableCollection<CorrectionVersionOption> AvailableCorrectionVersions { get; } = new();
+    [ObservableProperty] private CorrectionVersionOption? _selectedCorrectionVersion;
+    [ObservableProperty] private string _correctionVersionsStatus = "";
+    private string? _correctionVersionSessionId;
+    private long _correctionVersionsLoad;
+    public sealed record CorrectionVersionOption(string Id)
+    {
+        public string DisplayName => OrthogonalityCorrectionSnapshot.DisplayName(Id);
+    }
+    public ExportDataSource[] ExportSources { get; } = Enum.GetValues<ExportDataSource>();
 
     // ---- 当前采集的传感器/连接配置（用于创建会话） ----
     private SensorConfig? _currentSensorConfig;
@@ -43,6 +73,43 @@ public partial class SessionListViewModel : ObservableObject
     // ---- 选中项 ----
     [ObservableProperty]
     private SessionInfo? _selectedSession;
+
+    partial void OnSelectedSessionChanged(SessionInfo? value)
+    {
+        AvailableCorrectionVersions.Clear();
+        SelectedCorrectionVersion = null;
+        _correctionVersionSessionId = null;
+        _ = RefreshCorrectionVersionsAsync();
+    }
+
+    [RelayCommand]
+    public async Task RefreshCorrectionVersionsAsync()
+    {
+        var request = ++_correctionVersionsLoad;
+        var sessionId = SelectedSession?.Id;
+        CorrectionVersionsStatus = "";
+        if (sessionId == null) return;
+        try
+        {
+            var versions = await _storageService.GetCorrectionVersionIdsAsync(sessionId);
+            if (request != _correctionVersionsLoad || SelectedSession?.Id != sessionId) return;
+            var previous = SelectedCorrectionVersion?.Id;
+            AvailableCorrectionVersions.Clear();
+            foreach (var id in versions) AvailableCorrectionVersions.Add(new(id));
+            SelectedCorrectionVersion = AvailableCorrectionVersions.FirstOrDefault(v => v.Id == previous)
+                ?? (AvailableCorrectionVersions.Count == 1 ? AvailableCorrectionVersions[0] : null);
+            _correctionVersionSessionId = sessionId;
+            CorrectionVersionsStatus = versions.Count == 0 ? "此会话尚无改正结果" : "";
+        }
+        catch (Exception ex)
+        {
+            if (request != _correctionVersionsLoad || SelectedSession?.Id != sessionId) return;
+            AvailableCorrectionVersions.Clear();
+            SelectedCorrectionVersion = null;
+            _correctionVersionSessionId = null;
+            CorrectionVersionsStatus = $"读取改正版本失败：{ex.Message}";
+        }
+    }
 
     // ---- 搜索/筛选 ----
     [ObservableProperty]
@@ -71,9 +138,6 @@ public partial class SessionListViewModel : ObservableObject
     [ObservableProperty]
     private long _activeSessionReadingCount;
 
-    [ObservableProperty]
-    private string? _storageError;
-
     // ---- 批量校正 ----
     [ObservableProperty]
     private ObservableCollection<OrthogonalityParams> _availableProfiles = new();
@@ -81,7 +145,7 @@ public partial class SessionListViewModel : ObservableObject
     [ObservableProperty]
     private OrthogonalityParams? _selectedCorrectionProfile;
 
-    /// <summary>双三轴第二组正交度配置（仅双三轴传感器会话使用）</summary>
+    /// <summary>可选的第二组三通道正交度配置。</summary>
     [ObservableProperty]
     private OrthogonalityParams? _selectedCorrectionProfileSecond;
 
@@ -120,8 +184,10 @@ public partial class SessionListViewModel : ObservableObject
         // ActiveSessionId 已就绪，消除启动丢数据窗口。
         _dataBus.AcquisitionStarting += OnAcquisitionStartingAsync;
         _dataBus.AcquisitionStopping += OnAcquisitionStoppingAsync;
-        _dataBus.ReadingReceived += OnReadingReceived;
         _dataBus.AcquisitionFaulted += OnAcquisitionFaulted;
+        _dataBus.RegisterAcquisitionReadingAcceptor(TryAcceptReading);
+        _dataBus.ReadingReceived += OnReadingReceived;
+        _storageService.WriteStatusChanged += OnStorageWriteStatusChanged;
 
         // 会话列表延迟加载：等用户首次导航到此页面时再加载
     }
@@ -146,128 +212,113 @@ public partial class SessionListViewModel : ObservableObject
         await _lifecycleGate.WaitAsync();
         try
         {
-            if (_dataBus.IsPlaybackMode)
-                throw new InvalidOperationException("请先停止历史回放，再开始实时采集。");
             if (ActiveSessionId != null)
-                throw new InvalidOperationException("上一个会话尚未完成保存，请先重试停止采集。");
+                throw new InvalidOperationException("上一个会话尚未完成保存，请先重试存储。");
             _currentSensorConfig = config;
             var name = $"采集_{DateTime.Now:yyyy-MM-dd_HH:mm:ss}";
-            var sessionId = await _storageService.StartSessionAsync(name, config, new ConnectionConfig());
+            var connectionConfig = _dataBus.AcquisitionConnectionConfig ?? new ConnectionConfig();
+            _savedBaseline = _storageService.WriteStatus.SavedReadings;
+            var sessionId = await _storageService.StartSessionAsync(name, config, connectionConfig);
+
             OnUi(() =>
             {
                 ActiveSessionId = sessionId;
                 IsRecording = true;
                 ActiveSessionReadingCount = 0;
+                SavedReadingCount = 0;
                 StorageError = null;
+                StorageStatus = "自动保存中";
             });
-            lock (_bufferLock) _acceptingReadings = true;
-            _dataBus.PublishSessionStarted(sessionId);
+            long generation = Interlocked.Increment(ref _sessionGeneration);
+            Interlocked.Exchange(ref _storageFaulted, 0);
+            lock (_bufferLock)
+            {
+                Interlocked.Exchange(ref _acceptedReadingCount, 0);
+                _acceptingReadings = true;
+            }
+            _flushTimer = new System.Threading.Timer(_ => _ = ObserveWriteAsync(FlushBufferAsync, generation),
+                null, FlushIntervalMs, FlushIntervalMs);
             await RefreshSessionsAsync();
-        }
-        finally { _lifecycleGate.Release(); }
-    }
-
-    private async Task OnAcquisitionStoppingAsync()
-    {
-        await _lifecycleGate.WaitAsync();
-        try
-        {
-            lock (_bufferLock) _acceptingReadings = false;
-            OnUi(() => IsRecording = false);
-            await CompleteSessionAsync();
         }
         catch (Exception ex)
         {
-            OnUi(() => StorageError = ex.Message);
+            System.Diagnostics.Trace.TraceError($"创建会话失败: {ex.Message}");
+            // 重新抛出：让连接流程在打开端口之前中止。否则数据库不可用时仍会打开连接，
+            // 而 ActiveSessionId 为 null 导致读数被静默丢弃。
             throw;
         }
         finally { _lifecycleGate.Release(); }
     }
 
-    private async Task CompleteSessionAsync()
-    {
-        if (ActiveSessionId is not { } sessionId) return;
-        await FlushBufferAsync();
-        await _storageService.WaitForPendingWritesAsync();
-        await _storageService.EndSessionAsync(sessionId);
-        _dataBus.PublishSessionEnded(sessionId);
-        OnUi(() => { ActiveSessionId = null; StorageError = null; });
-        _currentSensorConfig = null;
-        await RefreshSessionsAsync();
-    }
+    private Task OnAcquisitionStoppingAsync() => StopSessionAsync();
 
-    private void OnAcquisitionFaulted(Exception error)
+    private async Task StopSessionAsync(string? expectedSessionId = null)
     {
-        string? sessionId;
-        lock (_bufferLock)
-        {
-            _acceptingReadings = false;
-            sessionId = ActiveSessionId;
-        }
-        if (sessionId == null) return;
-        void Report()
-        {
-            if (ActiveSessionId != sessionId) return;
-            IsRecording = false;
-            StorageError = $"保存失败，采集已停止: {error.Message}；未保存读数仍在内存中，修复原因后点击“重试保存”。";
-        }
-        // Never block the writer's fault notification on a busy dispatcher.
-        if (Application.Current?.Dispatcher is { } dispatcher && !dispatcher.CheckAccess())
-            dispatcher.BeginInvoke(Report);
-        else Report();
-    }
-
-    [RelayCommand]
-    private async Task RetryStorageAsync()
-    {
-        string? recoveredSessionId = null;
         await _lifecycleGate.WaitAsync();
         try
         {
-            lock (_bufferLock)
+            if (expectedSessionId != null && ActiveSessionId != expectedSessionId) return;
+            lock (_bufferLock) _acceptingReadings = false;
+            var flushTimer = Interlocked.Exchange(ref _flushTimer, null);
+            if (flushTimer != null) await flushTimer.DisposeAsync();
+            OnUi(() => IsRecording = false);
+            if (ActiveSessionId is not { } sessionId) return;
+            await FlushBufferAsync();
+            await _storageService.WaitForPendingWritesAsync();
+            await _storageService.EndSessionAsync(sessionId);
+            OnUi(() =>
             {
-                if (_acceptingReadings) return;
-            }
-            await _storageService.RetryPendingWritesAsync();
-            var sessionId = ActiveSessionId;
-            await CompleteSessionAsync();
-            recoveredSessionId = sessionId;
+                ActiveSessionId = null;
+                StorageStatus = "全部保存完成";
+            });
+            _currentSensorConfig = null;
+            await RefreshSessionsAsync();
         }
-        catch (Exception ex) { OnUi(() => StorageError = ex.Message); }
+        catch (Exception ex)
+        {
+            ReportStorageError(ex);
+            throw;
+        }
         finally { _lifecycleGate.Release(); }
-
-        if (recoveredSessionId == null) return;
-        // Connection stop takes its gate before the session gate, so never notify while holding ours.
-        try { await _dataBus.PublishAcquisitionRecoveryCompletedAsync(recoveredSessionId); }
-        catch (Exception ex) { OnUi(() => StorageError = ex.Message); }
     }
 
-    private static void OnUi(Action action)
+    private bool TryAcceptReading(MagnetometerReading reading)
     {
-        if (Application.Current?.Dispatcher is { } dispatcher && !dispatcher.CheckAccess()) dispatcher.Invoke(action);
-        else action();
+        // DataBus holds its short acceptance gate here. Only transfer ownership to the session buffer.
+        lock (_bufferLock)
+        {
+            if (!_acceptingReadings || ActiveSessionId == null) return false;
+            var snapshot = reading.DeepClone();
+            snapshot.SessionId = ActiveSessionId;
+            _readingBuffer.Add(snapshot);
+            Interlocked.Increment(ref _acceptedReadingCount);
+            return true;
+        }
     }
 
     private void OnReadingReceived(MagnetometerReading reading)
     {
+        // Ordinary observers run outside the DataBus acceptance gate. Do not accept the reading again.
+        if (Interlocked.Exchange(ref _readingCountUiPending, 1) == 0)
+        {
+            void UpdateCount()
+            {
+                Interlocked.Exchange(ref _readingCountUiPending, 0);
+                ActiveSessionReadingCount = Interlocked.Read(ref _acceptedReadingCount);
+            }
+            if (Application.Current?.Dispatcher is { } dispatcher && !dispatcher.CheckAccess())
+                dispatcher.BeginInvoke(UpdateCount);
+            else UpdateCount();
+        }
+        bool flush;
+        long generation;
         lock (_bufferLock)
         {
-            if (!_acceptingReadings || ActiveSessionId == null || _dataBus.IsPlaybackMode) return;
-            reading.SessionId = ActiveSessionId;
-            ActiveSessionReadingCount++;
-            _readingBuffer.Add(reading);
-
-            if (_readingBuffer.Count >= FlushBatchSize ||
-                (DateTime.UtcNow - _lastFlushTime).TotalMilliseconds >= FlushIntervalMs)
-            {
-                var batch = _readingBuffer.ToList();
-                _readingBuffer.Clear();
-                _lastFlushTime = DateTime.UtcNow;
-
-                // 异步写入，不阻塞事件处理
-                _ = _storageService.SaveReadingsAsync(batch);
-            }
+            generation = _sessionGeneration;
+            flush = _readingBuffer.Count >= FlushBatchSize ||
+                (_readingBuffer.Count > 0 && (DateTime.UtcNow - _lastFlushTime).TotalMilliseconds >= FlushIntervalMs);
         }
+        if (flush) _ = ObserveWriteAsync(FlushBufferAsync, generation);
     }
 
     private Task FlushBufferAsync()
@@ -283,6 +334,90 @@ public partial class SessionListViewModel : ObservableObject
         return _storageService.SaveReadingsAsync(batch);
     }
 
+    private static void OnUi(Action action)
+    {
+        if (Application.Current?.Dispatcher is { } dispatcher && !dispatcher.CheckAccess())
+            dispatcher.Invoke(action);
+        else action();
+    }
+
+    private async Task ObserveWriteAsync(Func<Task> write, long generation)
+    {
+        try { await write().ConfigureAwait(false); }
+        catch (Exception ex)
+        {
+            if (generation == Volatile.Read(ref _sessionGeneration) && Volatile.Read(ref _storageFaulted) == 0)
+                ReportStorageError(ex, generation);
+        }
+    }
+
+    private void OnAcquisitionFaulted(Exception error)
+    {
+        if (ActiveSessionId == null || Interlocked.Exchange(ref _storageFaulted, 1) != 0) return;
+        // This must run on the faulting thread, even while the UI is busy.
+        lock (_bufferLock) _acceptingReadings = false;
+        // Keep the timer reference: the stop path awaits DisposeAsync so any
+        // callback already taking a tail batch must finish enqueueing it first.
+        try { _flushTimer?.Change(Timeout.Infinite, Timeout.Infinite); }
+        catch (ObjectDisposedException) { }
+        ReportStorageError(error);
+    }
+
+    private void ReportStorageError(Exception ex, long? writeGeneration = null)
+    {
+        long generation = writeGeneration ?? Volatile.Read(ref _sessionGeneration);
+        if (generation != Volatile.Read(ref _sessionGeneration)) return;
+        if (Volatile.Read(ref _acceptingReadings)) _dataBus.PublishAcquisitionFault(ex);
+        // 不同步阻塞后台写入线程：UI 可能正在等待停止/退出。
+        void Update()
+        {
+            if (generation != Volatile.Read(ref _sessionGeneration) || ActiveSessionId == null) return;
+            IsRecording = false;
+            StorageError = ex.Message;
+            StorageStatus = "保存失败 · 采集已停止，数据待重试";
+        }
+        if (Application.Current?.Dispatcher is { } dispatcher) dispatcher.BeginInvoke(Update);
+        else Update();
+    }
+
+    private void OnStorageWriteStatusChanged(StorageWriteStatus ignored)
+    {
+        void Update()
+        {
+            var status = _storageService.WriteStatus;
+            SavedReadingCount = Math.Max(0, status.SavedReadings - _savedBaseline);
+            lock (_bufferLock) PendingReadingCount = status.PendingReadings + _readingBuffer.Count;
+            StorageError = status.LastError;
+            StorageStatus = status.LastError != null ? "保存失败 · 数据待重试"
+                : PendingReadingCount > 0 ? "正在保存" : IsRecording ? "自动保存中" : "全部保存完成";
+        }
+        if (Application.Current?.Dispatcher is { } dispatcher) dispatcher.BeginInvoke(Update);
+        else Update();
+    }
+
+    [RelayCommand]
+    private async Task RetryStorageAsync()
+    {
+        long generation = Volatile.Read(ref _sessionGeneration);
+        string? recoveredSessionId = ActiveSessionId;
+        try
+        {
+            await _storageService.RetryPendingWritesAsync();
+            if (generation != Volatile.Read(ref _sessionGeneration)) return;
+            await FlushBufferAsync();
+            if (generation != Volatile.Read(ref _sessionGeneration)) return;
+            if (!Volatile.Read(ref _acceptingReadings) && recoveredSessionId != null)
+            {
+                await StopSessionAsync(recoveredSessionId);
+                // StopSessionAsync has released _lifecycleGate. The connection
+                // owner can now take its gate and complete the same session's stop.
+                await _dataBus.PublishAcquisitionRecoveryCompletedAsync(recoveredSessionId);
+            }
+            OnStorageWriteStatusChanged(_storageService.WriteStatus);
+        }
+        catch (Exception ex) { ReportStorageError(ex, generation); }
+    }
+
     // ---- 命令 ----
 
     [RelayCommand]
@@ -292,7 +427,7 @@ public partial class SessionListViewModel : ObservableObject
         {
             var sessions = await _storageService.GetSessionsAsync();
 
-            Application.Current?.Dispatcher.Invoke(() =>
+            OnUi(() =>
             {
                 Sessions.Clear();
                 foreach (var session in sessions)
@@ -359,6 +494,11 @@ public partial class SessionListViewModel : ObservableObject
     private async Task DeleteSessionAsync(SessionInfo? session)
     {
         if (session == null) return;
+        if (session.Id == ActiveSessionId)
+        {
+            MessageBox.Show("该会话仍在采集或等待保存，请先断开连接并完成保存。", "无法删除", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
 
         var result = MessageBox.Show(
             $"确定要删除会话 '{session.Name}' 及其 {session.TotalReadings} 条数据吗？此操作不可恢复。",
@@ -410,8 +550,15 @@ public partial class SessionListViewModel : ObservableObject
         {
             var options = new ExportOptions
             {
-                IncludeHeader = true,
-                IncludeCalibratedData = false
+                IncludeHeader = ExportIncludeHeader,
+                IncludeCalibratedData = ExportSource != ExportDataSource.Raw,
+                IncludeUnits = ExportIncludeUnits,
+                Source = ExportSource,
+                CorrectionProfileId = _correctionVersionSessionId == session.Id ? SelectedCorrectionVersion?.Id : null,
+                StartTime = ExportStartTime,
+                EndTime = ExportEndTime,
+                DecimalPlaces = ExportDecimalPlaces,
+                ChannelIndices = string.IsNullOrWhiteSpace(ExportChannelIndices) ? null : ParseIndices(ExportChannelIndices)
             };
 
             await _dataExporter.ExportAsync(session.Id, dialog.FileName, options);
@@ -457,14 +604,19 @@ public partial class SessionListViewModel : ObservableObject
     {
         if (session == null || SelectedCorrectionProfile == null) return;
 
-        // 双三轴必须同时选第二组
-        bool isDual = session.ChannelCount >= 6;
-        if (isDual && SelectedCorrectionProfileSecond == null)
+        var isDual = SelectedCorrectionProfileSecond != null;
+        int[] firstChannels;
+        int[]? secondChannels;
+        OrthogonalityCorrectionSnapshot snapshot;
+        try
         {
-            MessageBox.Show(
-                "该会话为双三轴（6 通道）数据，请同时选择第二组正交度配置。\n" +
-                "否则后 3 通道（X2/Y2/Z2）不会被校正。",
-                "缺少配置", MessageBoxButton.OK, MessageBoxImage.Warning);
+            firstChannels = CorrectionMapping(FirstCorrectionChannels, session, false, SelectedCorrectionProfile);
+            secondChannels = isDual ? CorrectionMapping(SecondCorrectionChannels, session, true, SelectedCorrectionProfileSecond!) : null;
+            snapshot = new OrthogonalityCorrectionSnapshot(SelectedCorrectionProfile, SelectedCorrectionProfileSecond, firstChannels, secondChannels);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(ex.Message, "请确认改正通道", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
 
@@ -506,37 +658,33 @@ public partial class SessionListViewModel : ObservableObject
                 return;
             }
 
-            // 2. 删除此配置的旧校正结果
-            await _storageService.DeleteCorrectedReadingsAsync(session.Id, SelectedCorrectionProfile.Id);
-
             // 3. 批量应用校正（双三轴时传第二组）
             var progress = new Progress<int>(processed =>
             {
                 CorrectionProgress = processed;
             });
 
-            var batchResult = await _orthogonalityCorrector.ApplyBatchAsync(
-                SelectedCorrectionProfile, SelectedCorrectionProfileSecond, readings, progress);
-
-            // 4. 映射为 CorrectedReading 并保存
-            var correctedReadings = new List<CorrectedReading>();
-            for (int i = 0; i < readings.Count; i++)
+            var correctedReadings = await snapshot.ApplyBatchAsync(_orthogonalityCorrector, readings, progress);
+            await _storageService.SaveCorrectedReadingsAsync(correctedReadings);
+            if (SelectedSession?.Id == session.Id)
             {
-                var cr = CorrectedReading.FromOriginal(
-                    readings[i],
-                    batchResult.CorrectedReadings[i].ChannelValues,
-                    SelectedCorrectionProfile.Id);
-                correctedReadings.Add(cr);
+                await RefreshCorrectionVersionsAsync();
+                if (_correctionVersionSessionId == session.Id)
+                    SelectedCorrectionVersion = AvailableCorrectionVersions.FirstOrDefault(v => v.Id == snapshot.VersionId);
             }
 
-            await _storageService.SaveCorrectedReadingsAsync(correctedReadings);
-
             // 5. 导出 CSV 到用户选定的路径
-            await WriteCorrectedCsvAsync(csvDialog.FileName, session, batchResult.CorrectedReadings);
+            await _dataExporter.ExportAsync(session.Id, csvDialog.FileName, new ExportOptions
+            {
+                Source = ExportDataSource.Corrected,
+                CorrectionProfileId = snapshot.VersionId,
+                IncludeUnits = true,
+                IncludeCalibratedData = true
+            });
 
             CorrectionProgress = 100;
             MessageBox.Show(
-                $"校正完成！\n处理 {batchResult.ProcessedCount} 条数据。\n" +
+                $"校正完成！\n处理 {correctedReadings.Count} 条数据。\n" +
                 $"• 数据库：已保存到 corrected_readings 表\n" +
                 $"• 文件：{csvDialog.FileName}",
                 "成功",
@@ -553,34 +701,28 @@ public partial class SessionListViewModel : ObservableObject
         }
     }
 
-    private static async Task WriteCorrectedCsvAsync(
-        string path, SessionInfo session, IReadOnlyList<MagnetometerReading> corrected)
+    private static int[] ParseIndices(string value)
     {
-        using var stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None);
-        using var writer = new StreamWriter(stream, new System.Text.UTF8Encoding(true)) { NewLine = "\r\n" };
+        return value.Split([',', '，', ';', ' '], StringSplitOptions.RemoveEmptyEntries)
+            .Select(s => int.Parse(s, System.Globalization.CultureInfo.InvariantCulture)).ToArray();
+    }
 
-        // Header
-        var headerParts = new List<string> { "Timestamp" };
-        for (int i = 0; i < session.ChannelCount; i++)
-        {
-            headerParts.Add(i < session.ChannelNames.Length ? session.ChannelNames[i] : $"CH{i}");
-        }
-        await writer.WriteLineAsync(string.Join(",", headerParts));
-
-        // Rows
-        foreach (var r in corrected)
-        {
-            var sb = new System.Text.StringBuilder();
-            sb.Append(r.Timestamp.ToString("yyyy-MM-dd HH:mm:ss.fff",
-                System.Globalization.CultureInfo.InvariantCulture));
-            for (int i = 0; i < session.ChannelCount && i < r.ChannelValues.Length; i++)
-            {
-                sb.Append(',');
-                sb.Append(r.ChannelValues[i].ToString("R",
-                    System.Globalization.CultureInfo.InvariantCulture));
-            }
-            await writer.WriteLineAsync(sb.ToString());
-        }
+    private static int[] CorrectionMapping(string text, SessionInfo session, bool second, OrthogonalityParams profile)
+    {
+        int[] indices;
+        if (!string.IsNullOrWhiteSpace(text)) indices = ParseIndices(text);
+        else if (session.SensorType is SensorType.TriaxialFluxgate or SensorType.DualTriaxialFluxgate)
+            indices = second ? [3, 4, 5] : [0, 1, 2];
+        else throw new ArgumentException("请明确填写要改正的三个磁场通道索引，例如 0,1,2；不会自动把温度等辅助通道用于正交度改正。");
+        if (indices.Length != 3 || indices.Distinct().Count() != 3 || indices.Any(i => i < 0 || i >= session.ChannelCount))
+            throw new ArgumentException("正交度改正需要三个不重复且有效的通道索引。");
+        if (session.ChannelUnits.Length != session.ChannelCount)
+            throw new ArgumentException("会话缺少完整通道单位，不能确认改正参数适用。");
+        var units = indices.Select(i => OrthogonalityParams.CanonicalUnit(session.ChannelUnits[i])).ToArray();
+        if (units.Distinct().Count() != 1 || string.IsNullOrEmpty(units[0]))
+            throw new ArgumentException("所选三个通道必须使用相同的磁场单位，不能包含温度等辅助通道。");
+        profile.ValidateUnit(units[0]);
+        return indices;
     }
 
     // ---- 筛选 ----
@@ -591,7 +733,8 @@ public partial class SessionListViewModel : ObservableObject
 
         // 名称搜索
         if (!string.IsNullOrWhiteSpace(SearchText) &&
-            !session.Name.Contains(SearchText, StringComparison.OrdinalIgnoreCase))
+            !session.Name.Contains(SearchText, StringComparison.OrdinalIgnoreCase) &&
+            !(session.Notes?.Contains(SearchText, StringComparison.OrdinalIgnoreCase) ?? false))
             return false;
 
         // 日期范围

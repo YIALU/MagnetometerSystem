@@ -3,204 +3,194 @@ using MagnetometerSystem.Core.Models;
 
 namespace MagnetometerSystem.Core.Communication;
 
-/// <summary>
-/// TCP 设备连接实现，支持自动重连
-/// </summary>
-public class TcpDeviceConnection : IDeviceConnection
+/// <summary>TCP 字节流连接。生命周期与写出分别串行化；断开会取消在途 I/O。</summary>
+public sealed class TcpDeviceConnection : IDeviceConnection
 {
+    private readonly SemaphoreSlim _lifecycle = new(1, 1);
+    private readonly SemaphoreSlim _sendGate = new(1, 1);
     private TcpClient? _client;
     private NetworkStream? _stream;
-    private CancellationTokenSource? _readCts;
+    private CancellationTokenSource? _runCts;
     private Task? _readTask;
+    private int _connected;
     private bool _disposed;
-    private int _reconnectAttempts;
 
     public event EventHandler<byte[]>? DataReceived;
     public event EventHandler<string>? ErrorOccurred;
     public event EventHandler<bool>? ConnectionStateChanged;
-
-    public bool IsConnected => _client?.Connected == true;
+    public bool IsConnected => Volatile.Read(ref _connected) != 0;
     public ConnectionConfig Config { get; }
 
     public TcpDeviceConnection(ConnectionConfig config)
     {
         Config = config ?? throw new ArgumentNullException(nameof(config));
+        if (config.Port is < 1 or > 65535 || string.IsNullOrWhiteSpace(config.IpAddress)
+            || config.ConnectTimeoutMs <= 0 || config.SendTimeoutMs <= 0
+            || config.ReconnectDelayMs <= 0 || config.MaxReconnectAttempts < 0)
+            throw new ArgumentException("TCP 地址、端口或超时参数无效", nameof(config));
     }
 
     public async Task ConnectAsync(CancellationToken ct = default)
     {
-        if (IsConnected)
-            return;
-
+        await _lifecycle.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            _client = new TcpClient();
-
-            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            timeoutCts.CancelAfter(Config.ConnectTimeoutMs);
-
-            await _client.ConnectAsync(Config.IpAddress, Config.Port, timeoutCts.Token);
-            _stream = _client.GetStream();
-            _reconnectAttempts = 0;
-
-            ConnectionStateChanged?.Invoke(this, true);
-
-            // 启动后台读取任务
-            _readCts = new CancellationTokenSource();
-            _readTask = Task.Run(() => ReadLoopAsync(_readCts.Token), _readCts.Token);
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (IsConnected) return;
+            if (_readTask is { IsCompleted: false })
+                throw new InvalidOperationException("TCP 正在重连，请先停止当前连接");
+            _runCts?.Dispose();
+            _runCts = new CancellationTokenSource();
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _runCts.Token);
+            try
+            {
+                await OpenClientAsync(linked.Token).ConfigureAwait(false);
+                var token = _runCts.Token;
+                _readTask = Task.Run(() => ReadLoopAsync(token), CancellationToken.None);
+            }
+            catch
+            {
+                CloseClient();
+                _runCts.Dispose();
+                _runCts = null;
+                throw;
+            }
         }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            ErrorOccurred?.Invoke(this, $"TCP 连接失败: {ex.Message}");
-            throw;
-        }
+        finally { _lifecycle.Release(); }
     }
 
-    public async Task DisconnectAsync()
+    private async Task OpenClientAsync(CancellationToken ct)
     {
-        if (_readCts != null)
+        var client = new TcpClient { NoDelay = true };
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(Config.ConnectTimeoutMs);
+        try
         {
-            await _readCts.CancelAsync();
-            if (_readTask != null)
-            {
-                try { await _readTask; }
-                catch (OperationCanceledException) { }
-            }
-            _readCts.Dispose();
-            _readCts = null;
-            _readTask = null;
+            await client.ConnectAsync(Config.IpAddress, Config.Port, timeout.Token).ConfigureAwait(false);
+            ct.ThrowIfCancellationRequested();
+            _client = client;
+            _stream = client.GetStream();
+            SetConnected(true);
         }
-
-        _stream?.Dispose();
-        _stream = null;
-
-        if (_client != null)
-        {
-            _client.Close();
-            _client.Dispose();
-            _client = null;
-        }
-
-        ConnectionStateChanged?.Invoke(this, false);
+        catch { client.Dispose(); throw; }
     }
 
     public async Task SendAsync(byte[] data, CancellationToken ct = default)
     {
-        if (_stream == null || !IsConnected)
-            throw new InvalidOperationException("TCP 未连接");
+        ArgumentNullException.ThrowIfNull(data);
+        var lifetime = _runCts;
+        var requestedStream = _stream;
+        if (lifetime is null || !IsConnected) throw new InvalidOperationException("TCP 未连接");
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct, lifetime.Token);
+        timeout.CancelAfter(Config.SendTimeoutMs);
+        await _sendGate.WaitAsync(timeout.Token).ConfigureAwait(false);
+        try
+        {
+            var stream = _stream;
+            if (stream is null || !IsConnected || !ReferenceEquals(lifetime, _runCts) || !ReferenceEquals(stream, requestedStream))
+                throw new InvalidOperationException("TCP 连接已改变，命令未发送");
+            await stream.WriteAsync(data, timeout.Token).ConfigureAwait(false);
+        }
+        finally { _sendGate.Release(); }
+    }
 
-        await _stream.WriteAsync(data, ct);
+    public async Task DisconnectAsync()
+    {
+        await _lifecycle.WaitAsync().ConfigureAwait(false);
+        try { await StopAsync().ConfigureAwait(false); }
+        finally { _lifecycle.Release(); }
+    }
+
+    private async Task StopAsync()
+    {
+        var lifetime = _runCts;
+        if (lifetime != null) await lifetime.CancelAsync().ConfigureAwait(false);
+        CloseClient();
+        if (_readTask != null)
+        {
+            try { await _readTask.ConfigureAwait(false); }
+            catch (OperationCanceledException) { }
+            _readTask = null;
+        }
+        await _sendGate.WaitAsync().ConfigureAwait(false);
+        try { _runCts = null; lifetime?.Dispose(); }
+        finally { _sendGate.Release(); }
     }
 
     private async Task ReadLoopAsync(CancellationToken ct)
     {
-        var buffer = new byte[4096];
-
-        while (!ct.IsCancellationRequested)
-        {
-            try
-            {
-                if (_stream == null || !IsConnected)
-                {
-                    // 尝试重连
-                    if (Config.AutoReconnect)
-                    {
-                        await TryReconnectAsync(ct);
-                    }
-                    else
-                    {
-                        break;
-                    }
-                    continue;
-                }
-
-                int bytesRead = await _stream.ReadAsync(buffer, 0, buffer.Length, ct);
-
-                if (bytesRead == 0)
-                {
-                    // 远端关闭连接
-                    ErrorOccurred?.Invoke(this, "TCP 连接被远端关闭");
-                    ConnectionStateChanged?.Invoke(this, false);
-                    _stream?.Dispose();
-                    _stream = null;
-                    _client?.Dispose();
-                    _client = null;
-                    continue;
-                }
-
-                var data = new byte[bytesRead];
-                Array.Copy(buffer, data, bytesRead);
-                DataReceived?.Invoke(this, data);
-            }
-            catch (OperationCanceledException)
-            {
-                break;
-            }
-            catch (IOException ex)
-            {
-                ErrorOccurred?.Invoke(this, $"TCP 读取错误: {ex.Message}");
-                ConnectionStateChanged?.Invoke(this, false);
-                _stream?.Dispose();
-                _stream = null;
-                _client?.Dispose();
-                _client = null;
-
-                if (!Config.AutoReconnect) break;
-            }
-            catch (Exception ex)
-            {
-                ErrorOccurred?.Invoke(this, $"TCP 异常: {ex.Message}");
-                await Task.Delay(100, ct);
-            }
-        }
-    }
-
-    /// <summary>
-    /// 指数退避重连
-    /// </summary>
-    private async Task TryReconnectAsync(CancellationToken ct)
-    {
-        if (Config.MaxReconnectAttempts > 0 && _reconnectAttempts >= Config.MaxReconnectAttempts)
-        {
-            ErrorOccurred?.Invoke(this, $"已达到最大重连次数 ({Config.MaxReconnectAttempts})，停止重连");
-            return;
-        }
-
-        _reconnectAttempts++;
-        int delayMs = Math.Min(1000 * (1 << Math.Min(_reconnectAttempts, 5)), 30000); // 最长 30 秒
-
-        ErrorOccurred?.Invoke(this, $"将在 {delayMs}ms 后尝试第 {_reconnectAttempts} 次重连...");
-        await Task.Delay(delayMs, ct);
-
+        var buffer = new byte[16 * 1024];
+        var attempts = 0;
         try
         {
-            _client?.Dispose();
-            _client = new TcpClient();
-
-            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            timeoutCts.CancelAfter(Config.ConnectTimeoutMs);
-
-            await _client.ConnectAsync(Config.IpAddress, Config.Port, timeoutCts.Token);
-            _stream = _client.GetStream();
-            _reconnectAttempts = 0;
-
-            ConnectionStateChanged?.Invoke(this, true);
+            while (!ct.IsCancellationRequested)
+            {
+                var stream = _stream;
+                if (stream is null)
+                {
+                    if (!Config.AutoReconnect) break;
+                    if (Config.MaxReconnectAttempts > 0 && attempts >= Config.MaxReconnectAttempts)
+                    {
+                        ReportError($"已达到最大重连次数 ({Config.MaxReconnectAttempts})，请停止后重新连接");
+                        break;
+                    }
+                    int delay = (int)Math.Min((long)Config.ReconnectDelayMs * (1L << Math.Min(attempts, 5)), 30000);
+                    attempts++;
+                    ReportError($"TCP 断开，{delay}ms 后第 {attempts} 次重连");
+                    await Task.Delay(delay, ct).ConfigureAwait(false);
+                    try { await OpenClientAsync(ct).ConfigureAwait(false); attempts = 0; }
+                    catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
+                    catch (Exception ex) { ReportError($"TCP 重连失败: {ex.Message}"); }
+                    continue;
+                }
+                try
+                {
+                    int count = await stream.ReadAsync(buffer, ct).ConfigureAwait(false);
+                    if (count == 0) throw new IOException("远端关闭连接");
+                    RaiseSafely(DataReceived, buffer[..count]);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
+                catch (Exception ex) when (ex is IOException or SocketException or ObjectDisposedException)
+                {
+                    if (!ct.IsCancellationRequested) ReportError($"TCP 读取中断: {ex.Message}");
+                    CloseClient();
+                }
+            }
         }
-        catch (Exception ex)
-        {
-            ErrorOccurred?.Invoke(this, $"重连失败: {ex.Message}");
-        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+        finally { CloseClient(); }
+    }
+
+    private void CloseClient()
+    {
+        Interlocked.Exchange(ref _stream, null)?.Dispose();
+        Interlocked.Exchange(ref _client, null)?.Dispose();
+        SetConnected(false);
+    }
+    private void SetConnected(bool connected)
+    {
+        if (Interlocked.Exchange(ref _connected, connected ? 1 : 0) != (connected ? 1 : 0))
+            RaiseSafely(ConnectionStateChanged, connected);
+    }
+    private void ReportError(string message) => RaiseSafely(ErrorOccurred, message);
+    private void RaiseSafely<T>(EventHandler<T>? handlers, T value)
+    {
+        if (handlers is null) return;
+        foreach (EventHandler<T> handler in handlers.GetInvocationList())
+            try { handler(this, value); }
+            catch (Exception ex) { System.Diagnostics.Trace.TraceError($"TCP 事件处理失败: {ex}"); }
     }
 
     public async ValueTask DisposeAsync()
     {
-        if (_disposed) return;
-        _disposed = true;
-        await DisconnectAsync();
+        await _lifecycle.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (_disposed) return;
+            _disposed = true;
+            await StopAsync().ConfigureAwait(false);
+        }
+        finally { _lifecycle.Release(); }
         GC.SuppressFinalize(this);
     }
 }

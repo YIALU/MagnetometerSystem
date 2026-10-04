@@ -28,6 +28,8 @@ public partial class MainWindow : Window
         if (_closeReady)
         {
             vm.OrthoCalibVM.Cleanup();
+            vm.HistoryPlaybackVM.Dispose();
+            vm.DeviceCommandVM.Dispose();
             vm.RealtimeChartVM.Dispose();
             return;
         }

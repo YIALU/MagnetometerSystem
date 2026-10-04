@@ -15,6 +15,10 @@ public static class WpfTestHost
             try
             {
                 var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+                app.Resources.MergedDictionaries.Add(new ResourceDictionary
+                {
+                    Source = new Uri("/MagnetometerSystem.App;component/Themes/Workspace.xaml", UriKind.Relative),
+                });
                 SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
                 ready.SetResult(Dispatcher.CurrentDispatcher);
                 Dispatcher.Run();

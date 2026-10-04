@@ -12,10 +12,15 @@ public class ChannelDisplayConfig : INotifyPropertyChanged
     /// <summary>通道名称</summary>
     public string Name { get; set; } = "Channel";
 
-    public string Unit { get; set; } = "nT";
-
     /// <summary>通道索引</summary>
     public int ChannelIndex { get; set; }
+    public string Unit { get; set; } = "nT";
+    private string _latestValue = "—";
+    public string LatestValue
+    {
+        get => _latestValue;
+        set { if (_latestValue == value) return; _latestValue = value; PropertyChanged?.Invoke(this, new(nameof(LatestValue))); }
+    }
 
     /// <summary>显示偏移（仅影响图表显示，不影响原始数据和运算）</summary>
     private double _displayOffset;
@@ -48,7 +53,12 @@ public class ChannelDisplayConfig : INotifyPropertyChanged
     }
 
     /// <summary>曲线颜色（ARGB hex 字符串，如 "#FF0000FF"）</summary>
-    public string ColorHex { get; set; } = "#FF0000FF";
+    private string _colorHex = "#FF0000FF";
+    public string ColorHex
+    {
+        get => _colorHex;
+        set { if (_colorHex == value) return; _colorHex = value; PropertyChanged?.Invoke(this, new(nameof(ColorHex))); }
+    }
 
     /// <summary>
     /// 预设颜色列表。默认色按 index % Length 回绕分配，因此长度决定了
