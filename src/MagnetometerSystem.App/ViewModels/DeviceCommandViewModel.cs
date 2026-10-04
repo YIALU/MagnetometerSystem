@@ -764,18 +764,21 @@ public partial class DeviceCommandViewModel : ObservableObject, IDisposable
             _responseBuffer.AddRange(data);
             if (_responseBuffer.Count > 65536) _responseBuffer.RemoveRange(0, _responseBuffer.Count - 65536);
             var received = _responseBuffer.ToArray().AsSpan();
-            var rejected = _pendingCtmbs && received.IndexOf("$err\n"u8) >= 0;
+            // CTMBS also pushes $err when no realtime data is available. Without
+            // a request identifier it cannot be evidence that this command failed.
+            var ambiguousError = _pendingCtmbs && received.IndexOf("$err\n"u8) >= 0;
             var acknowledged = _pendingCtmbs && received.IndexOf("$ack\n"u8) >= 0;
             var matched = _expectedResponse is { Length: > 0 } && received.IndexOf(_expectedResponse) >= 0;
-            if (rejected || acknowledged || matched)
+            if (acknowledged || matched)
             {
                 _pendingConnection = null;
                 _responseCts?.Cancel();
-                var message = rejected ? "设备返回 ERR：命令被拒绝"
-                    : acknowledged ? "收到设备 ACK；执行结果以设备协议为准"
+                var message = acknowledged ? "收到设备 ACK；执行结果以设备协议为准"
                     : "收到匹配响应；执行结果以设备协议为准";
                 SetResponseStatus(_responseVersion, message);
             }
+            else if (ambiguousError)
+                SetResponseStatus(_responseVersion, "收到 CTMBS ERR（也可能为无数据推送）；继续等待命令响应，执行结果未确认");
             else if (_responseBuffer.Count == data.Length)
                 SetResponseStatus(_responseVersion, "已收到数据，尚未匹配命令响应；执行结果未确认");
         }

@@ -33,6 +33,8 @@ public partial class SessionListViewModel : ObservableObject
     private System.Threading.Timer? _flushTimer;
     private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
     private bool _acceptingReadings;
+    private int _storageFaulted;
+    private long _sessionGeneration;
     private long _savedBaseline;
 
     [ObservableProperty] private string _storageStatus = "就绪";
@@ -134,6 +136,7 @@ public partial class SessionListViewModel : ObservableObject
         // ActiveSessionId 已就绪，消除启动丢数据窗口。
         _dataBus.AcquisitionStarting += OnAcquisitionStartingAsync;
         _dataBus.AcquisitionStopping += OnAcquisitionStoppingAsync;
+        _dataBus.AcquisitionFaulted += OnAcquisitionFaulted;
         _dataBus.ReadingReceived += OnReadingReceived;
         _storageService.WriteStatusChanged += OnStorageWriteStatusChanged;
 
@@ -177,8 +180,10 @@ public partial class SessionListViewModel : ObservableObject
                 StorageError = null;
                 StorageStatus = "自动保存中";
             });
+            long generation = Interlocked.Increment(ref _sessionGeneration);
+            Interlocked.Exchange(ref _storageFaulted, 0);
             lock (_bufferLock) _acceptingReadings = true;
-            _flushTimer = new System.Threading.Timer(_ => _ = ObserveWriteAsync(FlushBufferAsync),
+            _flushTimer = new System.Threading.Timer(_ => _ = ObserveWriteAsync(FlushBufferAsync, generation),
                 null, FlushIntervalMs, FlushIntervalMs);
             await RefreshSessionsAsync();
         }
@@ -198,8 +203,8 @@ public partial class SessionListViewModel : ObservableObject
         try
         {
             lock (_bufferLock) _acceptingReadings = false;
-            if (_flushTimer != null) await _flushTimer.DisposeAsync();
-            _flushTimer = null;
+            var flushTimer = Interlocked.Exchange(ref _flushTimer, null);
+            if (flushTimer != null) await flushTimer.DisposeAsync();
             OnUi(() => IsRecording = false);
             if (ActiveSessionId is not { } sessionId) return;
             await FlushBufferAsync();
@@ -225,7 +230,7 @@ public partial class SessionListViewModel : ObservableObject
     {
         lock (_bufferLock)
         {
-            if (!_acceptingReadings || ActiveSessionId == null) return;
+            if (!Volatile.Read(ref _acceptingReadings) || ActiveSessionId == null) return;
             var snapshot = reading.DeepClone();
             snapshot.SessionId = ActiveSessionId;
             _readingBuffer.Add(snapshot);
@@ -239,7 +244,7 @@ public partial class SessionListViewModel : ObservableObject
                 _lastFlushTime = DateTime.UtcNow;
 
                 // 异步写入，不阻塞事件处理
-                _ = ObserveWriteAsync(() => _storageService.SaveReadingsAsync(batch));
+                _ = ObserveWriteAsync(() => _storageService.SaveReadingsAsync(batch), Volatile.Read(ref _sessionGeneration));
             }
         }
     }
@@ -264,16 +269,41 @@ public partial class SessionListViewModel : ObservableObject
         else action();
     }
 
-    private async Task ObserveWriteAsync(Func<Task> write)
+    private async Task ObserveWriteAsync(Func<Task> write, long generation)
     {
         try { await write().ConfigureAwait(false); }
-        catch (Exception ex) { ReportStorageError(ex); }
+        catch (Exception ex)
+        {
+            if (generation == Volatile.Read(ref _sessionGeneration) && Volatile.Read(ref _storageFaulted) == 0)
+                ReportStorageError(ex, generation);
+        }
     }
 
-    private void ReportStorageError(Exception ex)
+    private void OnAcquisitionFaulted(Exception error)
     {
+        if (ActiveSessionId == null || Interlocked.Exchange(ref _storageFaulted, 1) != 0) return;
+        // This must run on the faulting thread, even while the UI is busy.
+        Volatile.Write(ref _acceptingReadings, false);
+        // Keep the timer reference: the stop path awaits DisposeAsync so any
+        // callback already taking a tail batch must finish enqueueing it first.
+        try { _flushTimer?.Change(Timeout.Infinite, Timeout.Infinite); }
+        catch (ObjectDisposedException) { }
+        ReportStorageError(error);
+    }
+
+    private void ReportStorageError(Exception ex, long? writeGeneration = null)
+    {
+        long generation = writeGeneration ?? Volatile.Read(ref _sessionGeneration);
+        if (generation != Volatile.Read(ref _sessionGeneration)) return;
+        if (Volatile.Read(ref _acceptingReadings)) _dataBus.PublishAcquisitionFault(ex);
         // 不同步阻塞后台写入线程：UI 可能正在等待停止/退出。
-        void Update() { StorageError = ex.Message; StorageStatus = "保存失败 · 数据待重试"; }
+        void Update()
+        {
+            if (generation != Volatile.Read(ref _sessionGeneration) || ActiveSessionId == null) return;
+            IsRecording = false;
+            StorageError = ex.Message;
+            StorageStatus = "保存失败 · 采集已停止，数据待重试";
+        }
         if (Application.Current?.Dispatcher is { } dispatcher) dispatcher.BeginInvoke(Update);
         else Update();
     }
@@ -296,6 +326,7 @@ public partial class SessionListViewModel : ObservableObject
     [RelayCommand]
     private async Task RetryStorageAsync()
     {
+        long generation = Volatile.Read(ref _sessionGeneration);
         try
         {
             await _storageService.RetryPendingWritesAsync();
@@ -303,7 +334,7 @@ public partial class SessionListViewModel : ObservableObject
             if (!IsRecording && ActiveSessionId != null) await OnAcquisitionStoppingAsync();
             OnStorageWriteStatusChanged(_storageService.WriteStatus);
         }
-        catch (Exception ex) { ReportStorageError(ex); }
+        catch (Exception ex) { ReportStorageError(ex, generation); }
     }
 
     // ---- 命令 ----

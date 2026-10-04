@@ -194,6 +194,53 @@ public class ProtocolFlowTests
         finally { bus.PublishConnectionChanged(null); listener.Stop(); }
     });
 
+    [Theory]
+    [InlineData(0)] // Unsolicited ERR alone must expire as unknown.
+    [InlineData(1)] // Fragmented ERR followed later by a fragmented ACK.
+    [InlineData(2)] // ERR and ACK coalesced into the same receive buffer.
+    public Task DeviceCommandVm_CtmbsNoDataPushDoesNotRejectPendingStop(int responseMode) => WpfTestHost.RunAsync(async () =>
+    {
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        await using var connection = new TcpDeviceConnection(new ConnectionConfig
+        { IpAddress = "127.0.0.1", Port = ((IPEndPoint)listener.LocalEndpoint).Port, AutoReconnect = false });
+        var bus = new DataBus();
+        using var vm = new DeviceCommandViewModel(bus, new EmptyCommandConfig()) { ResponseTimeoutMs = 1500 };
+        try
+        {
+            var accept = listener.AcceptTcpClientAsync();
+            bus.PublishConnectionChanged(connection);
+            await connection.ConnectAsync();
+            using var peer = await accept.WaitAsync(TimeSpan.FromSeconds(3));
+            var command = ProtocolConfig.CreateCtmbs3X2000().Commands.SelectMany(g => g.Commands).Single(c => c.Template == "stp");
+            vm.SetProtocolCommands([new CommandGroup { Name = "CTMBS", Commands = [command] }]);
+            vm.SelectedCommand = command;
+            var expected = Ctmbs3X2000FrameBuilder.BuildRequestBytes(command, new Dictionary<string, string>());
+            await vm.SendSelectedCommandCommand.ExecuteAsync(null);
+            var transmitted = new byte[expected.Length];
+            await peer.GetStream().ReadExactlyAsync(transmitted).AsTask().WaitAsync(TimeSpan.FromSeconds(3));
+            Assert.Equal(expected, transmitted);
+            if (responseMode == 2)
+                await peer.GetStream().WriteAsync("$err\n$ack\n"u8.ToArray());
+            else
+            {
+                await peer.GetStream().WriteAsync("$er"u8.ToArray());
+                await peer.GetStream().WriteAsync("r\n"u8.ToArray());
+                await WaitForAsync(() => vm.ResponseStatus.Contains("无数据推送"));
+                Assert.DoesNotContain("拒绝", vm.ResponseStatus);
+                if (responseMode == 1)
+                {
+                    await peer.GetStream().WriteAsync("$a"u8.ToArray());
+                    await peer.GetStream().WriteAsync("ck\n"u8.ToArray());
+                }
+            }
+            await WaitForAsync(() => vm.ResponseStatus.Contains(responseMode == 0 ? "超时" : "收到设备 ACK"));
+            Assert.DoesNotContain("拒绝", vm.ResponseStatus);
+            if (responseMode == 0) Assert.Contains("执行结果未知", vm.ResponseStatus);
+        }
+        finally { bus.PublishConnectionChanged(null); listener.Stop(); }
+    });
+
     [Fact]
     public Task DeviceCommandVm_UnrelatedTelemetryDoesNotConfirmCommandExecution() => WpfTestHost.RunAsync(async () =>
     {

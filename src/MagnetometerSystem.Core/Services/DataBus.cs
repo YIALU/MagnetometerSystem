@@ -59,6 +59,20 @@ public class DataBus
     /// <summary>采集停止</summary>
     public event Action? AcquisitionStopped;
 
+    /// <summary>采集关键消费者失败；同步通知生产端停止接收，再异步清理连接及尾批。</summary>
+    public event Action<Exception>? AcquisitionFaulted;
+
+    public void PublishAcquisitionFault(Exception error)
+    {
+        ArgumentNullException.ThrowIfNull(error);
+        if (AcquisitionFaulted is not { } handlers) return;
+        foreach (Action<Exception> handler in handlers.GetInvocationList())
+        {
+            try { handler(error); }
+            catch (Exception ex) { System.Diagnostics.Trace.TraceError($"采集故障订阅者异常: {ex}"); }
+        }
+    }
+
     /// <summary>数据源停止后，等待存储消费者将尾批落库并结束会话。</summary>
     public event Func<Task>? AcquisitionStopping;
 

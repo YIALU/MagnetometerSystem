@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using MagnetometerSystem.Core.Models;
 using MagnetometerSystem.Core.Protocol;
@@ -291,5 +292,103 @@ public class Ctmbs3X2000ParserTests
         Assert.True(parser.TryParse(out var reading));
         Assert.NotNull(reading);
         Assert.Equal(1.23, reading.ChannelValues[0]);
+    }
+
+    [Theory]
+    [InlineData("$bad")]
+    [InlineData("$ack")]
+    [InlineData("$err")]
+    [InlineData("$$bad")]
+    public void Parse_UnterminatedSimpleResponse_PreservesFollowingDataFrame(string damagedResponse)
+    {
+        byte[] stream = [.. Ascii(damagedResponse), .. Frame(), .. Frame()];
+        var parser = new Ctmbs3X2000Parser(ProtocolConfig.CreateCtmbs3X2000());
+        parser.Feed(stream, 0, stream.Length);
+        Assert.True(parser.TryParse(out var first));
+        Assert.True(parser.TryParse(out var second));
+        Assert.Equal(new[] { 1.23, 2.34, 3.45, 4.56 }, first!.ChannelValues);
+        Assert.Equal(first.ChannelValues, second!.ChannelValues);
+        Assert.False(parser.TryParse(out _));
+        Assert.True(parser.RejectedFrameCount > 0);
+    }
+
+    [Theory]
+    [InlineData("$bad")]
+    [InlineData("$ack")]
+    public void Parse_UnterminatedResponseAcrossFeeds_ResyncsAsSoonAsNewDollarArrives(string damagedResponse)
+    {
+        var parser = new Ctmbs3X2000Parser(ProtocolConfig.CreateCtmbs3X2000());
+        byte[] prefix = Ascii(damagedResponse);
+        parser.Feed(prefix, 0, prefix.Length);
+        Assert.False(parser.TryParse(out _));
+        byte[] frame = Frame();
+        parser.Feed(frame, 0, 1);
+        Assert.False(parser.TryParse(out _));
+        Assert.Equal(1, parser.RejectedFrameCount);
+        for (int i = 1; i < frame.Length - 1; i++)
+        {
+            parser.Feed(frame, i, 1);
+            Assert.False(parser.TryParse(out _));
+        }
+        parser.Feed(frame, frame.Length - 1, 1);
+        Assert.True(parser.TryParse(out var reading));
+        Assert.Equal(1.23, reading!.ChannelValues[0]);
+    }
+
+    [Theory]
+    [InlineData("$ack\n")]
+    [InlineData("$err\n")]
+    public void Parse_ValidSimpleResponseSplitAtEveryByte_DoesNotRejectNextMeasurement(string response)
+    {
+        byte[] stream = [.. Ascii(response), .. Frame()];
+        var parser = new Ctmbs3X2000Parser(ProtocolConfig.CreateCtmbs3X2000());
+        for (int i = 0; i < stream.Length - 1; i++)
+        {
+            parser.Feed(stream, i, 1);
+            Assert.False(parser.TryParse(out _));
+        }
+        parser.Feed(stream, stream.Length - 1, 1);
+        Assert.True(parser.TryParse(out _));
+        Assert.Equal(0, parser.RejectedFrameCount);
+    }
+
+    [Theory]
+    [InlineData("2026-10-05T00:00:01Z", "235959", "2026-10-04T23:59:59Z")]
+    [InlineData("2027-01-01T00:00:02Z", "235958", "2026-12-31T23:59:58Z")]
+    [InlineData("2026-10-04T23:59:59Z", "000001", "2026-10-05T00:00:01Z")]
+    [InlineData("2026-10-04T12:00:01Z", "120000", "2026-10-04T12:00:00Z")]
+    public void Parse_HhmmssUsesDateNearestReceipt(string receivedAt, string hhmmss, string expectedTimestamp)
+    {
+        var clock = new ManualTimeProvider(DateTimeOffset.Parse(receivedAt, CultureInfo.InvariantCulture));
+        var parser = new Ctmbs3X2000Parser(ProtocolConfig.CreateCtmbs3X2000(), clock);
+        byte[] frame = Frame(Payload.Replace("120000", hhmmss));
+        parser.Feed(frame, 0, frame.Length);
+        // Decode scheduling does not replace the packet's actual receipt date.
+        clock.UtcNow = clock.UtcNow.AddDays(1);
+        Assert.True(parser.TryParse(out var reading));
+        Assert.Equal(DateTimeOffset.Parse(expectedTimestamp, CultureInfo.InvariantCulture).UtcDateTime, reading!.Timestamp);
+        Assert.Equal(DateTimeKind.Utc, reading.Timestamp.Kind);
+    }
+
+    [Fact]
+    public void Parse_ConsecutiveFramesAcrossUtcMidnight_StayInTimeOrder()
+    {
+        var clock = new ManualTimeProvider(new DateTimeOffset(2026, 10, 5, 0, 0, 1, TimeSpan.Zero));
+        var parser = new Ctmbs3X2000Parser(ProtocolConfig.CreateCtmbs3X2000(), clock);
+        byte[] delayedPrevious = Frame(Payload.Replace("120000", "235959"));
+        byte[] current = Frame(Payload.Replace("120000", "000000"));
+        byte[] stream = [.. delayedPrevious, .. current];
+        parser.Feed(stream, 0, stream.Length);
+        Assert.True(parser.TryParse(out var previous));
+        Assert.True(parser.TryParse(out var next));
+        Assert.Equal(TimeSpan.FromSeconds(1), next!.Timestamp - previous!.Timestamp);
+        Assert.Equal(new DateTime(2026, 10, 4, 23, 59, 59, DateTimeKind.Utc), previous.Timestamp);
+        Assert.Equal(new DateTime(2026, 10, 5, 0, 0, 0, DateTimeKind.Utc), next.Timestamp);
+    }
+
+    private sealed class ManualTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        public DateTimeOffset UtcNow { get; set; } = utcNow;
+        public override DateTimeOffset GetUtcNow() => UtcNow;
     }
 }

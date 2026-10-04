@@ -33,6 +33,9 @@ public partial class ConnectionViewModel : ObservableObject
     private long _receivedBytes, _parsedCount, _parseErrors;
     private long _lastParserRejectedCount;
     private bool _sessionPrepared;
+    private int _rejectIncomingData;
+    private int _faultStopRequested;
+    private long _acquisitionGeneration;
     private string[] _activeChannelUnits = [];
     private string? _lastReportedError;
 
@@ -169,6 +172,7 @@ public partial class ConnectionViewModel : ObservableObject
         _dataBus = dataBus;
         _orthogonalityCorrector = orthogonalityCorrector;
         _calibrationRepository = calibrationRepository;
+        _dataBus.AcquisitionFaulted += OnAcquisitionFaulted;
 
         // 监听段列表变化，订阅每个段的 PropertyChanged
         ProtocolSegments.CollectionChanged += (s, e) =>
@@ -247,7 +251,10 @@ public partial class ConnectionViewModel : ObservableObject
                 _parser = ParserFactory.Create(protocol);
                 _sensorAdapter = SensorAdapterFactory.Create(sensorConfig);
                 _activeChannelUnits = sensorConfig.ChannelUnits.ToArray();
+                Interlocked.Increment(ref _acquisitionGeneration);
                 _connection = connection;
+                Volatile.Write(ref _rejectIncomingData, 0);
+                Interlocked.Exchange(ref _faultStopRequested, 0);
                 _receivedBytes = _parsedCount = _parseErrors = _lastParserRejectedCount = 0;
             }
             ReceivedByteCount = ParsedReadingCount = ParseErrorCount = 0;
@@ -286,6 +293,37 @@ public partial class ConnectionViewModel : ObservableObject
         finally { IsConnecting = false; _connectionGate.Release(); }
     }
 
+    private void OnAcquisitionFaulted(Exception error)
+    {
+        var failedConnection = _connection;
+        long generation = Volatile.Read(ref _acquisitionGeneration);
+        if (failedConnection == null && !_sessionPrepared) return;
+        // Do not acquire _receiveGate here: a receive callback may currently be
+        // publishing to storage. Every next frame checks this gate without UI work.
+        Volatile.Write(ref _rejectIncomingData, 1);
+        if (Interlocked.Exchange(ref _faultStopRequested, 1) != 0) return;
+        ReportError("保存失败，采集已停止接收；已接收数据保留待重试: " + error.Message, generation);
+        _ = Task.Run(() => StopFaultedAcquisitionAsync(failedConnection, generation));
+    }
+
+    private async Task StopFaultedAcquisitionAsync(IDeviceConnection? failedConnection, long generation)
+    {
+        await _connectionGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            // A delayed fault task must never stop a newer connection/session.
+            if (generation != Volatile.Read(ref _acquisitionGeneration)
+                || !ReferenceEquals(failedConnection, _connection)) return;
+            await DisconnectCoreAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            if (generation == Volatile.Read(ref _acquisitionGeneration))
+                ReportError("采集已停止，未保存数据仍待重试: " + ex.Message, generation);
+        }
+        finally { _connectionGate.Release(); }
+    }
+
     private async Task DisconnectCoreAsync()
     {
         var connection = _connection;
@@ -322,14 +360,14 @@ public partial class ConnectionViewModel : ObservableObject
     {
         lock (_receiveGate)
         {
-            if (!ReferenceEquals(sender, _connection) || _parser == null) return;
+            if (Volatile.Read(ref _rejectIncomingData) != 0 || !ReferenceEquals(sender, _connection) || _parser == null) return;
             _receivedBytes += data.Length;
             _rawDisplayQueue.Enqueue(ShowHex ? BitConverter.ToString(data).Replace("-", " ") : System.Text.Encoding.ASCII.GetString(data));
             while (_rawDisplayQueue.Count > MaxRawDataLines) _rawDisplayQueue.Dequeue();
             try
             {
                 _parser.Feed(data, 0, data.Length);
-                while (_parser.TryParse(out var reading))
+                while (Volatile.Read(ref _rejectIncomingData) == 0 && _parser.TryParse(out var reading))
                 {
                     if (reading is null) continue;
                     var raw = _sensorAdapter?.Process(reading) ?? reading;
@@ -422,11 +460,18 @@ public partial class ConnectionViewModel : ObservableObject
         });
     }
 
-    private void ReportError(string message)
+    private void ReportError(string message, long? faultGeneration = null)
     {
+        long generation = faultGeneration ?? Volatile.Read(ref _acquisitionGeneration);
+        if (generation != Volatile.Read(ref _acquisitionGeneration)) return;
         if (Interlocked.Exchange(ref _lastReportedError, message) == message) return;
         System.Diagnostics.Trace.TraceError(message);
-        OnUi(() => { LastError = message; StatusMessage = message; });
+        OnUi(() =>
+        {
+            if (generation != Volatile.Read(ref _acquisitionGeneration)) return;
+            LastError = message;
+            StatusMessage = message;
+        });
     }
 
     private static void OnUi(Action action)

@@ -18,18 +18,22 @@ public class Ctmbs3X2000Parser : IDataParser, IParserDiagnostics
     public long RejectedFrameCount { get; private set; }
     public string? LastError { get; private set; }
     private readonly ByteRingBuffer _ring = new(131072);
+    private readonly TimeProvider _timeProvider;
+    private DateTime _receivedAtUtc;
 
     private static readonly byte[] AckTail = Encoding.ASCII.GetBytes("\nack\n");
 
-    public Ctmbs3X2000Parser(ProtocolConfig config)
+    public Ctmbs3X2000Parser(ProtocolConfig config, TimeProvider? timeProvider = null)
     {
         // 配置保留以备将来按通道命名/缩放；当前帧格式由协议固定，无须读取 Segments。
         _ = config;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public void Feed(byte[] data, int offset, int count)
     {
         if (count <= 0) return;
+        _receivedAtUtc = _timeProvider.GetUtcNow().UtcDateTime;
         if (count > _ring.FreeSpace)
         {
             _ring.Clear();
@@ -109,13 +113,23 @@ public class Ctmbs3X2000Parser : IDataParser, IParserDiagnostics
         // 第二字节非数字 → 不是 $<L> 帧，按简单响应处理
         if (second is >= (byte)'0' and <= (byte)'9') return false;
 
-        // 找到 '$' 之后的第一个 '\n'
-        int nl = _ring.IndexOf((byte)'\n');
-        if (nl < 0) return false; // 不完整，等更多数据
-
-        // 消费 '$'..'\n'（含）
-        _ring.Skip(nl + 1);
-        return true;
+        // 简单响应中不会包含 '$'。先遇到新的帧头说明前一响应损坏，
+        // 必须保留新帧，不能把它的长度行当成旧响应的换行一起消费。
+        for (int i = 1; i < _ring.Count; i++)
+        {
+            if (_ring.Peek(i) == (byte)'$')
+            {
+                _ring.Skip(i);
+                Reject("CTMBS 简单响应缺少结束符，已重新同步");
+                return true;
+            }
+            if (_ring.Peek(i) == (byte)'\n')
+            {
+                _ring.Skip(i + 1);
+                return true;
+            }
+        }
+        return false; // 不完整，等更多数据
     }
 
     // ---- 长度行 ----
@@ -155,7 +169,7 @@ public class Ctmbs3X2000Parser : IDataParser, IParserDiagnostics
 
     // ---- 载荷解析 ----
 
-    private static bool TryDecodePayload(byte[] frame, int digitCount, int len, out MagnetometerReading? reading)
+    private bool TryDecodePayload(byte[] frame, int digitCount, int len, out MagnetometerReading? reading)
     {
         reading = null;
         // frame = '$' + digits + '\n' + (len 字节 = digits+payload) + '\nack\n'
@@ -177,7 +191,7 @@ public class Ctmbs3X2000Parser : IDataParser, IParserDiagnostics
         // 以四个数字结尾。只有 §6 的完整单帧结构才属于实时测量，不能按尾字段猜测。
         var tokens = payload.Split(' ', StringSplitOptions.RemoveEmptyEntries);
         if (tokens.Length != 13
-            || TryParseHhmmss(tokens[0]) is not { } timestamp
+            || TryParseHhmmss(tokens[0], _receivedAtUtc) is not { } timestamp
             || tokens[1].Any(c => char.IsControl(c) || c == '$')
             || tokens[2].Any(c => char.IsControl(c) || c == '$')
             || !IsAsciiDigits(tokens[3])
@@ -201,13 +215,19 @@ public class Ctmbs3X2000Parser : IDataParser, IParserDiagnostics
         return true;
     }
 
-    private static DateTime? TryParseHhmmss(string tok)
+    private static DateTime? TryParseHhmmss(string tok, DateTime receivedAtUtc)
     {
         if (tok.Length != 6 || !IsAsciiDigits(tok)
             || !int.TryParse(tok, NumberStyles.None, CultureInfo.InvariantCulture, out int n)) return null;
         int hh = n / 10000, mm = n / 100 % 100, ss = n % 100;
         if (hh > 23 || mm > 59 || ss > 59) return null;
-        return DateTime.UtcNow.Date + new TimeSpan(hh, mm, ss);
+        // 帧只含 UTC 时分秒；按接收时刻选择最近的日期，避免午夜附近的
+        // 传输延迟或小量时钟偏差把 23:59:59 / 00:00:00 错配到相隔一天。
+        var timestamp = receivedAtUtc.Date + new TimeSpan(hh, mm, ss);
+        var delta = timestamp - receivedAtUtc;
+        if (delta > TimeSpan.FromHours(12)) timestamp = timestamp.AddDays(-1);
+        else if (delta < TimeSpan.FromHours(-12)) timestamp = timestamp.AddDays(1);
+        return timestamp;
     }
 
     private static bool IsAsciiDigits(string value) =>

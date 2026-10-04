@@ -460,11 +460,16 @@ public class SqliteStorageService : IDataStorageService, IDisposable
                 }
                 catch (Exception ex)
                 {
+                    bool firstFailure;
                     lock (_writeLock)
                     {
+                        firstFailure = _writeError == null;
                         _writeError ??= ex;
                         _failedBatches.Add(batch);
                     }
+                    // Stop producers synchronously before scheduling any UI notification.
+                    // Accepted batches remain available for the explicit retry operation.
+                    if (firstFailure) _dataBus.PublishAcquisitionFault(ex);
                     batch.Completion.TrySetException(ex);
                     System.Diagnostics.Trace.TraceError($"保存失败，保留 {batch.Readings.Length} 条待重试: {ex}");
                 }
