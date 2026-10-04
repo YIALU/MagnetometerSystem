@@ -10,7 +10,7 @@ namespace MagnetometerSystem.Core.Protocol;
 /// 帧格式（§3.2(a) 带数据响应 + §6 实时推送）：
 /// <code>$&lt;L&gt;\n&lt;L digits&gt;&lt;payload&gt;\nack\n</code>
 /// 其中 &lt;L&gt; = digits(L) + payload 字节数（自参考，§3.3）。
-/// payload = " HHMMSS 台站码 仪器ID 采样率 4 ch1..ch4码 ch1..ch4值"，取末 4 数值作 D/H/Z/T。
+/// payload = " HHMMSS 台站码 仪器ID 采样率 4 ch1..ch4码 ch1..ch4值"，完整匹配实时数据结构后读取 D/H/Z/T。
 /// 非数据帧（$ack / $err / 登录返回的仪器 ID 尾巴 / 非法长度字段）静默跳过，不产读数。
 /// </summary>
 public class Ctmbs3X2000Parser : IDataParser, IParserDiagnostics
@@ -67,6 +67,19 @@ public class Ctmbs3X2000Parser : IDataParser, IParserDiagnostics
             {
                 if (_ring.Count < beforeLength) { Reject("CTMBS 长度字段无效"); continue; }
                 return false;
+            }
+
+            // 重复长度是帧体的首个锚点。已到达的每个字节立即核验，不能被
+            // "$99999\n" 等坏头拖住，等满其声明的大帧后再吞掉后续合法数据。
+            int bodyStart = 1 + digitCount + 1;
+            bool prefixMatches = len > digitCount;
+            for (int i = 0; prefixMatches && i < digitCount && bodyStart + i < _ring.Count; i++)
+                prefixMatches = _ring.Peek(bodyStart + i) == _ring.Peek(1 + i);
+            if (!prefixMatches)
+            {
+                _ring.Skip(1);
+                Reject("CTMBS 帧体重复长度无效");
+                continue;
             }
 
             // 完整数据帧字节数：'$' + digits + '\n' + L + '\nack\n'
@@ -160,24 +173,29 @@ public class Ctmbs3X2000Parser : IDataParser, IParserDiagnostics
         if (payloadLen <= 0) return false;
         var payload = Encoding.ASCII.GetString(frame, payloadStart, payloadLen);
 
-        // 取末 4 个数值字段作 D/H/Z/T
+        // 普通命令响应与推送共用此包裹格式；状态、网络/通道参数等响应也可能
+        // 以四个数字结尾。只有 §6 的完整单帧结构才属于实时测量，不能按尾字段猜测。
         var tokens = payload.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        if (tokens.Length < 4) return false;
+        if (tokens.Length != 13
+            || TryParseHhmmss(tokens[0]) is not { } timestamp
+            || tokens[1].Any(c => char.IsControl(c) || c == '$')
+            || tokens[2].Any(c => char.IsControl(c) || c == '$')
+            || !IsAsciiDigits(tokens[3])
+            || !int.TryParse(tokens[4], NumberStyles.None, CultureInfo.InvariantCulture, out int channelCount)
+            || channelCount != 4
+            || tokens.Skip(5).Take(4).Any(code => !IsAsciiDigits(code)))
+            return false;
         var values = new double[4];
-        int base0 = tokens.Length - 4;
         for (int i = 0; i < 4; i++)
         {
-            if (!double.TryParse(tokens[base0 + i], NumberStyles.Float,
+            if (!double.TryParse(tokens[9 + i], NumberStyles.Float,
                 CultureInfo.InvariantCulture, out values[i]) || !double.IsFinite(values[i]))
                 return false;
         }
 
-        // 时间戳取首个字段 HHMMSS（UTC）
-        var ts = TryParseHhmmss(tokens[0]) ?? DateTime.UtcNow;
-
         reading = new MagnetometerReading
         {
-            Timestamp = ts,
+            Timestamp = timestamp,
             ChannelValues = values,
         };
         return true;
@@ -185,11 +203,15 @@ public class Ctmbs3X2000Parser : IDataParser, IParserDiagnostics
 
     private static DateTime? TryParseHhmmss(string tok)
     {
-        if (tok.Length != 6 || !int.TryParse(tok, out int n)) return null;
+        if (tok.Length != 6 || !IsAsciiDigits(tok)
+            || !int.TryParse(tok, NumberStyles.None, CultureInfo.InvariantCulture, out int n)) return null;
         int hh = n / 10000, mm = n / 100 % 100, ss = n % 100;
         if (hh > 23 || mm > 59 || ss > 59) return null;
         return DateTime.UtcNow.Date + new TimeSpan(hh, mm, ss);
     }
+
+    private static bool IsAsciiDigits(string value) =>
+        value.Length > 0 && value.All(c => c is >= '0' and <= '9');
 
     private void Reject(string message) { RejectedFrameCount++; LastError = message; }
 }

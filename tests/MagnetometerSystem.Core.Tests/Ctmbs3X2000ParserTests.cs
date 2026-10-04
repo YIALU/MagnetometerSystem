@@ -30,6 +30,134 @@ public class Ctmbs3X2000ParserTests
 
     private static byte[] Ascii(string s) => Encoding.ASCII.GetBytes(s);
 
+    private static byte[] Frame(string payload)
+    {
+        int length = payload.Length + 1;
+        while (length != payload.Length + length.ToString().Length)
+            length = payload.Length + length.ToString().Length;
+        return Ascii($"${length}\n{length}{payload}\nack\n");
+    }
+
+    [Theory]
+    [InlineData(" 20261004120000 1 0 1 1 0 0 0 0 00 25.50")] // ste (§7.1)
+    [InlineData(" 07 04 8 1 0 1 0 1 0 1 0")] // pmr+m (§5.6)
+    [InlineData(" 127.0.0.1 255.255.255.0 127.0.0.2 3 8080 21 81 10.13.64.1 1024 10.5.67.14")]
+    [InlineData(" 1 2 3 4")]
+    public void Parse_CommandDataResponses_DoNotBecomeMeasurements(string payload)
+    {
+        var parser = new Ctmbs3X2000Parser(ProtocolConfig.CreateCtmbs3X2000());
+        byte[] response = Frame(payload);
+        parser.Feed(response, 0, response.Length);
+        Assert.False(parser.TryParse(out var reading));
+        Assert.Null(reading);
+
+        byte[] stream = [.. Frame(), .. response, .. Frame()];
+        parser.Feed(stream, 0, stream.Length);
+        Assert.True(parser.TryParse(out _));
+        Assert.True(parser.TryParse(out var second));
+        Assert.Equal(new[] { 1.23, 2.34, 3.45, 4.56 }, second!.ChannelValues);
+        Assert.False(parser.TryParse(out _));
+    }
+
+    [Theory]
+    [InlineData(0, "240000")]
+    [InlineData(0, "126000")]
+    [InlineData(0, "120060")]
+    [InlineData(0, "-10000")]
+    [InlineData(0, "20261004120000")]
+    [InlineData(1, "SC\n01")]
+    [InlineData(2, "device\ncode")]
+    [InlineData(3, "rate")]
+    [InlineData(4, "3")]
+    [InlineData(5, "ch1")]
+    [InlineData(8, "3129.0")]
+    [InlineData(9, "NaN")]
+    [InlineData(12, "Infinity")]
+    public void Parse_InvalidRealtimeSchema_IsRejectedBeforeFollowingMeasurement(int index, string value)
+    {
+        string[] fields = Payload.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        fields[index] = value;
+        byte[] stream = [.. Frame(" " + string.Join(' ', fields)), .. Frame()];
+        var parser = new Ctmbs3X2000Parser(ProtocolConfig.CreateCtmbs3X2000());
+        parser.Feed(stream, 0, stream.Length);
+        Assert.True(parser.TryParse(out var reading));
+        Assert.Equal(new[] { 1.23, 2.34, 3.45, 4.56 }, reading!.ChannelValues);
+        Assert.False(parser.TryParse(out _));
+        Assert.True(parser.RejectedFrameCount > 0);
+    }
+
+    [Theory]
+    [InlineData(" 1.23 2.34 3.45 4.56")] // dat+5 returns multiple samples, not one live reading.
+    [InlineData(" extra")]
+    public void Parse_ExtraRealtimeFields_DoNotSilentlyPublishLastSample(string suffix)
+    {
+        byte[] bytes = Frame(Payload + suffix);
+        var parser = new Ctmbs3X2000Parser(ProtocolConfig.CreateCtmbs3X2000());
+        parser.Feed(bytes, 0, bytes.Length);
+        Assert.False(parser.TryParse(out _));
+    }
+
+    [Theory]
+    [InlineData("Site-device_A")]
+    [InlineData("123450001")]
+    public void Parse_ValidConfiguredIdentifiersRateCodesAndNumericNotation_AreNotHardCoded(string deviceCode)
+    {
+        byte[] bytes = Frame($" 235959 51001 {deviceCode} 04 04 4001 4002 4003 4004 -1.2e3 +2.5 0 2E-2");
+        var parser = new Ctmbs3X2000Parser(ProtocolConfig.CreateCtmbs3X2000());
+        parser.Feed(bytes, 0, bytes.Length);
+        Assert.True(parser.TryParse(out var reading));
+        Assert.Equal(new[] { -1200d, 2.5, 0, 0.02 }, reading!.ChannelValues);
+        Assert.Equal(new TimeSpan(23, 59, 59), reading.Timestamp.TimeOfDay);
+    }
+
+    [Theory]
+    [InlineData("$99999\n")]
+    [InlineData("$99999\n99")]
+    [InlineData("$72\n73")]
+    [InlineData("$1\n1")]
+    public void Parse_BadRepeatedLength_ImmediatelyResynchronizes(string badPrefix)
+    {
+        byte[] stream = [.. Ascii(badPrefix), .. Frame()];
+        var parser = new Ctmbs3X2000Parser(ProtocolConfig.CreateCtmbs3X2000());
+        parser.Feed(stream, 0, stream.Length);
+        Assert.True(parser.TryParse(out var reading));
+        Assert.Equal(1.23, reading!.ChannelValues[0]);
+        Assert.False(parser.TryParse(out _));
+        Assert.True(parser.RejectedFrameCount > 0);
+    }
+
+    [Fact]
+    public void Parse_SplitRepeatedLength_DetectsFirstMismatchingByteWithoutWaitingForRest()
+    {
+        var parser = new Ctmbs3X2000Parser(ProtocolConfig.CreateCtmbs3X2000());
+        byte[] prefix = Ascii("$99999\n99");
+        parser.Feed(prefix, 0, prefix.Length);
+        Assert.False(parser.TryParse(out _));
+        Assert.Equal(0, parser.RejectedFrameCount);
+        byte[] valid = Frame();
+        parser.Feed(valid, 0, 1); // '$' already disproves the third repeated digit.
+        Assert.False(parser.TryParse(out _));
+        Assert.Equal(1, parser.RejectedFrameCount);
+        parser.Feed(valid, 1, valid.Length - 1);
+        Assert.True(parser.TryParse(out var reading));
+        Assert.Equal(1.23, reading!.ChannelValues[0]);
+    }
+
+    [Fact]
+    public void Parse_ValidFrameSplitAtEveryByte_PreservesPartialRepeatedLength()
+    {
+        var parser = new Ctmbs3X2000Parser(ProtocolConfig.CreateCtmbs3X2000());
+        byte[] bytes = Frame();
+        for (int i = 0; i < bytes.Length - 1; i++)
+        {
+            parser.Feed(bytes, i, 1);
+            Assert.False(parser.TryParse(out _));
+        }
+        parser.Feed(bytes, bytes.Length - 1, 1);
+        Assert.True(parser.TryParse(out _));
+        Assert.Equal(0, parser.RejectedFrameCount);
+    }
+
     [Fact]
     public void Parse_DataFrame_DecodesFourChannels()
     {
