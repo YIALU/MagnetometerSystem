@@ -501,9 +501,9 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
         RenderComputedChannels(plot, windowTimes, channelData, startIdx, count);
 
         ConfigurePlotAxes(plot, xMin, xMax);
-        if (!AutoScaleY)
-            foreach (var axis in _unitAxes.Values.Where(a => !ReferenceEquals(a, plot.Axes.Left)))
-                plot.Axes.AutoScaleY(axis);
+        // 无参 AutoScaleY 只调整左轴；独立单位轴始终按自身数据确定范围。
+        foreach (var axis in _unitAxes.Values.Where(a => !ReferenceEquals(a, plot.Axes.Left)))
+            plot.Axes.AutoScaleY(axis);
         plot.ShowLegend();
         PlotControl.Refresh();
     }
