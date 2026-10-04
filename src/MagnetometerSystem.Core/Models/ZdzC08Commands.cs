@@ -30,13 +30,15 @@ public static class ZdzC08Commands
         [.. items.Select(i => new EnumChoice(i.Label, i.Id))];
 
     /// <summary>无参数裸指令</summary>
-    private static DeviceCommand Raw(string name, string hex, string description) => new()
+    private static DeviceCommand Raw(string name, string hex, string description,
+        bool requiresIsolatedTransfer = false) => new()
     {
         Name = name,
         Description = description,
         Encoding = CommandEncoding.BinaryFrame,
         FrameHeader = hex,
         Checksum = ChecksumKind.None,
+        RequiresIsolatedTransfer = requiresIsolatedTransfer,
     };
 
     /// <summary>形如 CC Fx 00 00 00 XX 的单字节枚举参数指令</summary>
@@ -195,8 +197,9 @@ public static class ZdzC08Commands
                     ],
                 },
                 Raw("读取存储数据", "90 9F",
-                    "须在「选取数据时间」得到正确回显后再发送。设备按 512 字节包连续发送，"
-                    + "以 ED 9F 00 00 结束。批量导出请使用存储导出功能。"),
+                    "暂不可用：需要独立的设备存储下载模式，避免历史记录混入实时会话。"
+                    + "设备按 512 字节包连续发送，以 ED 9F 00 00 结束。",
+                    requiresIsolatedTransfer: true),
                 Raw("停止读取存储", "00 9F", "中断正在进行的存储数据传输"),
             ],
         },

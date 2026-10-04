@@ -144,6 +144,103 @@ public class Ctmbs3X2000ParserTests
         Assert.Equal(1.23, reading!.ChannelValues[0]);
     }
 
+    [Theory]
+    [InlineData("$99999\n99999")]
+    [InlineData("$99999\n99999 interrupted payload")]
+    public void Parse_MatchingOversizedLength_ResynchronizesToFollowingMeasurement(string damagedPrefix)
+    {
+        byte[] stream = [.. Ascii(damagedPrefix), .. Frame(), .. Frame()];
+        var parser = new Ctmbs3X2000Parser(ProtocolConfig.CreateCtmbs3X2000());
+        parser.Feed(stream, 0, stream.Length);
+        Assert.True(parser.TryParse(out var first));
+        Assert.True(parser.TryParse(out var second));
+        Assert.Equal(new[] { 1.23, 2.34, 3.45, 4.56 }, first!.ChannelValues);
+        Assert.Equal(first.ChannelValues, second!.ChannelValues);
+        Assert.False(parser.TryParse(out _));
+        Assert.Equal(1, parser.RejectedFrameCount);
+    }
+
+    [Fact]
+    public void Parse_MatchingOversizedLengthAcrossFeeds_RejectsWhenNewHeaderFirstArrives()
+    {
+        var parser = new Ctmbs3X2000Parser(ProtocolConfig.CreateCtmbs3X2000());
+        byte[] prefix = Ascii("$99999\n99999 partial");
+        parser.Feed(prefix, 0, prefix.Length);
+        Assert.False(parser.TryParse(out _));
+        Assert.Equal(0, parser.RejectedFrameCount);
+        byte[] frame = Frame();
+        parser.Feed(frame, 0, 1);
+        Assert.False(parser.TryParse(out _));
+        Assert.Equal(1, parser.RejectedFrameCount);
+        parser.Feed(frame, 1, frame.Length - 2);
+        Assert.False(parser.TryParse(out _));
+        parser.Feed(frame, frame.Length - 1, 1);
+        Assert.True(parser.TryParse(out var reading));
+        Assert.Equal(1.23, reading!.ChannelValues[0]);
+    }
+
+    [Fact]
+    public void Parse_DamagedLengthWhoseDeclaredSizeIsAvailable_DoesNotConsumeNestedValidFrame()
+    {
+        // A complete bad candidate must not swallow a valid frame merely because
+        // enough unrelated trailing bytes happened to satisfy its length claim.
+        byte[] prefix = Ascii("$200\n200");
+        byte[] frame = Frame();
+        byte[] stream = [.. prefix, .. frame, .. Enumerable.Repeat((byte)' ', 210 - prefix.Length - frame.Length)];
+        var parser = new Ctmbs3X2000Parser(ProtocolConfig.CreateCtmbs3X2000());
+        parser.Feed(stream, 0, stream.Length);
+        Assert.True(parser.TryParse(out var reading));
+        Assert.Equal(1.23, reading!.ChannelValues[0]);
+        Assert.False(parser.TryParse(out _));
+        Assert.Equal(1, parser.RejectedFrameCount);
+    }
+
+    [Theory]
+    [InlineData(" 07 04 8 1 0 1 0 1 0 1 0")]
+    [InlineData(" 127.0.0.1 255.255.255.0 127.0.0.2 3 8080 21 81 10.13.64.1 1024 10.5.67.14")]
+    public void Parse_SplitParameterResponse_IsNotMistakenForNewFrame(string payload)
+    {
+        var parser = new Ctmbs3X2000Parser(ProtocolConfig.CreateCtmbs3X2000());
+        byte[] response = Frame(payload);
+        for (int i = 0; i < response.Length - 1; i++)
+        {
+            parser.Feed(response, i, 1);
+            Assert.False(parser.TryParse(out _));
+            Assert.Equal(0, parser.RejectedFrameCount);
+        }
+        byte[] remainder = [response[^1], .. Frame()];
+        parser.Feed(remainder, 0, remainder.Length);
+        Assert.True(parser.TryParse(out var reading));
+        Assert.Equal(1.23, reading!.ChannelValues[0]);
+        Assert.False(parser.TryParse(out _));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(4)]
+    [InlineData(5)]
+    [InlineData(6)]
+    [InlineData(7)]
+    [InlineData(8)]
+    [InlineData(9)]
+    [InlineData(10)]
+    [InlineData(11)]
+    [InlineData(12)]
+    public void Parse_DollarInsideAnyRealtimeField_IsNotAValidMeasurement(int fieldIndex)
+    {
+        string[] fields = Payload.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        fields[fieldIndex] += "$";
+        byte[] frame = Frame(" " + string.Join(' ', fields));
+        var parser = new Ctmbs3X2000Parser(ProtocolConfig.CreateCtmbs3X2000());
+        parser.Feed(frame, 0, frame.Length);
+        Assert.False(parser.TryParse(out var reading));
+        Assert.Null(reading);
+        Assert.True(parser.RejectedFrameCount > 0);
+    }
+
     [Fact]
     public void Parse_ValidFrameSplitAtEveryByte_PreservesPartialRepeatedLength()
     {

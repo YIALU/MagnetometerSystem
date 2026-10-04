@@ -9,6 +9,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using MagnetometerSystem.Core.Communication;
 using MagnetometerSystem.Core.Models;
+using MagnetometerSystem.Core.Protocol;
 using MagnetometerSystem.Core.Services;
 using MagnetometerSystem.Infrastructure.Configuration;
 
@@ -64,6 +65,7 @@ public partial class DeviceCommandViewModel : ObservableObject, IDisposable
     private IDeviceConnection? _pendingConnection;
     private byte[]? _expectedResponse;
     private bool _pendingCtmbs;
+    private Ctmbs3X2000Parser? _pendingRealtimeParser;
     private readonly List<byte> _responseBuffer = [];
     private long _responseVersion;
     private long _connectionVersion;
@@ -373,7 +375,7 @@ public partial class DeviceCommandViewModel : ObservableObject, IDisposable
                 display = CommandFrameBuilder.ToHexString(data);
             }
 
-            await SendFrameAsync(data, display, SelectedCommand);
+            await SendFrameAsync(data, display, SelectedCommand, IsCtmbsRealtimeRequest(SelectedCommand, values));
         }
         catch (Exception ex)
         {
@@ -441,8 +443,26 @@ public partial class DeviceCommandViewModel : ObservableObject, IDisposable
         await SendFrameAsync(data, display);
     }
 
-    private async Task SendFrameAsync(byte[] data, string display, DeviceCommand? command = null)
+    private static bool IsCtmbsRealtimeRequest(DeviceCommand command, IReadOnlyDictionary<string, string> values)
     {
+        if (command.Encoding != CommandEncoding.CtmbsRequest || command.Template != "dat") return false;
+        var parameters = command.Parameters.Where(p => p.Key != "deviceId").ToArray();
+        if (parameters.Length != 1) return false;
+        var mode = values.TryGetValue(parameters[0].Key, out var value) && !string.IsNullOrEmpty(value)
+            ? value : parameters[0].DefaultValue;
+        return mode == "0";
+    }
+
+    private async Task SendFrameAsync(byte[] data, string display, DeviceCommand? command = null, bool awaitCtmbsRealtime = false)
+    {
+        if (command?.RequiresIsolatedTransfer == true)
+        {
+            const string reason = "此命令需要独立传输，当前尚未实现设备存储下载隔离，暂不可用。";
+            WriteStatus = "未发送: " + reason;
+            LastSendByteCount = 0;
+            AppendToLog("[ERR] " + reason + "\n");
+            return;
+        }
         if (data.Length == 0) throw new ArgumentException("命令不能为空");
         if (ResponseTimeoutMs <= 0) throw new ArgumentException("响应超时必须为正数");
         byte[]? expected = string.IsNullOrEmpty(command?.ExpectedResponse) ? null
@@ -470,6 +490,8 @@ public partial class DeviceCommandViewModel : ObservableObject, IDisposable
                 _pendingConnection = connection;
                 _expectedResponse = expected;
                 _pendingCtmbs = command?.Encoding == CommandEncoding.CtmbsRequest;
+                _pendingRealtimeParser = awaitCtmbsRealtime
+                    ? new Ctmbs3X2000Parser(ProtocolConfig.CreateCtmbs3X2000()) : null;
                 _responseBuffer.Clear();
             }
             WriteStatus = "正在写出...";
@@ -499,6 +521,7 @@ public partial class DeviceCommandViewModel : ObservableObject, IDisposable
             {
                 if (token.IsCancellationRequested || _pendingConnection is null || version != _responseVersion) return;
                 _pendingConnection = null;
+                _pendingRealtimeParser = null;
             }
             SetResponseStatus(version, "等待响应超时；设备执行结果未知");
             EnqueueLog($"[RX {DateTime.Now:HH:mm:ss}] 响应等待超时，未确认设备执行结果\n");
@@ -514,6 +537,7 @@ public partial class DeviceCommandViewModel : ObservableObject, IDisposable
             version = ++_responseVersion;
             _responseCts?.Cancel();
             _pendingConnection = null;
+            _pendingRealtimeParser = null;
             _responseBuffer.Clear();
         }
         SetResponseStatus(version, message);
@@ -769,11 +793,19 @@ public partial class DeviceCommandViewModel : ObservableObject, IDisposable
             var ambiguousError = _pendingCtmbs && received.IndexOf("$err\n"u8) >= 0;
             var acknowledged = _pendingCtmbs && received.IndexOf("$ack\n"u8) >= 0;
             var matched = _expectedResponse is { Length: > 0 } && received.IndexOf(_expectedResponse) >= 0;
-            if (acknowledged || matched)
+            bool realtimeReceived = false;
+            if (_pendingRealtimeParser is { } realtimeParser)
+            {
+                realtimeParser.Feed(data, 0, data.Length);
+                realtimeReceived = realtimeParser.TryParse(out _);
+            }
+            if (acknowledged || matched || realtimeReceived)
             {
                 _pendingConnection = null;
+                _pendingRealtimeParser = null;
                 _responseCts?.Cancel();
-                var message = acknowledged ? "收到设备 ACK；执行结果以设备协议为准"
+                var message = realtimeReceived ? "已收到实时帧；推送已到达，不能据此归因于本次命令"
+                    : acknowledged ? "收到设备 ACK；执行结果以设备协议为准"
                     : "收到匹配响应；执行结果以设备协议为准";
                 SetResponseStatus(_responseVersion, message);
             }
@@ -837,6 +869,7 @@ public partial class DeviceCommandViewModel : ObservableObject, IDisposable
             _responseCts?.Dispose();
             _responseCts = null;
             _pendingConnection = null;
+            _pendingRealtimeParser = null;
         }
     }
 

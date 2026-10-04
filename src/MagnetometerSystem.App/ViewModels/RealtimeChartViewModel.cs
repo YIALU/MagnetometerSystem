@@ -1193,6 +1193,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
         double[] times;
         double[][] channels;
         string[] names;
+        string[] units;
 
         lock (_dataLock)
         {
@@ -1200,7 +1201,8 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
             channels = new double[_channelCount][];
             for (int i = 0; i < _channelCount; i++)
                 channels[i] = _rawChannelBuffers[i].ToArray();
-            names = _channelNames ?? Array.Empty<string>();
+            names = _channelNames?.ToArray() ?? Array.Empty<string>();
+            units = _channelUnits.ToArray();
         }
 
         var (startIdx, count) = CurrentInterval.GetIndices(times);
@@ -1212,7 +1214,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
             // Header
             writer.Write("ElapsedSeconds");
             for (int ch = 0; ch < names.Length; ch++)
-                writer.Write(",\"" + (names[ch] + " (" + _channelUnits.ElementAtOrDefault(ch) + ")").Replace("\"", "\"\"") + "\"");
+                writer.Write(",\"" + (names[ch] + " (" + units.ElementAtOrDefault(ch) + ")").Replace("\"", "\"\"") + "\"");
             writer.WriteLine();
 
             // Data

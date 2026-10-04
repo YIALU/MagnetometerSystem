@@ -88,6 +88,22 @@ public class Ctmbs3X2000Parser : IDataParser, IParserDiagnostics
 
             // 完整数据帧字节数：'$' + digits + '\n' + L + '\nack\n'
             int frameSize = 1 + digitCount + 1 + len + AckTail.Length;
+            // 重复长度也可能一起损坏。该文本协议的载荷及尾部不含 '$'，
+            // 新帧头可以直接否定尚未结束的旧候选，无须等到它声称的巨大长度。
+            // 只检查候选范围；合法帧之后粘连的下一 '$' 必须留给下一次解析。
+            int nextHeader = -1;
+            for (int i = bodyStart + digitCount; i < Math.Min(_ring.Count, frameSize); i++)
+            {
+                if (_ring.Peek(i) != (byte)'$') continue;
+                nextHeader = i;
+                break;
+            }
+            if (nextHeader >= 0)
+            {
+                _ring.Skip(nextHeader);
+                Reject("CTMBS 帧长度与下一帧头冲突，已重新同步");
+                continue;
+            }
             if (_ring.Count < frameSize)
                 return false; // 帧体未到齐
 

@@ -59,11 +59,21 @@ public class InstallerHandoffTests
     private static string Arguments(string script) => "-NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand " +
         Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
 
-    private static async Task WaitForAsync(Func<bool> condition)
+    private static async Task WaitForAsync(Func<bool> condition, Process? child = null)
     {
-        var deadline = DateTime.UtcNow.AddSeconds(10);
-        while (!condition() && DateTime.UtcNow < deadline) await Task.Delay(25);
-        Assert.True(condition(), "Expected child process marker was not written.");
+        // Cold Windows PowerShell startup on a shared CI runner can exceed ten
+        // seconds. Wait for actual readiness, with early exit diagnostics.
+        var elapsed = Stopwatch.StartNew();
+        while (!condition() && elapsed.Elapsed < TimeSpan.FromSeconds(30))
+        {
+            if (child?.HasExited == true)
+            {
+                var error = await child.StandardError.ReadToEndAsync();
+                Assert.Fail($"Child exited before readiness (exit {child.ExitCode}): {error}");
+            }
+            await Task.Delay(25);
+        }
+        Assert.True(condition(), "Expected child process marker was not written within 30 seconds.");
     }
 
     private sealed class ProcessFixture : IAsyncDisposable
@@ -96,11 +106,12 @@ public class InstallerHandoffTests
             var owner = Process.Start(new ProcessStartInfo(InstallerHandoff.PowerShellPath)
             {
                 Arguments = Arguments(ownerScript), UseShellExecute = false,
+                RedirectStandardError = true,
                 CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden,
             })!;
             try
             {
-                await WaitForAsync(() => File.Exists(parentReady));
+                await WaitForAsync(() => File.Exists(parentReady), owner);
                 string installerScript = $$"""
                     $ErrorActionPreference = 'Stop'
                     $state = 'running'

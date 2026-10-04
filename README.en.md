@@ -19,6 +19,8 @@ An **original reading** is a channel value after protocol parsing and before cor
 
 The two ZDZ_C08 presets block acquisition until their unconfirmed CRC parameters are configured using firmware-confirmed values. See [protocol checksums and channel units](docs/协议校验与单位.md) for setup steps, checks for older protocol JSON files, and variable-length frame rules.
 
+A separate device-storage download workflow is not implemented. The ZDZ Read Stored Data preset cannot be sent, preventing historical frames from entering the live session. CSV export operates on sessions already saved locally. Custom commands retain their user-defined semantics; free HEX transmission does not provide an isolated download workflow.
+
 ## Features
 
 | Area | Capabilities |

@@ -106,6 +106,9 @@ public class DeviceCommand
     public string Name { get; set; } = "";
     public string Description { get; set; } = "";
 
+    /// <summary>响应需要独立传输处理，不能进入实时采集；当前普通命令发送入口拒绝发送。</summary>
+    public bool RequiresIsolatedTransfer { get; set; }
+
     public CommandEncoding Encoding { get; set; } = CommandEncoding.AsciiTemplate;
 
     // ASCII 模板用

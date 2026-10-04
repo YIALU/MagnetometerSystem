@@ -158,6 +158,46 @@ public class ProtocolFlowTests
         }
     });
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public Task DeviceCommandVm_DownloadPresetDoesNotWriteToTcpAndCustomCommandsStillWork(bool magneticOnly) => WpfTestHost.RunAsync(async () =>
+    {
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        await using var connection = new TcpDeviceConnection(new ConnectionConfig
+        { IpAddress = "127.0.0.1", Port = ((IPEndPoint)listener.LocalEndpoint).Port, AutoReconnect = false });
+        var bus = new DataBus();
+        using var vm = new DeviceCommandViewModel(bus, new EmptyCommandConfig());
+        try
+        {
+            var accept = listener.AcceptTcpClientAsync();
+            bus.PublishConnectionChanged(connection);
+            await connection.ConnectAsync();
+            using var peer = await accept.WaitAsync(TimeSpan.FromSeconds(3));
+            var preset = magneticOnly ? ProtocolConfig.CreateZdzC08MagneticOnly() : ProtocolConfig.CreateZdzC08();
+            vm.SetProtocolCommands(preset.Commands);
+            vm.SelectedCommand = preset.Commands.SelectMany(g => g.Commands).Single(c => c.Name == "读取存储数据");
+            await vm.SendSelectedCommandCommand.ExecuteAsync(null);
+            Assert.Contains("未发送", vm.WriteStatus);
+            Assert.Contains("独立传输", vm.WriteStatus);
+            Assert.Equal(0, vm.LastSendByteCount);
+
+            // TCP preserves order: any forbidden 90 9F write would precede this
+            // ordinary custom command, so the actual peer's byte assertion fails.
+            var custom = new DeviceCommand { Name = "读取存储数据", Template = "CUSTOM_STATUS", AppendNewline = false };
+            vm.SetProtocolCommands([new CommandGroup { Name = "Custom", Commands = [custom] }]);
+            vm.SelectedCommand = custom;
+            await vm.SendSelectedCommandCommand.ExecuteAsync(null);
+            byte[] received = new byte["CUSTOM_STATUS"u8.Length];
+            await peer.GetStream().ReadExactlyAsync(received).AsTask().WaitAsync(TimeSpan.FromSeconds(3));
+            Assert.Equal("CUSTOM_STATUS"u8.ToArray(), received);
+            Assert.Equal(received.Length, vm.LastSendByteCount);
+            Assert.Contains("已写出", vm.WriteStatus);
+        }
+        finally { bus.PublishConnectionChanged(null); listener.Stop(); }
+    });
+
     [Fact]
     public Task DeviceCommandVm_WritesActualBytesAndWaitsForFragmentedAck() => WpfTestHost.RunAsync(async () =>
     {
@@ -237,6 +277,83 @@ public class ProtocolFlowTests
             await WaitForAsync(() => vm.ResponseStatus.Contains(responseMode == 0 ? "超时" : "收到设备 ACK"));
             Assert.DoesNotContain("拒绝", vm.ResponseStatus);
             if (responseMode == 0) Assert.Contains("执行结果未知", vm.ResponseStatus);
+        }
+        finally { bus.PublishConnectionChanged(null); listener.Stop(); }
+    });
+
+    [Theory]
+    [InlineData("dat", "0", true)]
+    [InlineData("dat", "5", false)]
+    [InlineData("stp", "", false)]
+    public Task DeviceCommandVm_OnlyDatZeroObservesCompleteRealtimeFrames(string mnemonic, string mode, bool observesRealtime) => WpfTestHost.RunAsync(async () =>
+    {
+        const string payload = " 120000 SC01 X122PWZK0000 07 4 3125 3124 3123 3129 1.23 2.34 3.45 4.56";
+        static byte[] Frame(string content)
+        {
+            int length = content.Length + 1;
+            while (length != content.Length + length.ToString().Length)
+                length = content.Length + length.ToString().Length;
+            return Encoding.ASCII.GetBytes($"${length}\n{length}{content}\nack\n");
+        }
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        await using var connection = new TcpDeviceConnection(new ConnectionConfig
+        { IpAddress = "127.0.0.1", Port = ((IPEndPoint)listener.LocalEndpoint).Port, AutoReconnect = false });
+        var bus = new DataBus();
+        using var vm = new DeviceCommandViewModel(bus, new EmptyCommandConfig()) { ResponseTimeoutMs = 1500 };
+        try
+        {
+            var accept = listener.AcceptTcpClientAsync();
+            bus.PublishConnectionChanged(connection);
+            await connection.ConnectAsync();
+            using var peer = await accept.WaitAsync(TimeSpan.FromSeconds(3));
+            var commands = ProtocolConfig.CreateCtmbs3X2000().Commands;
+            var command = commands.SelectMany(g => g.Commands).Single(c => c.Template == mnemonic);
+            vm.SetProtocolCommands(commands);
+            vm.SelectedCommand = command;
+            if (mnemonic == "dat") vm.CurrentParameters.Single(p => p.Definition.Key == "mode").Value = mode;
+            var values = vm.CurrentParameters.ToDictionary(p => p.Definition.Key, p => p.Value);
+            var expected = Ctmbs3X2000FrameBuilder.BuildRequestBytes(command, values);
+            await vm.SendSelectedCommandCommand.ExecuteAsync(null);
+            byte[] transmitted = new byte[expected.Length];
+            await peer.GetStream().ReadExactlyAsync(transmitted).AsTask().WaitAsync(TimeSpan.FromSeconds(3));
+            Assert.Equal(expected, transmitted);
+            long receivedBytes = 0;
+            connection.DataReceived += (_, bytes) => Interlocked.Add(ref receivedBytes, bytes.Length);
+            // The pending response rule belongs to the sent request, not current UI selection.
+            vm.SelectedCommand = commands.SelectMany(g => g.Commands).Single(c => c.Template == "lin");
+
+            await peer.GetStream().WriteAsync("$er"u8.ToArray());
+            await peer.GetStream().WriteAsync("r\n"u8.ToArray());
+            byte[] status = Frame(" 20261004120000 1 0 1 1 0 0 0 0 00 25.50");
+            byte[] invalidMeasurement = Frame(payload.Replace("1.23", "NaN"));
+            await peer.GetStream().WriteAsync(status);
+            await peer.GetStream().WriteAsync(invalidMeasurement);
+            await WaitForAsync(() => vm.ResponseStatus.Contains("无数据推送"));
+            Assert.DoesNotContain("已收到实时帧", vm.ResponseStatus);
+            Assert.DoesNotContain("收到设备 ACK", vm.ResponseStatus);
+
+            byte[] measurement = Frame(payload);
+            await peer.GetStream().WriteAsync(measurement.AsMemory(0, 3));
+            await peer.GetStream().WriteAsync(measurement.AsMemory(3, measurement.Length - 4));
+            await WaitForAsync(() => Volatile.Read(ref receivedBytes) == 5 + status.Length + invalidMeasurement.Length + measurement.Length - 1);
+            await WpfTestHost.PumpAsync();
+            Assert.DoesNotContain("已收到实时帧", vm.ResponseStatus); // Final LF is still missing.
+            await peer.GetStream().WriteAsync(measurement.AsMemory(measurement.Length - 1));
+            if (observesRealtime)
+            {
+                await WaitForAsync(() => vm.ResponseStatus.Contains("已收到实时帧"));
+                Assert.Contains("不能据此归因于本次命令", vm.ResponseStatus);
+                Assert.DoesNotContain("执行成功", vm.ResponseStatus);
+                await Task.Delay(vm.ResponseTimeoutMs + 100);
+                Assert.Contains("已收到实时帧", vm.ResponseStatus); // Completion canceled the old timeout.
+            }
+            else
+            {
+                await WaitForAsync(() => vm.ResponseStatus.Contains("超时"));
+                Assert.Contains("执行结果未知", vm.ResponseStatus);
+                Assert.DoesNotContain("已收到实时帧", vm.ResponseStatus);
+            }
         }
         finally { bus.PublishConnectionChanged(null); listener.Stop(); }
     });
