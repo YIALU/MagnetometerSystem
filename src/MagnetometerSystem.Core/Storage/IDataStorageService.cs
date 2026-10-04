@@ -64,6 +64,7 @@ public class SessionInfo
     public DateTime StartedAt { get; set; }
     public DateTime? EndedAt { get; set; }
     public SensorType SensorType { get; set; }
+    /// <summary>连接时记录的标称采样率，不代表设备实际输出频率；回放使用读数时间戳。</summary>
     public double SampleRate { get; set; }
     public int ChannelCount { get; set; }
     public string[] ChannelNames { get; set; } = [];

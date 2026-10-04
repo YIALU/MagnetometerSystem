@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.Windows;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -37,6 +38,8 @@ public partial class HistoryPlaybackViewModel : ObservableObject
     private SensorConfig? _loadedSensorConfig;
     private DispatcherTimer? _playbackTimer;
     private bool _wasPlayingBeforeSeek;
+    private readonly Stopwatch _playbackClock = new();
+    private TimeSpan _positionAtTimerStart;
 
     // ---- 会话选择 ----
     public ObservableCollection<SessionInfo> AvailableSessions { get; } = new();
@@ -187,6 +190,8 @@ public partial class HistoryPlaybackViewModel : ObservableObject
             var readings = await _storageService.GetReadingsAsync(selectedSession.Id);
             _readings = readings.OrderBy(r => r.Timestamp).ToArray();
             _loadedSensorConfig = RebuildSensorConfig(selectedSession);
+            _playbackClock.Reset();
+            _positionAtTimerStart = TimeSpan.Zero;
 
             TotalReadings = _readings.Length;
             CurrentIndex = 0;
@@ -233,6 +238,7 @@ public partial class HistoryPlaybackViewModel : ObservableObject
             {
                 CurrentIndex = 0;
                 Progress = 0;
+                _positionAtTimerStart = TimeSpan.Zero;
             }
 
             var sensorConfig = _loadedSensorConfig!;
@@ -255,6 +261,8 @@ public partial class HistoryPlaybackViewModel : ObservableObject
     [RelayCommand(CanExecute = nameof(CanPause))]
     private void Pause()
     {
+        _positionAtTimerStart = CurrentPlaybackPosition();
+        _playbackClock.Reset();
         _playbackTimer?.Stop();
         State = PlaybackState.Paused;
         IsPlaying = false;
@@ -268,6 +276,8 @@ public partial class HistoryPlaybackViewModel : ObservableObject
     {
         _playbackTimer?.Stop();
         _playbackTimer = null;
+        _playbackClock.Reset();
+        _positionAtTimerStart = TimeSpan.Zero;
 
         _dataBus.IsPlaybackMode = false;
         _dataBus.PublishAcquisitionStopped();
@@ -295,6 +305,8 @@ public partial class HistoryPlaybackViewModel : ObservableObject
         _wasPlayingBeforeSeek = State == PlaybackState.Playing;
         if (_wasPlayingBeforeSeek)
         {
+            _positionAtTimerStart = CurrentPlaybackPosition();
+            _playbackClock.Reset();
             _playbackTimer?.Stop();
         }
     }
@@ -310,11 +322,12 @@ public partial class HistoryPlaybackViewModel : ObservableObject
             IsPlaying = true;
             IsPaused = false;
         }
+        _wasPlayingBeforeSeek = false;
     }
 
     public void SeekTo(double progress)
     {
-        if (_readings.Length == 0) return;
+        if (_readings.Length == 0 || !double.IsFinite(progress)) return;
 
         progress = Math.Clamp(progress, 0.0, 1.0);
         var targetIndex = (int)(progress * (_readings.Length - 1));
@@ -324,6 +337,8 @@ public partial class HistoryPlaybackViewModel : ObservableObject
         CurrentTime = _readings[targetIndex].Timestamp.ToString("HH:mm:ss.fff");
         var elapsed = _readings[targetIndex].Timestamp - _readings[0].Timestamp;
         ElapsedTime = FormatTimeSpan(elapsed);
+        _positionAtTimerStart = elapsed;
+        if (_playbackClock.IsRunning) _playbackClock.Restart();
     }
 
     // ---- 定时器管理 ----
@@ -332,37 +347,21 @@ public partial class HistoryPlaybackViewModel : ObservableObject
     {
         _playbackTimer?.Stop();
 
-        var baseInterval = _loadedSensorConfig!.SampleRate > 0
-            ? 1000.0 / _loadedSensorConfig.SampleRate
-            : 100.0;
-        var adjustedInterval = baseInterval / PlaybackSpeed;
-
         _playbackTimer = new DispatcherTimer
         {
-            Interval = TimeSpan.FromMilliseconds(Math.Max(adjustedInterval, 1))
+            Interval = TimeSpan.FromMilliseconds(16)
         };
         _playbackTimer.Tick += OnPlaybackTick;
+        _playbackClock.Restart();
         _playbackTimer.Start();
     }
 
     private void OnPlaybackTick(object? sender, EventArgs e)
     {
-        if (CurrentIndex >= _readings.Length)
-        {
-            // 回放完成
-            _playbackTimer?.Stop();
-            _playbackTimer = null;
-            _dataBus.IsPlaybackMode = false;
-            State = PlaybackState.Completed;
-            IsPlaying = false;
-            IsPaused = false;
-            return;
-        }
-
-        // 根据速度倍数，可能一次发布多条（高倍速时定时器精度不够）
-        var count = PlaybackSpeed >= 5.0 ? (int)PlaybackSpeed : 1;
-
-        for (var i = 0; i < count && CurrentIndex < _readings.Length; i++)
+        if (_readings.Length == 0) return;
+        var position = CurrentPlaybackPosition();
+        while (CurrentIndex < _readings.Length &&
+               _readings[CurrentIndex].Timestamp - _readings[0].Timestamp <= position)
         {
             var reading = _readings[CurrentIndex];
 
@@ -382,8 +381,9 @@ public partial class HistoryPlaybackViewModel : ObservableObject
 
         if (CurrentIndex < _readings.Length)
         {
-            CurrentTime = _readings[CurrentIndex].Timestamp.ToString("HH:mm:ss.fff");
-            var elapsed = _readings[CurrentIndex].Timestamp - _readings[0].Timestamp;
+            var displayedIndex = Math.Max(0, CurrentIndex - 1);
+            CurrentTime = _readings[displayedIndex].Timestamp.ToString("HH:mm:ss.fff");
+            var elapsed = _readings[displayedIndex].Timestamp - _readings[0].Timestamp;
             ElapsedTime = FormatTimeSpan(elapsed);
         }
         else
@@ -396,6 +396,9 @@ public partial class HistoryPlaybackViewModel : ObservableObject
 
             _playbackTimer?.Stop();
             _playbackTimer = null;
+            _playbackClock.Reset();
+            _dataBus.IsPlaybackMode = false;
+            _dataBus.PublishAcquisitionStopped();
             State = PlaybackState.Completed;
             IsPlaying = false;
             IsPaused = false;
@@ -404,16 +407,27 @@ public partial class HistoryPlaybackViewModel : ObservableObject
 
     // ---- 速度动态切换 ----
 
+    partial void OnPlaybackSpeedChanging(double oldValue, double newValue)
+    {
+        if (_playbackClock.IsRunning && double.IsFinite(oldValue) && oldValue > 0)
+        {
+            _positionAtTimerStart = CurrentPlaybackPosition();
+            _playbackClock.Restart();
+        }
+    }
+
     partial void OnPlaybackSpeedChanged(double value)
     {
-        if (_playbackTimer != null && _playbackTimer.IsEnabled && SelectedSession != null)
-        {
-            var baseInterval = SelectedSession.SampleRate > 0
-                ? 1000.0 / SelectedSession.SampleRate
-                : 100.0;
-            var adjustedInterval = baseInterval / value;
-            _playbackTimer.Interval = TimeSpan.FromMilliseconds(Math.Max(adjustedInterval, 1));
-        }
+        if (!double.IsFinite(value) || value <= 0) PlaybackSpeed = 1;
+    }
+
+    private TimeSpan CurrentPlaybackPosition()
+    {
+        var duration = _readings.Length == 0 ? TimeSpan.Zero : _readings[^1].Timestamp - _readings[0].Timestamp;
+        var speed = double.IsFinite(PlaybackSpeed) && PlaybackSpeed > 0 ? PlaybackSpeed : 1;
+        var milliseconds = _positionAtTimerStart.TotalMilliseconds + _playbackClock.Elapsed.TotalMilliseconds * speed;
+        // Preserve the exact final timestamp even when a double conversion would lose a tick.
+        return milliseconds >= duration.TotalMilliseconds ? duration : TimeSpan.FromMilliseconds(milliseconds);
     }
 
     // ---- 状态变化通知命令刷新 ----

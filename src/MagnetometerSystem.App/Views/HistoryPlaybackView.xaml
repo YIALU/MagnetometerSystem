@@ -45,7 +45,7 @@
                     <Run Text="{Binding SelectedSession.SensorType, Mode=OneWay}"/>
                 </TextBlock>
                 <TextBlock Margin="0,0,20,0">
-                    <Run Text="采样率: " FontWeight="SemiBold"/>
+                    <Run Text="标称采样率: " FontWeight="SemiBold"/>
                     <Run Text="{Binding SelectedSession.SampleRate, Mode=OneWay, StringFormat={}{0} Hz}"/>
                 </TextBlock>
                 <TextBlock Margin="0,0,20,0">
