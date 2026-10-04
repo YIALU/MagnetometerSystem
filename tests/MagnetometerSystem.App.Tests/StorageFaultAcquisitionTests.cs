@@ -81,6 +81,84 @@ public class StorageFaultAcquisitionTests
         }
     });
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public Task StorageRetryCompletesStopOnceAndNextClickStartsNewSession(bool retryDuringDisconnect) => WpfTestHost.RunAsync(async () =>
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        int stopped = 0;
+        fixture.Bus.AcquisitionStopped += () => stopped++;
+        await fixture.ConnectionVm.ConnectCommand.ExecuteAsync(null);
+        string originalSession = fixture.Sessions.ActiveSessionId!;
+        await fixture.ExecuteAsync("CREATE TRIGGER fail_recovery_save BEFORE INSERT ON readings BEGIN SELECT RAISE(FAIL, 'retry still fails'); END;");
+        try
+        {
+            fixture.Transport.Feed("1,2,3\n");
+            await fixture.Transport.DisconnectEntered.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            if (!retryDuringDisconnect)
+            {
+                fixture.Transport.ReleaseDisconnect.TrySetResult();
+                await Assert.ThrowsAsync<IOException>(() => fixture.ConnectionVm.StopAcquisitionAsync());
+            }
+
+            await fixture.Sessions.RetryStorageCommand.ExecuteAsync(null);
+            await WpfTestHost.PumpAsync();
+            Assert.Equal(0, stopped);
+            Assert.True(fixture.ConnectionVm.IsAcquiring);
+            Assert.Equal(originalSession, fixture.Sessions.ActiveSessionId);
+            Assert.NotNull(fixture.Sessions.StorageError);
+            Assert.Equal(1, fixture.Storage.WriteStatus.PendingReadings);
+            Assert.Null(Assert.Single(await fixture.Storage.GetSessionsAsync()).EndedAt);
+            Assert.DoesNotContain("会话已保存", fixture.ConnectionVm.StatusMessage);
+
+            await fixture.ExecuteAsync("DROP TRIGGER fail_recovery_save;");
+            var retry = fixture.Sessions.RetryStorageCommand.ExecuteAsync(null);
+            if (retryDuringDisconnect)
+            {
+                // Fault stop owns the connection gate while physical disconnect waits.
+                // Recovery must release the session gate before waiting for that owner.
+                await Assert.ThrowsAsync<TimeoutException>(() => retry.WaitAsync(TimeSpan.FromMilliseconds(100)));
+                fixture.Transport.ReleaseDisconnect.TrySetResult();
+            }
+            await retry.WaitAsync(TimeSpan.FromSeconds(3));
+            await WpfTestHost.PumpAsync();
+            Assert.Equal(1, stopped);
+            Assert.False(fixture.ConnectionVm.IsAcquiring);
+            Assert.False(fixture.ConnectionVm.IsConnected);
+            Assert.Null(fixture.Bus.CurrentConnection);
+            Assert.Null(fixture.Sessions.ActiveSessionId);
+            Assert.Null(fixture.Sessions.StorageError);
+            Assert.Empty(fixture.ConnectionVm.LastError);
+            Assert.Contains("会话已保存", fixture.ConnectionVm.StatusMessage);
+            Assert.Equal(1, Assert.Single(await fixture.Storage.GetSessionsAsync()).TotalReadings);
+            Assert.NotNull(Assert.Single(await fixture.Storage.GetSessionsAsync()).EndedAt);
+
+            await fixture.Bus.PublishAcquisitionRecoveryCompletedAsync(originalSession);
+            Assert.Equal(1, stopped); // Repeated completion is idempotent.
+            await fixture.ConnectionVm.ConnectCommand.ExecuteAsync(null); // Exactly one click.
+            string nextSession = fixture.Sessions.ActiveSessionId!;
+            Assert.NotNull(nextSession);
+            Assert.NotEqual(originalSession, nextSession);
+            Assert.True(fixture.ConnectionVm.IsConnected);
+            Assert.True(fixture.ConnectionVm.IsAcquiring);
+            await fixture.Bus.PublishAcquisitionRecoveryCompletedAsync(originalSession);
+            Assert.Equal(1, stopped); // A stale session cannot stop the new acquisition.
+            Assert.True(fixture.ConnectionVm.IsAcquiring);
+            fixture.Transport.Feed("7,8,9\n");
+            await fixture.ConnectionVm.StopAcquisitionAsync();
+            Assert.Equal(2, stopped);
+            Assert.Equal(7, Assert.Single(await fixture.Storage.GetReadingsAsync(nextSession)).ChannelValues[0]);
+            Assert.Equal(1, Assert.Single(await fixture.Storage.GetReadingsAsync(originalSession)).ChannelValues[0]);
+        }
+        finally
+        {
+            fixture.Transport.ReleaseDisconnect.TrySetResult();
+            await fixture.ExecuteAsync("DROP TRIGGER IF EXISTS fail_recovery_save;");
+            await fixture.Sessions.RetryStorageCommand.ExecuteAsync(null);
+        }
+    });
+
     [Fact]
     public Task FaultRaisedDuringOnePacketStopsItsRemainingFramesAndPreservesAcceptedTail() => WpfTestHost.RunAsync(async () =>
     {

@@ -76,6 +76,9 @@ public class DataBus
     /// <summary>数据源停止后，等待存储消费者将尾批落库并结束会话。</summary>
     public event Func<Task>? AcquisitionStopping;
 
+    /// <summary>显式重试已保存并结束指定会话；在会话生命周期锁外等待连接完成停止。</summary>
+    public event Func<string, Task>? AcquisitionRecoveryCompleted;
+
     public ConnectionConfig? AcquisitionConnectionConfig { get; private set; }
 
     /// <summary>会话开始时触发，参数为 sessionId</summary>
@@ -151,6 +154,14 @@ public class DataBus
         if (handlers == null) return;
         foreach (Func<Task> handler in handlers.GetInvocationList())
             await handler();
+    }
+
+    public async Task PublishAcquisitionRecoveryCompletedAsync(string sessionId)
+    {
+        var handlers = AcquisitionRecoveryCompleted;
+        if (handlers == null) return;
+        foreach (Func<string, Task> handler in handlers.GetInvocationList())
+            await handler(sessionId);
     }
 
     public void PublishSessionStarted(string sessionId)

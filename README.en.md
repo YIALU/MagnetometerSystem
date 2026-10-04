@@ -60,7 +60,7 @@ The default database is `%LOCALAPPDATA%\MagnetometerSystem\magnetometer.db`.
 
 Logs use the application directory's `logs` folder where writable, otherwise `%LOCALAPPDATA%\MagnetometerSystem\logs`. Close the application and retain a database backup before upgrading or migrating. Legacy fixed-column tables are retained as `readings_legacy_*` / `corrected_readings_legacy_*`, and their sessions report that migration is required. These legacy records are not automatically converted for replay or export.
 
-Failed write batches remain in memory, with an error status, and can be retried after the storage problem is resolved. This is not a durable recovery log: power loss or forced process termination can lose uncommitted data. Normal shutdown waits for storage; resolve storage errors before exiting.
+A storage failure immediately stops accepting new measurements and disconnects. Already accepted batches remain in memory and the UI reports the error. After fixing the cause, choose Retry Save to complete the old session before reconnecting. This is not a durable recovery log: power loss or forced process termination can lose uncommitted data. Normal shutdown waits for storage; resolve storage errors before exiting.
 
 | Symptom | Check first |
 | --- | --- |

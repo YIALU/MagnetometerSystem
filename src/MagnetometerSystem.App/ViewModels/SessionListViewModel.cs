@@ -327,11 +327,20 @@ public partial class SessionListViewModel : ObservableObject
     private async Task RetryStorageAsync()
     {
         long generation = Volatile.Read(ref _sessionGeneration);
+        string? recoveredSessionId = ActiveSessionId;
         try
         {
             await _storageService.RetryPendingWritesAsync();
+            if (generation != Volatile.Read(ref _sessionGeneration)) return;
             await FlushBufferAsync();
-            if (!IsRecording && ActiveSessionId != null) await OnAcquisitionStoppingAsync();
+            if (generation != Volatile.Read(ref _sessionGeneration)) return;
+            if (!Volatile.Read(ref _acceptingReadings) && recoveredSessionId != null)
+            {
+                await OnAcquisitionStoppingAsync();
+                // OnAcquisitionStoppingAsync has released _lifecycleGate. The connection
+                // owner can now take its gate and complete the same session's stop.
+                await _dataBus.PublishAcquisitionRecoveryCompletedAsync(recoveredSessionId);
+            }
             OnStorageWriteStatusChanged(_storageService.WriteStatus);
         }
         catch (Exception ex) { ReportStorageError(ex, generation); }
