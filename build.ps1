@@ -263,7 +263,7 @@ git tag 版本 ($ver) 与 Directory.Build.props 的 <Version> ($propsVer) 不一
 
         $zipPath = Join-Path $outDir "MagnetometerSystem-v$ver-portable-win-x64.zip"
         Write-Ok '压缩中（约需 1-2 分钟）...'
-        Compress-Archive -Path $portableStage -DestinationPath $zipPath -CompressionLevel Optimal -Force
+        Compress-Archive -Path (Join-Path $portableStage '*') -DestinationPath $zipPath -CompressionLevel Optimal -Force
         Write-Ok "便携版: $(Split-Path $zipPath -Leaf)  ($(Format-Size (Get-Item $zipPath).Length))"
     }
 
