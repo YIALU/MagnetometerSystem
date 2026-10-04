@@ -50,7 +50,8 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
     private DateTime _startTime;
     private bool _isAcquiring;
     private bool _disposed;
-    private (double[] Times, double[][] Channels, double[][] Raw)? _pausedData;
+    private sealed record PlotDataSnapshot(double[] Times, double[][] Channels, double[][] Raw, int TotalCount);
+    private PlotDataSnapshot? _pausedData;
 
     // ---- 图表设置 ----
 
@@ -82,7 +83,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
 
     partial void OnIsPausedChanged(bool value)
     {
-        _pausedData = value ? CapturePlotData() : null;
+        _pausedData = value ? CapturePlotData(includeAll: true) : null;
     }
 
     [ObservableProperty]
@@ -398,18 +399,49 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
 
     public void RefreshPlot() => OnRenderTick(null, EventArgs.Empty);
 
-    private (double[] Times, double[][] Channels, double[][] Raw) CapturePlotData()
+    private PlotDataSnapshot CapturePlotData(bool includeAll = false)
     {
         lock (_dataLock)
-            return (_timeBuffer.ToArray(),
-                _channelBuffers.Take(_channelCount).Select(b => b.ToArray()).ToArray(),
-                _rawChannelBuffers.Take(_channelCount).Select(b => b.ToArray()).ToArray());
+        {
+            int totalCount = _timeBuffer.Count;
+            int start = 0;
+            // Statistics with a zero window follows the plot. An unlimited plot needs all retained data.
+            if (!includeAll && totalCount > 0 && TimeWindowSeconds > 0)
+            {
+                double window = StatisticsConfig.WindowSeconds > 0
+                    ? Math.Max(TimeWindowSeconds, StatisticsConfig.WindowSeconds) : TimeWindowSeconds;
+                double minimumTime = _timeBuffer[totalCount - 1] - window;
+                for (int i = totalCount - 1; i >= 0; i--)
+                {
+                    if (_timeBuffer[i] < minimumTime) { start = i + 1; break; }
+                }
+                start = Math.Min(start, totalCount - 1);
+            }
+            int count = totalCount - start;
+            // Copy only the required logical range, including after the circular buffers wrap.
+            // Keep every source channel: hidden channels can still feed computed channels/statistics.
+            double[] CopyRange(CircularBuffer<double> buffer)
+            {
+                var values = new double[count];
+                for (int i = 0; i < count; i++)
+                    values[i] = start + i < buffer.Count ? buffer[start + i] : double.NaN;
+                return values;
+            }
+            var channels = new double[_channelCount][];
+            var raw = new double[_channelCount][];
+            for (int ch = 0; ch < _channelCount; ch++)
+            {
+                channels[ch] = CopyRange(_channelBuffers[ch]);
+                raw[ch] = CopyRange(_rawChannelBuffers[ch]);
+            }
+            return new PlotDataSnapshot(CopyRange(_timeBuffer), channels, raw, totalCount);
+        }
     }
 
     private void OnRenderTick(object? sender, EventArgs e)
     {
         if (IsPaused && sender is not null) return;
-        var (times, channelData, rawData) = _pausedData ?? CapturePlotData();
+        var (times, channelData, rawData, totalCount) = _pausedData ?? CapturePlotData();
         if (channelData.Length < _channelCount)
         {
             channelData = Enumerable.Range(0, _channelCount).Select(i => i < channelData.Length
@@ -418,13 +450,13 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
                 ? rawData[i] : Enumerable.Repeat(double.NaN, times.Length).ToArray()).ToArray();
         }
 
+        DataPointCount = totalCount;
         if (times.Length == 0)
         {
             if (!IsMultiPlotMode && PlotControl != null) PlotControl.Refresh();
             return;
         }
 
-        DataPointCount = times.Length;
         foreach (var cfg in ChannelConfigs)
             if (cfg.ChannelIndex < rawData.Length && rawData[cfg.ChannelIndex].Length > 0)
                 cfg.LatestValue = $"{rawData[cfg.ChannelIndex][^1]:G8} {cfg.Unit}";
@@ -826,7 +858,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
         DataPointCount = 0;
         StatisticsText = "暂无数据";
         ClearIntervalSelection();
-        _pausedData = IsPaused ? CapturePlotData() : null;
+        _pausedData = IsPaused ? CapturePlotData(includeAll: true) : null;
         foreach (var config in ChannelConfigs) config.LatestValue = "—";
         foreach (var control in MultiPlotControls)
         {

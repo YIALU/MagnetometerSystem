@@ -76,21 +76,23 @@ dotnet test MagnetometerSystem.sln --no-build --no-restore -m:1 --verbosity mini
 
 构建保留已有 `NU1701` 警告：`SkiaSharp.Views.WPF 3.119.0` 使用 .NET Framework 兼容资源还原；本次 WPF 测试通过不消除此依赖兼容性警告。本轮没有执行虚拟/实体串口验收、真实安装器升级、设备执行确认或长时间吞吐测试，也未给出代码覆盖率百分比。TCP 对端模拟响应证明响应处理路径，不能替代真实设备证据。
 
-## 2026-10-04 PR 审查修复验证
+## 2026-10-04 PR 审查修复与 V0.5.0 验证
 
 在独立 worktree、Windows / SDK 9.0.312（目标 .NET 8）中完成构建与串行回归。构建禁用编译服务器并串行执行；WPF DLL 临时被 360 进程占用时，等待后重试构建成功再运行测试，未使用失败构建作为通过证据。
 
 ```powershell
 dotnet build MagnetometerSystem.sln -c Debug --no-restore --disable-build-servers -m:1 -nr:false -p:UseSharedCompilation=false -p:BuildInParallel=false
-dotnet test MagnetometerSystem.sln -c Debug --no-build --no-restore -m:1 --verbosity minimal --logger trx --results-directory .codex_tmp/TestResults-pr-clock-final
+dotnet test MagnetometerSystem.sln -c Debug --no-build --no-restore -m:1 --verbosity minimal --logger trx --results-directory .codex_tmp/TestResults-v050-chart
 ```
 
 | 项目 | 通过 | 跳过 | 失败 | TRX 时间 |
 | --- | ---: | ---: | ---: | --- |
-| Core | 401 | 1 | 0 | 18_43_45 |
-| Infrastructure | 113 | 0 | 0 | 18_43_46 |
-| App | 71 | 0 | 0 | 18_43_54 |
-| 合计 | **585** | **1** | **0** | 2026-10-04，本机 `.codex_tmp/TestResults-pr-clock-final` |
+| Core | 401 | 1 | 0 | 21_08_54 |
+| Infrastructure | 113 | 0 | 0 | 21_08_56 |
+| App | 78 | 0 | 0 | 21_09_04 |
+| 合计 | **592** | **1** | **0** | 2026-10-04，本机 `.codex_tmp/TestResults-v050-chart` |
+
+发布前图表性能回归补充 7 例：活动刷新只从环形缓冲区复制显示与统计窗口的并集，保留总点数；暂停时一次性冻结完整历史，支持扩窗。测试覆盖显示/统计独立窗口、零窗口语义、隐藏来源计算、100,000 点环绕及暂停后继续来数。65 通道在相同短窗口下比较 1,000 与 100,000 点历史的实际刷新分配量，验证不会因全部保留历史增长而每帧复制全量；分配测试没有连接绘图控件，不代表完整绘制耗时或设备长时间吞吐已通过。
 
 新增证据包括：默认采集/改正失败时真实 TCP 同时到达 SQLite 与图表；CTMBS 状态响应不入测量库、坏长头即时恢复；变长载荷的动态校验与帧尾；单位迁移、回放与异单位轴范围；真实 SQLite 写入失败后的安装阻止、恢复重试、正常关闭尾帧。`InstallerHandoffTests` 的三个真实进程测试验证应用及互斥锁退出后才启动替身安装器、超时不启动、失效进程不能完成交接。
 
