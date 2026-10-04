@@ -529,6 +529,7 @@
                                   FontSize="12">
                             <DataGrid.Columns>
                                 <DataGridTextColumn Header="名称" Binding="{Binding Name}" Width="60"/>
+                                <DataGridTextColumn Header="单位" Binding="{Binding Unit}" Width="60"/>
                                 <DataGridTextColumn Header="通道" Binding="{Binding ChannelIndex}" Width="50"/>
                                 <DataGridTextColumn Header="偏移" Binding="{Binding ByteOffset}" Width="50"/>
                                 <DataGridComboBoxColumn Header="数据类型" Width="80"
