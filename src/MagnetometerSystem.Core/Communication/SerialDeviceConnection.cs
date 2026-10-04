@@ -62,21 +62,31 @@ public sealed class SerialDeviceConnection : IDeviceConnection
 
     private void OnSerialDataReceived(object sender, SerialDataReceivedEventArgs args)
     {
+        ReadAndPublishData(() =>
+        {
+            var port = _serialPort;
+            if (!ReferenceEquals(sender, port) || port?.IsOpen != true) return null;
+            int count = port.BytesToRead;
+            if (count == 0) return null;
+            var data = new byte[count];
+            int read = port.Read(data, 0, data.Length);
+            return read > 0 ? (read == data.Length ? data : data[..read]) : null;
+        });
+    }
+
+    private void ReadAndPublishData(Func<byte[]?> readAvailable)
+    {
         try
         {
-            lock (_ioGate)
-            {
-                var port = _serialPort;
-                if (!ReferenceEquals(sender, port) || port?.IsOpen != true) return;
-                int count = port.BytesToRead;
-                if (count == 0) return;
-                var data = new byte[count];
-                int read = port.Read(data, 0, data.Length);
-                if (read > 0) Raise(DataReceived, read == data.Length ? data : data[..read]);
-            }
+            byte[]? data;
+            // Only port access and copying belong under the I/O gate. A subscriber may
+            // synchronously dispatch to the UI, where DisconnectAsync also needs this gate.
+            lock (_ioGate) data = readAvailable();
+            if (data is { Length: > 0 }) Raise(DataReceived, data);
         }
         catch (Exception ex)
         {
+            // The I/O gate has been released before any external error/state callback.
             Raise(ErrorOccurred, $"串口读取失败: {ex.Message}");
             Raise(ConnectionStateChanged, false);
         }
