@@ -50,6 +50,26 @@
             </StackPanel>
         </Border>
 
+        <Border DockPanel.Dock="Top" Background="#FFF3E0" Padding="10" Margin="0,0,0,10">
+            <Border.Style>
+                <Style TargetType="Border">
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding StorageError}" Value="{x:Null}">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding StorageError}" Value="">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Border.Style>
+            <DockPanel>
+                <Button DockPanel.Dock="Right" Content="重试保存" Command="{Binding RetryStorageCommand}"
+                        Padding="10,3" Margin="10,0,0,0"/>
+                <TextBlock Text="{Binding StorageError}" TextWrapping="Wrap" Foreground="#B71C1C"/>
+            </DockPanel>
+        </Border>
+
         <!-- 主体: DataGrid -->
         <Grid>
             <Grid.RowDefinitions>

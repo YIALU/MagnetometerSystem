@@ -134,15 +134,6 @@ public class SqliteStorageService : IDataStorageService, IDisposable
     public async Task WaitForPendingWritesAsync(int timeoutMs = 5000)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(timeoutMs);
-        // A repeated close/stop attempt retries the retained batch after the cause is repaired.
-        lock (_writerStateLock)
-        {
-            if (_writeFailure != null)
-            {
-                _writeFailure = null;
-                _retryWrite.Release();
-            }
-        }
         long started = Environment.TickCount64;
         while (true)
         {
@@ -150,7 +141,7 @@ public class SqliteStorageService : IDataStorageService, IDisposable
             {
                 if (_writeFailure != null)
                     throw new InvalidOperationException(
-                        "保存失败，未写入批次仍保留在内存中。修复原因后再次重试停止或关闭。", _writeFailure);
+                        "保存失败，未写入批次仍保留在内存中。采集已停止，请修复原因后点击“重试保存”。", _writeFailure);
             }
             if (PendingWriteCount == 0) return;
             if (_consumerTask.IsFaulted)
@@ -160,6 +151,21 @@ public class SqliteStorageService : IDataStorageService, IDisposable
                 throw new TimeoutException($"等待保存超时（{timeoutMs}ms），仍有 {PendingWriteCount} 条读数未确认落库。");
             await Task.Delay((int)Math.Min(15, remaining));
         }
+    }
+
+    /// <inheritdoc />
+    public async Task RetryPendingWritesAsync()
+    {
+        // Only a deliberate user retry releases the retained failed batch.
+        lock (_writerStateLock)
+        {
+            if (_writeFailure != null)
+            {
+                _writeFailure = null;
+                _retryWrite.Release();
+            }
+        }
+        await WaitForPendingWritesAsync();
     }
 
     /// <inheritdoc />
@@ -370,6 +376,7 @@ public class SqliteStorageService : IDataStorageService, IDisposable
                         // Keep this exact batch and the remaining queue until an explicit retry.
                         // WriteBatchOnceAsync uses a transaction, so a failed attempt cannot partially commit.
                         lock (_writerStateLock) _writeFailure = ex;
+                        _dataBus.PublishAcquisitionFault(ex);
                         System.Diagnostics.Trace.TraceError(
                             $"后台保存失败，保留 {batch.Count} 条读数等待重试: {ex.Message}");
                         await _retryWrite.WaitAsync(_cts.Token);

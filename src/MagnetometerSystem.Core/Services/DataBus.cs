@@ -63,6 +63,23 @@ public class DataBus
         foreach (Func<Task> handler in handlers.GetInvocationList()) await handler();
     }
 
+    /// <summary>关键保存故障：同步停止生产，再异步完成断开和尾批处理。</summary>
+    public event Action<Exception>? AcquisitionFaulted;
+
+    public void PublishAcquisitionFault(Exception error)
+    {
+        var handlers = AcquisitionFaulted;
+        if (handlers == null) return;
+        foreach (Action<Exception> handler in handlers.GetInvocationList())
+        {
+            try { handler(error); }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Trace.TraceError($"[AcquisitionFaulted] 订阅者异常已隔离: {ex}");
+            }
+        }
+    }
+
     /// <summary>采集停止</summary>
     public event Action? AcquisitionStopped;
 

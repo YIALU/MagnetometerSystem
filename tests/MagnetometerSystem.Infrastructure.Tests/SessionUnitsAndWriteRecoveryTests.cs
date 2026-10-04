@@ -89,7 +89,7 @@ public class SessionUnitsAndWriteRecoveryTests
             Assert.Empty(await storage.GetReadingsAsync(id));
         }
         finally { await connection.ExecuteAsync("DROP TRIGGER fail_save;"); }
-        await storage.WaitForPendingWritesAsync();
+        await storage.RetryPendingWritesAsync();
         await storage.EndSessionAsync(id);
         Assert.Equal(0, storage.PendingWriteCount);
         Assert.Equal(new[] { 0d, 1d, 2d }, (await storage.GetReadingsAsync(id)).Select(r => r.ChannelValues[0]));

@@ -27,6 +27,9 @@ public partial class ConnectionViewModel : ObservableObject
     private IDataParser? _parser;
     private ISensorAdapter? _sensorAdapter;
     private readonly SemaphoreSlim _connectionGate = new(1, 1);
+    private long _connectionGeneration;
+    // Positive: receiving; negative: this generation faulted. The CAS cannot close a later connection.
+    private long _receiveGeneration;
     private readonly object _receiveGate = new();
     private bool _sessionPrepared;
 
@@ -156,6 +159,7 @@ public partial class ConnectionViewModel : ObservableObject
         _dataBus = dataBus;
         _orthogonalityCorrector = orthogonalityCorrector;
         _calibrationRepository = calibrationRepository;
+        _dataBus.AcquisitionFaulted += OnAcquisitionFaulted;
 
         // 监听段列表变化，订阅每个段的 PropertyChanged
         ProtocolSegments.CollectionChanged += (s, e) =>
@@ -244,6 +248,8 @@ public partial class ConnectionViewModel : ObservableObject
                 Port = Port,
             };
 
+            Volatile.Write(ref _receiveGeneration, Interlocked.Increment(ref _connectionGeneration));
+
             // 创建连接
             _connection = _connectionFactory.Create(connConfig);
             _connection.DataReceived += OnDataReceived;
@@ -292,6 +298,38 @@ public partial class ConnectionViewModel : ObservableObject
         finally { _connectionGate.Release(); }
     }
 
+    private void OnAcquisitionFaulted(Exception error)
+    {
+        var generation = Volatile.Read(ref _receiveGeneration);
+        var connection = _connection;
+        if (generation <= 0 ||
+            Interlocked.CompareExchange(ref _receiveGeneration, -generation, generation) != generation) return;
+
+        // Closing the receive gate must not wait for the UI or the connection semaphore.
+        // Capture identity now: a delayed task must never stop a subsequent connection.
+        _ = Task.Run(async () =>
+        {
+            await _connectionGate.WaitAsync();
+            try
+            {
+                if (generation != Volatile.Read(ref _connectionGeneration) ||
+                    !ReferenceEquals(connection, _connection)) return;
+                try { await DisconnectCoreAsync(); }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Trace.TraceError($"保存故障后停止采集: {ex}");
+                }
+                Application.Current?.Dispatcher.BeginInvoke(() =>
+                {
+                    if (generation == Volatile.Read(ref _connectionGeneration) &&
+                        Volatile.Read(ref _receiveGeneration) == -generation)
+                        StatusMessage = $"保存失败，采集已停止: {error.Message}；请在会话页重试保存。";
+                });
+            }
+            finally { _connectionGate.Release(); }
+        });
+    }
+
     private async Task DisconnectCoreAsync()
     {
         var connection = _connection;
@@ -328,7 +366,8 @@ public partial class ConnectionViewModel : ObservableObject
     {
         lock (_receiveGate)
         {
-            if (!ReferenceEquals(sender, _connection) || _parser == null) return;
+            if (Volatile.Read(ref _receiveGeneration) < 0 ||
+                !ReferenceEquals(sender, _connection) || _parser == null) return;
             // 原始数据显示：纯调试参考，独立于解析链路，无条件回显收到的字节。
             // 勾选 ShowHex → 16 进制；否则 → ASCII 字符串。解析失败/卡死都不影响这里。
             var rawLine = ShowHex
@@ -352,7 +391,7 @@ public partial class ConnectionViewModel : ObservableObject
             }
 
             // 单帧独立 try/catch：一帧失败不影响后续帧，更不能让异常冒泡断流
-            while (true)
+            while (Volatile.Read(ref _receiveGeneration) > 0)
             {
                 MagnetometerReading? reading;
                 try
@@ -379,6 +418,7 @@ public partial class ConnectionViewModel : ObservableObject
                     }
 
                     // 发布到数据总线（供实时图表等消费者使用）
+                    if (Volatile.Read(ref _receiveGeneration) < 0) break;
                     _dataBus.PublishReading(processed);
                 }
                 catch (Exception ex)
@@ -402,10 +442,13 @@ public partial class ConnectionViewModel : ObservableObject
 
     private void OnConnectionStateChanged(object? sender, bool connected)
     {
+        var generation = Volatile.Read(ref _connectionGeneration);
         Application.Current?.Dispatcher.BeginInvoke(() =>
         {
-            IsConnected = connected;
-            StatusMessage = connected ? "已连接" : "已断开";
+            if (generation != Volatile.Read(ref _connectionGeneration)) return;
+            IsConnected = connected && Volatile.Read(ref _receiveGeneration) > 0;
+            if (Volatile.Read(ref _receiveGeneration) > 0)
+                StatusMessage = connected ? "已连接" : "已断开";
         });
     }
 

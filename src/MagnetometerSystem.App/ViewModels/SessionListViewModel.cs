@@ -121,6 +121,7 @@ public partial class SessionListViewModel : ObservableObject
         _dataBus.AcquisitionStarting += OnAcquisitionStartingAsync;
         _dataBus.AcquisitionStopping += OnAcquisitionStoppingAsync;
         _dataBus.ReadingReceived += OnReadingReceived;
+        _dataBus.AcquisitionFaulted += OnAcquisitionFaulted;
 
         // 会话列表延迟加载：等用户首次导航到此页面时再加载
     }
@@ -171,20 +172,63 @@ public partial class SessionListViewModel : ObservableObject
         {
             lock (_bufferLock) _acceptingReadings = false;
             OnUi(() => IsRecording = false);
-            if (ActiveSessionId is not { } sessionId) return;
-            await FlushBufferAsync();
-            await _storageService.WaitForPendingWritesAsync();
-            await _storageService.EndSessionAsync(sessionId);
-            _dataBus.PublishSessionEnded(sessionId);
-            OnUi(() => { ActiveSessionId = null; StorageError = null; });
-            _currentSensorConfig = null;
-            await RefreshSessionsAsync();
+            await CompleteSessionAsync();
         }
         catch (Exception ex)
         {
             OnUi(() => StorageError = ex.Message);
             throw;
         }
+        finally { _lifecycleGate.Release(); }
+    }
+
+    private async Task CompleteSessionAsync()
+    {
+        if (ActiveSessionId is not { } sessionId) return;
+        await FlushBufferAsync();
+        await _storageService.WaitForPendingWritesAsync();
+        await _storageService.EndSessionAsync(sessionId);
+        _dataBus.PublishSessionEnded(sessionId);
+        OnUi(() => { ActiveSessionId = null; StorageError = null; });
+        _currentSensorConfig = null;
+        await RefreshSessionsAsync();
+    }
+
+    private void OnAcquisitionFaulted(Exception error)
+    {
+        string? sessionId;
+        lock (_bufferLock)
+        {
+            _acceptingReadings = false;
+            sessionId = ActiveSessionId;
+        }
+        if (sessionId == null) return;
+        void Report()
+        {
+            if (ActiveSessionId != sessionId) return;
+            IsRecording = false;
+            StorageError = $"保存失败，采集已停止: {error.Message}；未保存读数仍在内存中，修复原因后点击“重试保存”。";
+        }
+        // Never block the writer's fault notification on a busy dispatcher.
+        if (Application.Current?.Dispatcher is { } dispatcher && !dispatcher.CheckAccess())
+            dispatcher.BeginInvoke(Report);
+        else Report();
+    }
+
+    [RelayCommand]
+    private async Task RetryStorageAsync()
+    {
+        await _lifecycleGate.WaitAsync();
+        try
+        {
+            lock (_bufferLock)
+            {
+                if (_acceptingReadings) return;
+            }
+            await _storageService.RetryPendingWritesAsync();
+            await CompleteSessionAsync();
+        }
+        catch (Exception ex) { OnUi(() => StorageError = ex.Message); }
         finally { _lifecycleGate.Release(); }
     }
 

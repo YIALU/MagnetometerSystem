@@ -18,9 +18,12 @@ public interface IDataStorageService
 
     /// <summary>
     /// 等待后台写入队列把当前已入队的读数全部落库（用于结束会话前确保计数准确）。
-    /// 写入失败或超时会抛出异常，不能继续宣称已保存；再次等待会重试保留的失败批次。
+    /// 写入失败或超时会抛出异常，不能继续宣称已保存；等待本身不会重试失败批次。
     /// </summary>
     Task WaitForPendingWritesAsync(int timeoutMs = 5000);
+
+    /// <summary>用户修复故障后，显式重试保留的批次并等待落库。</summary>
+    Task RetryPendingWritesAsync();
 
     /// <summary>获取所有会话列表</summary>
     Task<IReadOnlyList<SessionInfo>> GetSessionsAsync();
