@@ -18,7 +18,7 @@ public class CorrectedReading
     /// <summary>原始时间戳</summary>
     public DateTime Timestamp { get; set; }
 
-    /// <summary>校正配置 ID</summary>
+    /// <summary>改正版本键（配置、映射及参数指纹）；兼容旧记录中的单配置 ID。</summary>
     public string CorrectionProfileId { get; set; } = "";
 
     /// <summary>校正后的通道值</summary>
@@ -38,7 +38,7 @@ public class CorrectedReading
     /// </summary>
     /// <param name="original">原始读数</param>
     /// <param name="correctedValues">校正后的通道值</param>
-    /// <param name="correctionProfileId">校正配置 ID</param>
+    /// <param name="correctionProfileId">改正版本键，或旧记录的单配置 ID</param>
     /// <returns>校正读数实例</returns>
     public static CorrectedReading FromOriginal(
         MagnetometerReading original,

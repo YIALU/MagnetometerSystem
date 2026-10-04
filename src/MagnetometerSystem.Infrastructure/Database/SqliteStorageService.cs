@@ -406,6 +406,17 @@ public class SqliteStorageService : IDataStorageService, IDisposable
     }
 
     /// <inheritdoc />
+    public async Task<IReadOnlyList<string>> GetCorrectionVersionIdsAsync(string sessionId)
+    {
+        using var conn = new SqliteConnection(_dbInit.ConnectionString);
+        await conn.OpenAsync();
+        var ids = await conn.QueryAsync<string>(
+            "SELECT DISTINCT correction_profile_id FROM corrected_readings WHERE session_id = @SessionId ORDER BY correction_profile_id",
+            new { SessionId = sessionId });
+        return ids.ToArray();
+    }
+
+    /// <inheritdoc />
     public async Task DeleteCorrectedReadingsAsync(string sessionId, string? correctionProfileId = null)
     {
         using var conn = new SqliteConnection(_dbInit.ConnectionString);

@@ -105,6 +105,56 @@ public class GiteeUpdateServiceTests
         Assert.True(result.Info.CanDownload);
     }
 
+    [Theory]
+    [InlineData(AppPackageKind.Installer, "v0.5.0", "setup.exe")]
+    [InlineData(AppPackageKind.Portable, "v0.5.0", "portable-win-x64.zip")]
+    [InlineData(AppPackageKind.Installer, "0.5.0", "setup.exe")]
+    [InlineData(AppPackageKind.Portable, "0.5.0", "portable-win-x64.zip")]
+    public void ParseLatestRelease_混合附件仅选择当前发布的完整包名(
+        AppPackageKind kind, string tag, string suffix)
+    {
+        var result = GiteeUpdateService.ParseLatestRelease(Release(tag, assets: """
+            [
+              {"name":"MagnetometerSystem-v0.4.0-setup.exe","browser_download_url":"https://gitee.com/dl/old-setup.exe"},
+              {"name":"MagnetometerSystem-v0.4.0-portable-win-x64.zip","browser_download_url":"https://gitee.com/dl/old.zip"},
+              {"name":"MagnetometerSystem-v0.5.0-portable-win-arm64.zip","browser_download_url":"https://gitee.com/dl/arm.zip"},
+              {"name":"AnotherProduct-v0.5.0-setup.exe","browser_download_url":"https://gitee.com/dl/other.exe"},
+              {"name":"MagnetometerSystem-v0.5.0-setup.exe","browser_download_url":"https://gitee.com/dl/setup.exe"},
+              {"name":"MagnetometerSystem-v0.5.0-portable-win-x64.zip","browser_download_url":"https://gitee.com/dl/portable-win-x64.zip"},
+              {"name":"SHA256SUMS.txt","browser_download_url":"https://gitee.com/dl/SHA256SUMS.txt"}
+            ]
+            """), Current, kind);
+
+        Assert.Equal(UpdateCheckStatus.UpdateAvailable, result.Status);
+        Assert.Equal($"MagnetometerSystem-v0.5.0-{suffix}", result.Info!.FileName);
+        Assert.Equal($"https://gitee.com/dl/{suffix}", result.Info.DownloadUrl);
+        Assert.Equal("https://gitee.com/dl/SHA256SUMS.txt", result.Info.ChecksumsUrl);
+    }
+
+    [Theory]
+    [InlineData(AppPackageKind.Installer, "MagnetometerSystem-v0.4.0-setup.exe")]
+    [InlineData(AppPackageKind.Installer, "AnotherProduct-v0.5.0-setup.exe")]
+    [InlineData(AppPackageKind.Portable, "MagnetometerSystem-v0.4.0-portable-win-x64.zip")]
+    [InlineData(AppPackageKind.Portable, "MagnetometerSystem-v0.5.0-portable-win-arm64.zip")]
+    [InlineData(AppPackageKind.Portable, "MagnetometerSystem-v0.5.0-portable-win-x86.zip")]
+    public void ParseLatestRelease_仅有错误版本或架构时保留发布页而不下载(
+        AppPackageKind kind, string wrongFileName)
+    {
+        var result = GiteeUpdateService.ParseLatestRelease(Release(assets: $$"""
+            [
+              {"name":"{{wrongFileName}}","browser_download_url":"https://gitee.com/dl/wrong"},
+              {"name":"SHA256SUMS.txt","browser_download_url":"https://gitee.com/dl/SHA256SUMS.txt"}
+            ]
+            """), Current, kind);
+
+        Assert.Equal(UpdateCheckStatus.UpdateAvailable, result.Status);
+        Assert.Equal("0.5.0", result.Info!.Version);
+        Assert.False(result.Info.CanDownload);
+        Assert.Null(result.Info.FileName);
+        Assert.Null(result.Info.DownloadUrl);
+        Assert.EndsWith("/v0.5.0", result.Info.HtmlUrl);
+    }
+
     [Fact]
     public void ParseLatestRelease_旧命名的资源_降级为只能打开下载页()
     {

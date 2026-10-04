@@ -35,6 +35,8 @@ A separate device-storage download workflow is not implemented. The ZDZ Read Sto
 | Device commands | Protocol-associated command groups, parameterized frames, ASCII/HEX transmission, communication logs |
 | Optional correction | Orthogonality collection and profiles, offset/gain calibration, historical correction; ordinary capture does not require these tools |
 
+Historical batch corrections are saved as separate versions identified by both profile IDs, channel mappings, and a fingerprint of the calculation parameters. Editing parameters under the same profile ID preserves earlier results. Select a saved correction version when exporting; the CSV `CorrectionVersion` column contains its full identifier. Legacy single-profile IDs remain selectable, and original readings are unchanged.
+
 **Written locally, acknowledged, and executed are different states.** A successful send call confirms a local write. Device acceptance and execution must be established using the protocol response or observed device behavior.
 
 Charts retain the latest **100,000 points per channel** for display and interval analysis. The complete session consists of data committed to SQLite. Display channels are no longer truncated at 64, and a 65-channel regression test is included; larger channel counts and higher throughput still require measurement on the intended device and computer.

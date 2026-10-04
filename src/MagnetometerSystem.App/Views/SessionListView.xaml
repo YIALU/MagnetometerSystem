@@ -171,7 +171,14 @@
                         <TextBox Text="{Binding ExportDecimalPlaces, ValidatesOnExceptions=True}" Width="55" Margin="0,0,12,0" ToolTip="0至15；留空保留全精度"/>
                         <Button Content="导出所选会话" Command="{Binding ExportSessionCommand}" CommandParameter="{Binding SelectedSession}" Padding="10,4"/>
                     </WrapPanel>
-                    <TextBlock Text="Raw：原始；Corrected：改正；RawAndCorrected：并列。改正版本使用下方所选第一组配置。" Foreground="#64748B" TextWrapping="Wrap" Margin="0,6,0,0"/>
+                    <DockPanel Margin="0,6,0,0">
+                        <TextBlock Text="已保存改正版本:" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <Button DockPanel.Dock="Right" Content="刷新版本" Command="{Binding RefreshCorrectionVersionsCommand}" Margin="6,0,0,0" Padding="8,4"/>
+                        <ComboBox ItemsSource="{Binding AvailableCorrectionVersions}" SelectedItem="{Binding SelectedCorrectionVersion}"
+                                  DisplayMemberPath="DisplayName" ToolTip="{Binding SelectedCorrectionVersion.Id}" MinWidth="180"/>
+                    </DockPanel>
+                    <TextBlock Text="{Binding CorrectionVersionsStatus}" Foreground="#64748B" TextWrapping="Wrap"/>
+                    <TextBlock Text="Raw：原始；Corrected：改正；RawAndCorrected：并列。多个改正版本时需选择；CSV 包含完整版本标识。" Foreground="#64748B" TextWrapping="Wrap" Margin="0,6,0,0"/>
                 </StackPanel>
             </Expander>
             <!-- 批量校正只生成独立结果；必须选择明确的磁场通道 -->

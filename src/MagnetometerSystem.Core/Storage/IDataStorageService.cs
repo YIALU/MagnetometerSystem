@@ -50,6 +50,9 @@ public interface IDataStorageService
     Task<IReadOnlyList<CorrectedReading>> GetCorrectedReadingsAsync(
         string sessionId, string? correctionProfileId = null);
 
+    /// <summary>列出会话已保存的改正版本，不加载每条改正数值。</summary>
+    Task<IReadOnlyList<string>> GetCorrectionVersionIdsAsync(string sessionId);
+
     /// <summary>删除指定会话的校正读数，可按校正配置 ID 筛选</summary>
     Task DeleteCorrectedReadingsAsync(string sessionId, string? correctionProfileId = null);
 

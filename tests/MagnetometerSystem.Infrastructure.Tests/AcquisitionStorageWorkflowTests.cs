@@ -120,7 +120,9 @@ public sealed class AcquisitionStorageWorkflowTests : IAsyncLifetime
         Assert.Equal(10, lines.Length);
         Assert.Contains("Temperature_raw [°C],Temperature_corrected [°C]", lines[0]);
         var fields = lines[1].Split(',');
-        Assert.Equal(1 + channelCount * 2, fields.Length);
+        Assert.Equal(2 + channelCount * 2, fields.Length);
+        Assert.Equal("CorrectionVersion", lines[0].Split(',')[^1]);
+        Assert.Equal(parameters.Id, fields[^1]);
         Assert.Equal("0.125", fields[1]);
         Assert.Equal("-0.875", fields[2]);
         Assert.Equal("3.125", fields[7]);

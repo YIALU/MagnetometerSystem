@@ -140,7 +140,7 @@ public sealed class GiteeUpdateService : IUpdateService, IDisposable
 
             if (remote <= local) return UpdateCheckResult.UpToDate();
 
-            var (downloadUrl, fileName, checksumsUrl) = SelectAssets(root, kind);
+            var (downloadUrl, fileName, checksumsUrl) = SelectAssets(root, kind, remote.ToString(3));
 
             var info = new UpdateInfo
             {
@@ -158,9 +158,9 @@ public sealed class GiteeUpdateService : IUpdateService, IDisposable
         }
     }
 
-    /// <summary>按分发形态从 assets 里挑出对应的安装包和校验文件。</summary>
+    /// <summary>按发布版本及支持的分发形态匹配完整文件名，避免选择旧包或其他架构。</summary>
     private static (string? DownloadUrl, string? FileName, string? ChecksumsUrl) SelectAssets(
-        JsonElement release, AppPackageKind kind)
+        JsonElement release, AppPackageKind kind, string version)
     {
         if (!release.TryGetProperty("assets", out var assets) ||
             assets.ValueKind != JsonValueKind.Array)
@@ -169,6 +169,12 @@ public sealed class GiteeUpdateService : IUpdateService, IDisposable
         }
 
         string? downloadUrl = null, fileName = null, checksumsUrl = null;
+        var expectedName = kind switch
+        {
+            AppPackageKind.Installer => $"MagnetometerSystem-v{version}-setup.exe",
+            AppPackageKind.Portable => $"MagnetometerSystem-v{version}-portable-win-x64.zip",
+            _ => null
+        };
 
         foreach (var asset in assets.EnumerateArray())
         {
@@ -184,17 +190,7 @@ public sealed class GiteeUpdateService : IUpdateService, IDisposable
 
             if (downloadUrl is not null) continue;
 
-            var matches = kind switch
-            {
-                AppPackageKind.Installer =>
-                    name.EndsWith("-setup.exe", StringComparison.OrdinalIgnoreCase),
-                AppPackageKind.Portable =>
-                    name.Contains("-portable-", StringComparison.OrdinalIgnoreCase) &&
-                    name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase),
-                _ => false
-            };
-
-            if (matches)
+            if (name.Equals(expectedName, StringComparison.OrdinalIgnoreCase))
             {
                 downloadUrl = url;
                 fileName = name;

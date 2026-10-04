@@ -50,6 +50,15 @@ public partial class SessionListViewModel : ObservableObject
     [ObservableProperty] private bool _exportIncludeUnits = true;
     [ObservableProperty] private bool _exportIncludeHeader = true;
     [ObservableProperty] private int? _exportDecimalPlaces;
+    public ObservableCollection<CorrectionVersionOption> AvailableCorrectionVersions { get; } = new();
+    [ObservableProperty] private CorrectionVersionOption? _selectedCorrectionVersion;
+    [ObservableProperty] private string _correctionVersionsStatus = "";
+    private string? _correctionVersionSessionId;
+    private long _correctionVersionsLoad;
+    public sealed record CorrectionVersionOption(string Id)
+    {
+        public string DisplayName => OrthogonalityCorrectionSnapshot.DisplayName(Id);
+    }
     public ExportDataSource[] ExportSources { get; } = Enum.GetValues<ExportDataSource>();
 
     // ---- 当前采集的传感器/连接配置（用于创建会话） ----
@@ -62,6 +71,43 @@ public partial class SessionListViewModel : ObservableObject
     // ---- 选中项 ----
     [ObservableProperty]
     private SessionInfo? _selectedSession;
+
+    partial void OnSelectedSessionChanged(SessionInfo? value)
+    {
+        AvailableCorrectionVersions.Clear();
+        SelectedCorrectionVersion = null;
+        _correctionVersionSessionId = null;
+        _ = RefreshCorrectionVersionsAsync();
+    }
+
+    [RelayCommand]
+    public async Task RefreshCorrectionVersionsAsync()
+    {
+        var request = ++_correctionVersionsLoad;
+        var sessionId = SelectedSession?.Id;
+        CorrectionVersionsStatus = "";
+        if (sessionId == null) return;
+        try
+        {
+            var versions = await _storageService.GetCorrectionVersionIdsAsync(sessionId);
+            if (request != _correctionVersionsLoad || SelectedSession?.Id != sessionId) return;
+            var previous = SelectedCorrectionVersion?.Id;
+            AvailableCorrectionVersions.Clear();
+            foreach (var id in versions) AvailableCorrectionVersions.Add(new(id));
+            SelectedCorrectionVersion = AvailableCorrectionVersions.FirstOrDefault(v => v.Id == previous)
+                ?? (AvailableCorrectionVersions.Count == 1 ? AvailableCorrectionVersions[0] : null);
+            _correctionVersionSessionId = sessionId;
+            CorrectionVersionsStatus = versions.Count == 0 ? "此会话尚无改正结果" : "";
+        }
+        catch (Exception ex)
+        {
+            if (request != _correctionVersionsLoad || SelectedSession?.Id != sessionId) return;
+            AvailableCorrectionVersions.Clear();
+            SelectedCorrectionVersion = null;
+            _correctionVersionSessionId = null;
+            CorrectionVersionsStatus = $"读取改正版本失败：{ex.Message}";
+        }
+    }
 
     // ---- 搜索/筛选 ----
     [ObservableProperty]
@@ -97,7 +143,7 @@ public partial class SessionListViewModel : ObservableObject
     [ObservableProperty]
     private OrthogonalityParams? _selectedCorrectionProfile;
 
-    /// <summary>双三轴第二组正交度配置（仅双三轴传感器会话使用）</summary>
+    /// <summary>可选的第二组三通道正交度配置。</summary>
     [ObservableProperty]
     private OrthogonalityParams? _selectedCorrectionProfileSecond;
 
@@ -485,7 +531,7 @@ public partial class SessionListViewModel : ObservableObject
                 IncludeCalibratedData = ExportSource != ExportDataSource.Raw,
                 IncludeUnits = ExportIncludeUnits,
                 Source = ExportSource,
-                CorrectionProfileId = SelectedCorrectionProfile?.Id,
+                CorrectionProfileId = _correctionVersionSessionId == session.Id ? SelectedCorrectionVersion?.Id : null,
                 StartTime = ExportStartTime,
                 EndTime = ExportEndTime,
                 DecimalPlaces = ExportDecimalPlaces,
@@ -538,10 +584,12 @@ public partial class SessionListViewModel : ObservableObject
         var isDual = SelectedCorrectionProfileSecond != null;
         int[] firstChannels;
         int[]? secondChannels;
+        OrthogonalityCorrectionSnapshot snapshot;
         try
         {
             firstChannels = CorrectionMapping(FirstCorrectionChannels, session, false);
             secondChannels = isDual ? CorrectionMapping(SecondCorrectionChannels, session, true) : null;
+            snapshot = new OrthogonalityCorrectionSnapshot(SelectedCorrectionProfile, SelectedCorrectionProfileSecond, firstChannels, secondChannels);
         }
         catch (Exception ex)
         {
@@ -593,35 +641,27 @@ public partial class SessionListViewModel : ObservableObject
                 CorrectionProgress = processed;
             });
 
-            var batchResult = await _orthogonalityCorrector.ApplyBatchAsync(
-                SelectedCorrectionProfile, SelectedCorrectionProfileSecond, readings,
-                firstChannels, secondChannels, progress);
-
-            // 4. 映射为 CorrectedReading 并保存
-            var correctedReadings = new List<CorrectedReading>();
-            for (int i = 0; i < readings.Count; i++)
-            {
-                var cr = CorrectedReading.FromOriginal(
-                    readings[i],
-                    batchResult.CorrectedReadings[i].ChannelValues,
-                    SelectedCorrectionProfile.Id);
-                correctedReadings.Add(cr);
-            }
-
+            var correctedReadings = await snapshot.ApplyBatchAsync(_orthogonalityCorrector, readings, progress);
             await _storageService.SaveCorrectedReadingsAsync(correctedReadings);
+            if (SelectedSession?.Id == session.Id)
+            {
+                await RefreshCorrectionVersionsAsync();
+                if (_correctionVersionSessionId == session.Id)
+                    SelectedCorrectionVersion = AvailableCorrectionVersions.FirstOrDefault(v => v.Id == snapshot.VersionId);
+            }
 
             // 5. 导出 CSV 到用户选定的路径
             await _dataExporter.ExportAsync(session.Id, csvDialog.FileName, new ExportOptions
             {
                 Source = ExportDataSource.Corrected,
-                CorrectionProfileId = SelectedCorrectionProfile.Id,
+                CorrectionProfileId = snapshot.VersionId,
                 IncludeUnits = true,
                 IncludeCalibratedData = true
             });
 
             CorrectionProgress = 100;
             MessageBox.Show(
-                $"校正完成！\n处理 {batchResult.ProcessedCount} 条数据。\n" +
+                $"校正完成！\n处理 {correctedReadings.Count} 条数据。\n" +
                 $"• 数据库：已保存到 corrected_readings 表\n" +
                 $"• 文件：{csvDialog.FileName}",
                 "成功",

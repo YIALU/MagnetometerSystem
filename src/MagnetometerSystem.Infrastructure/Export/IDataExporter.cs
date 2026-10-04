@@ -30,6 +30,7 @@ public interface IDataExporter
 public class ExportOptions
 {
     public ExportDataSource Source { get; set; } = ExportDataSource.Raw;
+    /// <summary>已保存的改正版本键；兼容旧记录的单配置 ID。</summary>
     public string? CorrectionProfileId { get; set; }
     public bool IncludeUnits { get; set; }
     /// <summary>null 保留 round-trip 全精度，否则使用指定小数位。</summary>

@@ -32,7 +32,7 @@ public class CsvExporter(IDataStorageService storageService) : IDataExporter
         {
             var corrected = await storageService.GetCorrectedReadingsAsync(sessionId, options.CorrectionProfileId);
             if (corrected.Select(r => r.CorrectionProfileId).Distinct().Skip(1).Any())
-                throw new ArgumentException("存在多个改正版本，请指定导出参数配置。");
+                throw new ArgumentException("存在多个改正版本，请选择已保存的改正版本。");
             foreach (var item in corrected.OrderBy(r => r.CorrectedAt).ThenBy(r => r.Id))
                 corrections[item.OriginalReadingId] = item;
             if (readings.Any(r => !corrections.ContainsKey(r.Id)))
@@ -84,6 +84,7 @@ public class CsvExporter(IDataStorageService storageService) : IDataExporter
             else fields.Add(name + unit);
         }
         if (options.IncludeCalibratedData) fields.AddRange(["IsCalibrated", "IsOrthoCorrected"]);
+        if (options.Source != ExportDataSource.Raw) fields.Add("CorrectionVersion");
         return string.Join(",", fields.Select(Escape));
     }
 
@@ -108,6 +109,7 @@ public class CsvExporter(IDataStorageService storageService) : IDataExporter
         }
         if (options.IncludeCalibratedData)
             fields.AddRange(["0", options.Source == ExportDataSource.Raw ? "0" : "1"]);
+        if (options.Source != ExportDataSource.Raw) fields.Add(corrected!.CorrectionProfileId);
         return string.Join(",", fields.Select(Escape));
     }
 

@@ -272,6 +272,7 @@ public class StorageFaultAcquisitionTests
         public Task UpdateSessionAsync(string id, string name, string? notes) => inner.UpdateSessionAsync(id, name, notes);
         public Task SaveCorrectedReadingsAsync(IEnumerable<CorrectedReading> readings) => inner.SaveCorrectedReadingsAsync(readings);
         public Task<IReadOnlyList<CorrectedReading>> GetCorrectedReadingsAsync(string id, string? profile = null) => inner.GetCorrectedReadingsAsync(id, profile);
+        public Task<IReadOnlyList<string>> GetCorrectionVersionIdsAsync(string id) => inner.GetCorrectionVersionIdsAsync(id);
         public Task DeleteCorrectedReadingsAsync(string id, string? profile = null) => inner.DeleteCorrectedReadingsAsync(id, profile);
         public Task<bool> HasCorrectedReadingsAsync(string id) => inner.HasCorrectedReadingsAsync(id);
     }
