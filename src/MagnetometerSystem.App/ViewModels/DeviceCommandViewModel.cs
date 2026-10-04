@@ -330,8 +330,7 @@ public partial class DeviceCommandViewModel : ObservableObject
                 display = CommandFrameBuilder.ToHexString(data);
             }
 
-            await _connection.SendAsync(data);
-            AppendToLog($"[TX {DateTime.Now:HH:mm:ss}] {display}\n");
+            await SendFrameAsync(data, display, SelectedCommand);
         }
         catch (Exception ex)
         {
@@ -393,6 +392,17 @@ public partial class DeviceCommandViewModel : ObservableObject
             display = text + (appendNewline ? "\\r\\n" : "");
         }
 
+        await SendFrameAsync(data, display);
+    }
+
+    private async Task SendFrameAsync(byte[] data, string display, DeviceCommand? command = null)
+    {
+        if (command?.RequiresIsolatedTransfer == true)
+        {
+            AppendToLog("[ERR] 未发送：此命令需要独立传输，设备存储下载隔离尚未实现，暂不可用。\n");
+            return;
+        }
+        if (_connection == null) return;
         await _connection.SendAsync(data);
         AppendToLog($"[TX {DateTime.Now:HH:mm:ss}] {display}\n");
     }

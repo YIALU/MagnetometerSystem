@@ -170,6 +170,26 @@ public class ZdzC08CommandTests
         Assert.Contains("240 字节", ex.Message);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void StorageDownloadRequiresIsolationAfterProtocolAndCatalogRoundTrips(bool magneticOnly)
+    {
+        var preset = magneticOnly ? ProtocolConfig.CreateZdzC08MagneticOnly() : ProtocolConfig.CreateZdzC08();
+        var protocol = ProtocolConfig.FromJson(preset.ToJson())!;
+        var catalogJson = System.Text.Json.JsonSerializer.Serialize(new CommandCatalog { Groups = protocol.Commands });
+        var catalog = System.Text.Json.JsonSerializer.Deserialize<CommandCatalog>(catalogJson)!;
+        var commands = catalog.Groups.SelectMany(g => g.Commands).ToList();
+        var download = Assert.Single(commands.Where(c => c.RequiresIsolatedTransfer));
+        Assert.Equal("读取存储数据", download.Name);
+        Assert.Equal("90 9F", CommandFrameBuilder.ToHexString(CommandFrameBuilder.BuildBinaryFrame(download, NoParams).FullBytes));
+        Assert.Contains("暂不可用", download.Description);
+        Assert.All(commands.Where(c => c != download), c => Assert.False(c.RequiresIsolatedTransfer));
+        // Existing custom definitions are not classified by a name or device type.
+        var custom = System.Text.Json.JsonSerializer.Deserialize<DeviceCommand>("{\"Name\":\"读取存储数据\",\"Template\":\"STATUS\"}")!;
+        Assert.False(custom.RequiresIsolatedTransfer);
+    }
+
     [Fact]
     public void AllBuiltInCommands_UseNoChecksum()
     {
