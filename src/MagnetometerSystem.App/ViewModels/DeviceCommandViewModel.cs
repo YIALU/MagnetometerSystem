@@ -24,10 +24,28 @@ public partial class CommandParameterBinding : ObservableObject
     [ObservableProperty]
     private string _value = "";
 
+    /// <summary>枚举可选项（有值时 UI 出下拉框，否则出文本框）</summary>
+    public IReadOnlyList<string> Choices { get; }
+
+    /// <summary>是否以下拉方式呈现</summary>
+    public bool IsChoice => Choices.Count > 0;
+
+    /// <summary>是否以文本框呈现（XAML 里没有 bool 取反，直接给一个反向属性）</summary>
+    public bool IsFreeText => !IsChoice;
+
     public CommandParameterBinding(CommandParameter def)
     {
         Definition = def;
-        Value = def.DefaultValue;
+
+        // 二进制枚举优先；退化到 ASCII 模板用的 EnumOptions
+        Choices = def.EnumMap.Count > 0
+            ? [.. def.EnumMap.Select(c => c.Label)]
+            : (def.Type == CommandParameterType.Enum ? [.. def.EnumOptions] : Array.Empty<string>());
+
+        // 默认值不在候选里时回落到首项，避免下拉空白且发出去的是空值
+        Value = IsChoice && !Choices.Contains(def.DefaultValue)
+            ? Choices[0]
+            : def.DefaultValue;
     }
 }
 
@@ -44,7 +62,16 @@ public partial class DeviceCommandViewModel : ObservableObject
     private const string CatalogKey = "device.commandCatalog";
 
     // ---- 目录 / 组 / 命令 ----
+    // Groups = 协议自带的内置组（随协议切换）+ 用户目录组。
+    // 两者必须分开持有：SaveCatalogAsync 只能写回 _userGroups，
+    // 否则内置组会被烙进用户目录，每次加载协议时重复叠加。
     public ObservableCollection<CommandGroup> Groups { get; } = new();
+
+    /// <summary>用户自定义命令组（持久化到配置）</summary>
+    private readonly List<CommandGroup> _userGroups = [];
+
+    /// <summary>当前协议自带的内置命令组（不持久化）</summary>
+    private List<CommandGroup> _protocolGroups = [];
 
     [ObservableProperty]
     private CommandGroup? _selectedGroup;
@@ -121,17 +148,64 @@ public partial class DeviceCommandViewModel : ObservableObject
 
         Application.Current?.Dispatcher.Invoke(() =>
         {
-            Groups.Clear();
-            foreach (var g in catalog.Groups) Groups.Add(g);
-            SelectedGroup = Groups.FirstOrDefault();
+            _userGroups.Clear();
+            foreach (var g in catalog.Groups)
+            {
+                g.IsBuiltIn = false; // 用户目录里的组一律可编辑，防止读入陈旧标志
+                _userGroups.Add(g);
+            }
+            RebuildGroups();
         });
+    }
+
+    /// <summary>
+    /// 把内置组与用户组合并进 Groups（内置在前），并尽量保住当前选中项。
+    /// </summary>
+    private void RebuildGroups()
+    {
+        var previouslySelected = SelectedGroup;
+
+        Groups.Clear();
+        foreach (var g in _protocolGroups) Groups.Add(g);
+        foreach (var g in _userGroups) Groups.Add(g);
+
+        SelectedGroup = previouslySelected != null && Groups.Contains(previouslySelected)
+            ? previouslySelected
+            : Groups.FirstOrDefault();
+    }
+
+    /// <summary>
+    /// 切换协议时替换内置命令组。协议无自带命令时传入空列表即可。
+    /// </summary>
+    public void SetProtocolCommands(IEnumerable<CommandGroup>? groups)
+    {
+        _protocolGroups = groups?.ToList() ?? [];
+        foreach (var g in _protocolGroups)
+            g.IsBuiltIn = true;
+
+        if (Application.Current?.Dispatcher is { } dispatcher && !dispatcher.CheckAccess())
+            dispatcher.Invoke(RebuildGroups);
+        else
+            RebuildGroups();
     }
 
     private async Task SaveCatalogAsync()
     {
-        var catalog = new CommandCatalog { Groups = Groups.ToList() };
+        // 只持久化用户组：内置组由协议提供，写进去会在下次加载时重复叠加
+        var catalog = new CommandCatalog { Groups = [.. _userGroups] };
         try { await _configService.SetAsync(CatalogKey, catalog); }
         catch (Exception ex) { AppendToLog($"[ERR] 保存目录失败: {ex.Message}\n"); }
+    }
+
+    /// <summary>内置组只读，拦下所有会被下次加载覆盖掉的编辑操作</summary>
+    private bool RejectIfBuiltIn(CommandGroup? group)
+    {
+        if (group?.IsBuiltIn != true) return false;
+        MessageBox.Show(
+            $"'{group.Name}' 是协议自带的内置命令组，不能修改。\n\n"
+            + "如需自定义，请新建命令组，或在协议配置中调整。",
+            "内置命令组", MessageBoxButton.OK, MessageBoxImage.Information);
+        return true;
     }
 
     partial void OnSelectedGroupChanged(CommandGroup? value)
@@ -142,7 +216,15 @@ public partial class DeviceCommandViewModel : ObservableObject
             foreach (var c in value.Commands) CurrentCommands.Add(c);
         }
         SelectedCommand = CurrentCommands.FirstOrDefault();
+        OnPropertyChanged(nameof(CanEditSelectedGroup));
+        OnPropertyChanged(nameof(SelectedGroupIsBuiltIn));
     }
+
+    /// <summary>选中组是否可编辑（内置组只读；未选中时按钮也应禁用）</summary>
+    public bool CanEditSelectedGroup => SelectedGroup is { IsBuiltIn: false };
+
+    /// <summary>选中组是否为协议自带的内置组（用于显示只读提示）</summary>
+    public bool SelectedGroupIsBuiltIn => SelectedGroup?.IsBuiltIn == true;
 
     partial void OnSelectedCommandChanged(DeviceCommand? value)
     {
@@ -324,7 +406,8 @@ public partial class DeviceCommandViewModel : ObservableObject
         if (string.IsNullOrWhiteSpace(name)) return;
 
         var group = new CommandGroup { Name = name };
-        Groups.Add(group);
+        _userGroups.Add(group);
+        RebuildGroups();
         SelectedGroup = group;
         await SaveCatalogAsync();
     }
@@ -333,7 +416,7 @@ public partial class DeviceCommandViewModel : ObservableObject
     private async Task RenameGroupAsync(CommandGroup? group)
     {
         group ??= SelectedGroup;
-        if (group == null) return;
+        if (group == null || RejectIfBuiltIn(group)) return;
 
         var name = PromptInput("重命名命令组", "组名:", group.Name);
         if (string.IsNullOrWhiteSpace(name) || name == group.Name) return;
@@ -354,15 +437,15 @@ public partial class DeviceCommandViewModel : ObservableObject
     private async Task DeleteGroupAsync(CommandGroup? group)
     {
         group ??= SelectedGroup;
-        if (group == null) return;
+        if (group == null || RejectIfBuiltIn(group)) return;
 
         var result = MessageBox.Show(
             $"确定删除命令组 '{group.Name}' 及其 {group.Commands.Count} 条命令？",
             "确认删除", MessageBoxButton.YesNo, MessageBoxImage.Warning);
         if (result != MessageBoxResult.Yes) return;
 
-        Groups.Remove(group);
-        SelectedGroup = Groups.FirstOrDefault();
+        _userGroups.Remove(group);
+        RebuildGroups();
         await SaveCatalogAsync();
     }
 
@@ -374,6 +457,7 @@ public partial class DeviceCommandViewModel : ObservableObject
             MessageBox.Show("请先选择或创建命令组", "提示");
             return;
         }
+        if (RejectIfBuiltIn(SelectedGroup)) return;
 
         var cmd = new DeviceCommand { Name = "新命令", Template = "" };
         var dlg = new Views.Dialogs.CommandEditDialog(cmd, "新建命令");
@@ -390,7 +474,7 @@ public partial class DeviceCommandViewModel : ObservableObject
     private async Task EditCommandAsync(DeviceCommand? cmd)
     {
         cmd ??= SelectedCommand;
-        if (cmd == null) return;
+        if (cmd == null || RejectIfBuiltIn(SelectedGroup)) return;
 
         var dlg = new Views.Dialogs.CommandEditDialog(cmd, "编辑命令");
         dlg.Owner = Application.Current?.MainWindow;
@@ -413,7 +497,7 @@ public partial class DeviceCommandViewModel : ObservableObject
     private async Task DeleteCommandAsync(DeviceCommand? cmd)
     {
         cmd ??= SelectedCommand;
-        if (cmd == null || SelectedGroup == null) return;
+        if (cmd == null || SelectedGroup == null || RejectIfBuiltIn(SelectedGroup)) return;
 
         var result = MessageBox.Show(
             $"确定删除命令 '{cmd.Name}'？", "确认删除",
@@ -447,9 +531,14 @@ public partial class DeviceCommandViewModel : ObservableObject
                 return;
             }
 
-            Groups.Clear();
-            foreach (var g in catalog.Groups) Groups.Add(g);
-            SelectedGroup = Groups.FirstOrDefault();
+            // 导入只替换用户组；协议自带的内置组不受影响
+            _userGroups.Clear();
+            foreach (var g in catalog.Groups)
+            {
+                g.IsBuiltIn = false;
+                _userGroups.Add(g);
+            }
+            RebuildGroups();
             await SaveCatalogAsync();
         }
         catch (Exception ex)
@@ -472,7 +561,8 @@ public partial class DeviceCommandViewModel : ObservableObject
 
         try
         {
-            var catalog = new CommandCatalog { Groups = Groups.ToList() };
+            // 导出用户组即可；内置组随协议走，导出后再导入会与协议自带的重复
+            var catalog = new CommandCatalog { Groups = [.. _userGroups] };
             var json = System.Text.Json.JsonSerializer.Serialize(catalog,
                 new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
             await File.WriteAllTextAsync(dlg.FileName, json);

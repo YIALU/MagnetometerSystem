@@ -649,6 +649,8 @@ public partial class ConnectionViewModel : ObservableObject
         SavedProtocols.Add(ProtocolConfig.CreateDefaultBinaryTriaxial());
         SavedProtocols.Add(ProtocolConfig.CreateDefaultBinaryTriaxialSegments());
         SavedProtocols.Add(ProtocolConfig.CreateCct5Gradiometer());
+        SavedProtocols.Add(ProtocolConfig.CreateZdzC08());
+        SavedProtocols.Add(ProtocolConfig.CreateZdzC08MagneticOnly());
 
         // 从文件加载
         if (Directory.Exists(ProtocolConfigDir))

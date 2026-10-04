@@ -39,7 +39,10 @@ public static class CommandFrameBuilder
         var result = cmd.Template ?? "";
         foreach (var (key, val) in paramValues)
         {
-            result = result.Replace("{" + key + "}", val ?? "");
+            // 带 EnumMap 的参数在模板里也应替换为实际数值，与二进制路径保持一致
+            var param = cmd.Parameters.FirstOrDefault(p => p.Key == key);
+            var resolved = param != null ? ResolveEnumValue(param, val) : (val ?? "");
+            result = result.Replace("{" + key + "}", resolved);
         }
         return result;
     }
@@ -82,9 +85,28 @@ public static class CommandFrameBuilder
 
     // ---- 参数编码 ----
 
+    /// <summary>
+    /// 把界面上的取值解析为待编码的字符串。
+    /// 配了 <see cref="CommandParameter.EnumMap"/> 的参数，界面显示的是标签
+    /// （如 "25 Hz"、"2000000"），需要先映射回实际数值再交给数值编码器。
+    /// 未命中标签时原样返回，允许用户直接键入数值。
+    /// </summary>
+    public static string ResolveEnumValue(CommandParameter p, string value)
+    {
+        if (p.EnumMap.Count == 0 || string.IsNullOrEmpty(value))
+            return value ?? "";
+
+        foreach (var choice in p.EnumMap)
+        {
+            if (string.Equals(choice.Label, value, StringComparison.Ordinal))
+                return choice.Value.ToString(CultureInfo.InvariantCulture);
+        }
+        return value;
+    }
+
     public static byte[] EncodeParameter(CommandParameter p, string value)
     {
-        value ??= "";
+        value = ResolveEnumValue(p, value);
 
         switch (p.Type)
         {

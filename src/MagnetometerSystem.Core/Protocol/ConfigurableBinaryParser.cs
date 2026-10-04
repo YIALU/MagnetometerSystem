@@ -22,6 +22,9 @@ public class ConfigurableBinaryParser : IDataParser
     private readonly FrameSegment? _checksumSegment;
     private readonly int _segmentFrameLength;
 
+    /// <summary>启用了 ValidateFixedValue 的 Padding 段：(帧内偏移, 期望字节)</summary>
+    private readonly List<(int Offset, byte[] Expected)> _constantChecks = [];
+
     public ConfigurableBinaryParser(ProtocolConfig config)
     {
         _config = config ?? throw new ArgumentNullException(nameof(config));
@@ -45,6 +48,18 @@ public class ConfigurableBinaryParser : IDataParser
             _checksumSegment = config.Segments.FirstOrDefault(s => s.Type == SegmentType.Checksum);
             _dataSegments = config.Segments.Where(s => s.Type == SegmentType.DataField).ToList();
             _segmentFrameLength = config.TotalFrameLength;
+
+            // 收集需要参与校验的固定值段（信息 ID、固定长度字段等）
+            foreach (var seg in config.Segments)
+            {
+                if (seg.Type != SegmentType.Padding || !seg.ValidateFixedValue)
+                    continue;
+                if (string.IsNullOrEmpty(seg.FixedHexValue))
+                    continue;
+                var expected = ProtocolConfig.HexToBytes(seg.FixedHexValue);
+                if (expected.Length == seg.ByteCount)
+                    _constantChecks.Add((seg.ComputedOffset, expected));
+            }
         }
         else
         {
@@ -142,6 +157,21 @@ public class ConfigurableBinaryParser : IDataParser
                 if (_ringBuffer.Peek(tailOffset + i) != _tailBytes[i])
                 {
                     _ringBuffer.Skip(_headerBytes.Length);
+                    return false;
+                }
+            }
+        }
+
+        // 验证固定值段（信息 ID 等）：载荷里偶然出现帧头时，这些锚点能挡掉误锁
+        foreach (var (offset, expected) in _constantChecks)
+        {
+            if (offset + expected.Length > frameLen)
+                continue;
+            for (int i = 0; i < expected.Length; i++)
+            {
+                if (_ringBuffer.Peek(offset + i) != expected[i])
+                {
+                    _ringBuffer.Skip(1);
                     return false;
                 }
             }
