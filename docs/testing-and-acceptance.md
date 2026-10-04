@@ -82,15 +82,17 @@ dotnet test MagnetometerSystem.sln --no-build --no-restore -m:1 --verbosity mini
 
 ```powershell
 dotnet build MagnetometerSystem.sln -c Debug --no-restore --disable-build-servers -m:1 -nr:false -p:UseSharedCompilation=false -p:BuildInParallel=false
-dotnet test MagnetometerSystem.sln -c Debug --no-build --no-restore -m:1 --verbosity minimal --logger trx --results-directory .codex_tmp/TestResults-v050-layout
+dotnet test MagnetometerSystem.sln -c Debug --no-build --no-restore -m:1 --verbosity minimal --logger trx --results-directory .codex_tmp/TestResults-v050-commands
 ```
 
 | 项目 | 通过 | 跳过 | 失败 | TRX 时间 |
 | --- | ---: | ---: | ---: | --- |
-| Core | 414 | 1 | 0 | 22_02_34 |
-| Infrastructure | 113 | 0 | 0 | 22_02_35 |
-| App | 85 | 0 | 0 | 22_02_42 |
-| 合计 | **612** | **1** | **0** | 2026-10-04，本机 `.codex_tmp/TestResults-v050-layout` |
+| Core | 414 | 1 | 0 | 22_19_45 |
+| Infrastructure | 113 | 0 | 0 | 22_19_46 |
+| App | 89 | 0 | 0 | 22_19_53 |
+| 合计 | **616** | **1** | **0** | 2026-10-04，本机 `.codex_tmp/TestResults-v050-commands` |
+
+命令生命周期补充 4 项真实 TCP 回归：前条命令响应或超时前，后条不能进入连接写出；相同 ACK 的两条命令各自等待完整响应，实际超时释放排队，断连或释放取消在途等待并拒绝旧排队写出，重新连接后可再发送。对端实际接收字节及同步发送计数提供顺序证据；未配置响应判据的自由发送等待至超时或取消。协议没有请求 ID 时，超时后迟到 ACK 的归属仍无法保证，不能声称设备执行成功。
 
 发布前图表性能回归补充 7 例：活动刷新只从环形缓冲区复制显示与统计窗口的并集，保留总点数；暂停时一次性冻结完整历史，支持扩窗。测试覆盖显示/统计独立窗口、零窗口语义、隐藏来源计算、100,000 点环绕及暂停后继续来数。65 通道在相同短窗口下比较 1,000 与 100,000 点历史的实际刷新分配量，验证不会因全部保留历史增长而每帧复制全量；分配测试没有连接绘图控件，不代表完整绘制耗时或设备长时间吞吐已通过。
 

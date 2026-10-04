@@ -188,12 +188,15 @@ public class ProtocolFlowTests
             var custom = new DeviceCommand { Name = "读取存储数据", Template = "CUSTOM_STATUS", AppendNewline = false };
             vm.SetProtocolCommands([new CommandGroup { Name = "Custom", Commands = [custom] }]);
             vm.SelectedCommand = custom;
-            await vm.SendSelectedCommandCommand.ExecuteAsync(null);
+            var send = vm.SendSelectedCommandCommand.ExecuteAsync(null);
             byte[] received = new byte["CUSTOM_STATUS"u8.Length];
             await peer.GetStream().ReadExactlyAsync(received).AsTask().WaitAsync(TimeSpan.FromSeconds(3));
             Assert.Equal("CUSTOM_STATUS"u8.ToArray(), received);
+            await WaitForAsync(() => vm.LastSendByteCount == received.Length);
             Assert.Equal(received.Length, vm.LastSendByteCount);
             Assert.Contains("已写出", vm.WriteStatus);
+            await connection.DisconnectAsync();
+            await send.WaitAsync(TimeSpan.FromSeconds(3));
         }
         finally { bus.PublishConnectionChanged(null); listener.Stop(); }
     });
@@ -216,14 +219,16 @@ public class ProtocolFlowTests
             vm.SetProtocolCommands([new CommandGroup { Name = "CTMBS", Commands = [command] }]);
             vm.SelectedCommand = command;
             var expected = Ctmbs3X2000FrameBuilder.BuildRequestBytes(command, command.Parameters.ToDictionary(p => p.Key, p => p.DefaultValue));
-            await vm.SendSelectedCommandCommand.ExecuteAsync(null);
+            var send = vm.SendSelectedCommandCommand.ExecuteAsync(null);
             var transmitted = new byte[expected.Length];
             await peer.GetStream().ReadExactlyAsync(transmitted).AsTask().WaitAsync(TimeSpan.FromSeconds(3));
             Assert.Equal(expected, transmitted);
+            await WaitForAsync(() => vm.WriteStatus.Contains("已写出"));
             Assert.Contains("不代表设备执行成功", vm.WriteStatus);
             Assert.DoesNotContain("收到设备 ACK", vm.ResponseStatus);
             await peer.GetStream().WriteAsync("$a"u8.ToArray());
             await peer.GetStream().WriteAsync("ck\n"u8.ToArray());
+            await send.WaitAsync(TimeSpan.FromSeconds(3));
             await WaitForAsync(() => vm.ResponseStatus.Contains("收到设备 ACK"));
             await connection.DisconnectAsync();
             await WpfTestHost.PumpAsync();
@@ -256,7 +261,7 @@ public class ProtocolFlowTests
             vm.SetProtocolCommands([new CommandGroup { Name = "CTMBS", Commands = [command] }]);
             vm.SelectedCommand = command;
             var expected = Ctmbs3X2000FrameBuilder.BuildRequestBytes(command, new Dictionary<string, string>());
-            await vm.SendSelectedCommandCommand.ExecuteAsync(null);
+            var send = vm.SendSelectedCommandCommand.ExecuteAsync(null);
             var transmitted = new byte[expected.Length];
             await peer.GetStream().ReadExactlyAsync(transmitted).AsTask().WaitAsync(TimeSpan.FromSeconds(3));
             Assert.Equal(expected, transmitted);
@@ -275,6 +280,7 @@ public class ProtocolFlowTests
                 }
             }
             await WaitForAsync(() => vm.ResponseStatus.Contains(responseMode == 0 ? "超时" : "收到设备 ACK"));
+            await send.WaitAsync(TimeSpan.FromSeconds(3));
             Assert.DoesNotContain("拒绝", vm.ResponseStatus);
             if (responseMode == 0) Assert.Contains("执行结果未知", vm.ResponseStatus);
         }
@@ -314,7 +320,7 @@ public class ProtocolFlowTests
             if (mnemonic == "dat") vm.CurrentParameters.Single(p => p.Definition.Key == "mode").Value = mode;
             var values = vm.CurrentParameters.ToDictionary(p => p.Definition.Key, p => p.Value);
             var expected = Ctmbs3X2000FrameBuilder.BuildRequestBytes(command, values);
-            await vm.SendSelectedCommandCommand.ExecuteAsync(null);
+            var send = vm.SendSelectedCommandCommand.ExecuteAsync(null);
             byte[] transmitted = new byte[expected.Length];
             await peer.GetStream().ReadExactlyAsync(transmitted).AsTask().WaitAsync(TimeSpan.FromSeconds(3));
             Assert.Equal(expected, transmitted);
@@ -354,6 +360,7 @@ public class ProtocolFlowTests
                 Assert.Contains("执行结果未知", vm.ResponseStatus);
                 Assert.DoesNotContain("已收到实时帧", vm.ResponseStatus);
             }
+            await send.WaitAsync(TimeSpan.FromSeconds(3));
         }
         finally { bus.PublishConnectionChanged(null); listener.Stop(); }
     });
@@ -373,21 +380,23 @@ public class ProtocolFlowTests
             await connection.ConnectAsync();
             using var peer = await accept;
             vm.FreeCommandText = "SET_RATE 1000";
-            await vm.SendFreeCommandCommand.ExecuteAsync(null);
+            var send = vm.SendFreeCommandCommand.ExecuteAsync(null);
             var received = new byte[15];
             await peer.GetStream().ReadExactlyAsync(received).AsTask().WaitAsync(TimeSpan.FromSeconds(3));
             Assert.Equal("SET_RATE 1000\r\n", Encoding.ASCII.GetString(received));
             await peer.GetStream().WriteAsync("1,2,3\n"u8.ToArray());
             await WaitForAsync(() => vm.ResponseStatus.Contains("超时"));
+            await send.WaitAsync(TimeSpan.FromSeconds(3));
             Assert.Contains("执行结果未知", vm.ResponseStatus);
             vm.FreeIsHexMode = true;
             Assert.Equal("None", vm.FreeLineEnding);
             vm.FreeCommandText = "01 02";
             vm.FreeLineEnding = "LF";
-            await vm.SendFreeCommandCommand.ExecuteAsync(null);
+            var hexSend = vm.SendFreeCommandCommand.ExecuteAsync(null);
             var hexCommand = new byte[3];
             await peer.GetStream().ReadExactlyAsync(hexCommand).AsTask().WaitAsync(TimeSpan.FromSeconds(3));
             Assert.Equal(new byte[] { 1, 2, 10 }, hexCommand);
+            await hexSend.WaitAsync(TimeSpan.FromSeconds(3));
         }
         finally { bus.PublishConnectionChanged(null); listener.Stop(); }
     });

@@ -59,6 +59,7 @@ public partial class DeviceCommandViewModel : ObservableObject, IDisposable
     private readonly DataBus _dataBus;
     private readonly IAppConfigService _configService;
     private IDeviceConnection? _connection;
+    private volatile bool _disposed;
     private readonly SemaphoreSlim _sendGate = new(1, 1);
     private readonly object _responseGate = new();
     private CancellationTokenSource? _responseCts;
@@ -464,7 +465,9 @@ public partial class DeviceCommandViewModel : ObservableObject, IDisposable
             return;
         }
         if (data.Length == 0) throw new ArgumentException("命令不能为空");
-        if (ResponseTimeoutMs <= 0) throw new ArgumentException("响应超时必须为正数");
+        int responseTimeoutMs = ResponseTimeoutMs;
+        if (responseTimeoutMs <= 0) throw new ArgumentException("响应超时必须为正数");
+        bool isCtmbs = command?.Encoding == CommandEncoding.CtmbsRequest;
         byte[]? expected = string.IsNullOrEmpty(command?.ExpectedResponse) ? null
             : command.ExpectedResponseIsHex ? CommandFrameBuilder.ParseHexBytes(command.ExpectedResponse)
             : Encoding.UTF8.GetBytes(Regex.Unescape(command.ExpectedResponse));
@@ -474,6 +477,7 @@ public partial class DeviceCommandViewModel : ObservableObject, IDisposable
         IsSending = true;
         try
         {
+            ObjectDisposedException.ThrowIf(_disposed, this);
             var connection = _connection;
             if (connection?.IsConnected != true || !ReferenceEquals(requestedConnection, connection)
                 || requestedVersion != Interlocked.Read(ref _connectionVersion))
@@ -489,7 +493,7 @@ public partial class DeviceCommandViewModel : ObservableObject, IDisposable
                 token = _responseCts.Token;
                 _pendingConnection = connection;
                 _expectedResponse = expected;
-                _pendingCtmbs = command?.Encoding == CommandEncoding.CtmbsRequest;
+                _pendingCtmbs = isCtmbs;
                 _pendingRealtimeParser = awaitCtmbsRealtime
                     ? new Ctmbs3X2000Parser(ProtocolConfig.CreateCtmbs3X2000()) : null;
                 _responseBuffer.Clear();
@@ -502,7 +506,9 @@ public partial class DeviceCommandViewModel : ObservableObject, IDisposable
             LastSendByteCount = data.Length;
             WriteStatus = $"已写出 {data.Length} 字节；不代表设备执行成功";
             AppendToLog($"[TX {DateTime.Now:HH:mm:ss}] {display}\n");
-            _ = WaitForResponseAsync(token, ResponseTimeoutMs, version);
+            // A response without a request ID cannot belong to two outstanding commands.
+            // Hold the send gate asynchronously until this wait completes or is canceled.
+            await WaitForResponseAsync(token, responseTimeoutMs, version);
         }
         catch
         {
@@ -855,6 +861,9 @@ public partial class DeviceCommandViewModel : ObservableObject, IDisposable
 
     public void Dispose()
     {
+        if (_disposed) return;
+        _disposed = true;
+        Interlocked.Increment(ref _connectionVersion);
         _logFlushTimer.Stop();
         _dataBus.ConnectionChanged -= OnConnectionChanged;
         if (_connection != null)
