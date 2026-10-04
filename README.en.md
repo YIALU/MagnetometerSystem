@@ -1,57 +1,52 @@
 # MagnetometerSystem
 
-[简体中文](README.md)
+[简体中文](README.md) · [Download V0.5.0](https://github.com/YIALU/MagnetometerSystem/releases/tag/v0.5.0) · [User guide](docs/user-guide.en.md) · [Changelog](docs/变更日志.md)
 
-Current version: **[V0.5.0](https://github.com/YIALU/MagnetometerSystem/releases/tag/v0.5.0)** · [Changelog](docs/变更日志.md). GitHub Releases provide the Windows x64 installer, portable package, and SHA256 checksums. In-app updates still use the Gitee release source.
+**MagnetometerSystem is a general-purpose magnetometer desktop application for everyday debugging and experimental recording.** Connect a device through serial or TCP, receive data using a user-defined protocol, automatically save original readings, and plot live curves.
 
-A **.NET 8 / WPF** desktop workbench for everyday magnetometer debugging. Its primary workflow is to **receive data using a user-defined protocol, automatically store original readings after connecting, and plot live curves**.
-
-The protocol defines channel count, names, and units. Sampling rates are not constrained by device categories. Orthogonality correction, offset/gain calibration, and calculated channels are optional extensions.
-
-## Connect, capture, and export
-
-1. **Configure the connection:** select serial or TCP and enter serial parameters or the remote address and port.
-2. **Select or edit a protocol:** configure ASCII delimiters and field mappings, or binary frame segments, data types, byte order, scaling, and checksums. Verify channel order, names, and units. Protocols can be imported and exported as JSON.
-3. **Enter the nominal sampling rate and connect:** this value is metadata; it does not change the device sampling rate. Device configuration requires a command supported by that device.
-4. **Check reception and storage:** the capture session is prepared before opening the connection. Valid readings enter the storage and plotting paths automatically. Check received bytes, parsed values, and storage status separately.
-5. **Inspect the curves:** select channels, a time window, axes, and single/multiple plots. Pausing the display, collapsing panels, and display downsampling must not interrupt original-data storage.
-6. **Finish and export:** disconnect and wait for pending writes to finish. Select the session in data management to inspect, replay, or export CSV.
-
-An **original reading** is a channel value after protocol parsing and before correction, including protocol-defined scaling or unit conversion. The received-byte viewer is a debugging aid; the database is not a recording of the complete wire byte stream.
-
-The two ZDZ_C08 presets block acquisition until their unconfirmed CRC parameters are configured using firmware-confirmed values. See [protocol checksums and channel units](docs/协议校验与单位.md) for setup steps, checks for older protocol JSON files, and variable-length frame rules.
-
-A separate device-storage download workflow is not implemented. The ZDZ Read Stored Data preset cannot be sent, preventing historical frames from entering the live session. CSV export operates on sessions already saved locally. Custom commands retain their user-defined semantics; free HEX transmission does not provide an isolated download workflow.
+The project centers on **customizable protocols, data recording, and live plotting**. Protocol configuration defines channel counts, names, and units, making it possible to work with different data formats and observe magnetic, temperature, and other auxiliary channels together. Correction and advanced analysis are optional tools.
 
 ## Features
 
-| Area | Capabilities |
+| Feature | Capabilities |
 | --- | --- |
-| Serial / TCP | Device connections, incoming-byte inspection, connection status |
-| Configurable protocols | ASCII and binary frames, field mapping, byte order, scaling, checksums, JSON import/export, specialized parsers where required |
-| Automatic storage | Session metadata and original channel readings, historical queries, replay, CSV export |
-| Historical replay | Timestamp-based playback speed, pause and seek, with all channels plotted directly on the history page; disabled while a live connection exists |
-| Live plots | Single combined plot or multiple plots in one/two columns; temperature shares the time axis and uses a separate right axis in single-plot mode |
-| Display and analysis | Channel colors/order/display offsets, automatic axes, rolling statistics, interval analysis, display filtering, total-field/gradient/formula channels |
-| Panel layout | Expand connection, counters, channels, communications, and analysis when needed; small windows scroll when multiple panels are open; focus mode collapses auxiliary panels and restores their previous state and inputs on exit |
-| Device commands | Protocol-associated command groups, parameterized frames, ASCII/HEX transmission, communication logs |
-| Optional correction | Orthogonality collection and profiles, offset/gain calibration, historical correction; ordinary capture does not require these tools |
+| **Device connections** | Serial and TCP, configurable connection parameters, connection status, and raw communication inspection |
+| **Custom protocols** | ASCII or binary formats, field mappings, frame structure, byte order, scaling, checksums, channel units, and protocol JSON import/export |
+| **Automatic recording** | Original readings organized into sessions, with received counts, saved counts, and storage status |
+| **Live plots** | A combined plot or multiple plots in one/two columns; temperature and other channels with different units use separate axes in the combined plot |
+| **Plot workspace** | Collapsible connection, channel, communication, and analysis panels, plus focus mode and layout restoration |
+| **Channels and calculations** | Visibility, colors, order, display offsets, and total-field, gradient, or formula channels |
+| **Statistics and analysis** | Rolling statistics, interval selection and analysis, moving-average and median display filters |
+| **Device commands** | Protocol-associated command groups, parameterized commands, ASCII/HEX sending, and communication logs |
+| **Historical replay** | Session queries and timestamp-based playback with speed control, pause, and seek |
+| **CSV export** | Time and channel selection, export precision, original values, and saved correction results |
+| **Data correction** | Optional offset/gain calibration, orthogonality collection and profiles, and live/historical correction |
 
-Historical batch corrections are saved as separate versions identified by both profile IDs, channel mappings, fitting units, and a fingerprint of the calculation parameters. Editing parameters under the same profile ID preserves earlier results. Select a saved correction version when exporting; the CSV `CorrectionVersion` column contains its full identifier. Legacy single-profile IDs remain selectable, and original readings are unchanged.
+## Download and run
 
-Orthogonality **fitting collection/session import** currently requires exactly three magnetic channels in X/Y/Z order, or six in X1/Y1/Z1/X2/Y2/Z2 order, all with the same explicit unit. Arbitrary fitting channel selection is not implemented. Sources with temperature, extra channels, or incomplete metadata are rejected instead of silently taking a prefix; prepare a CSV with explicit axis columns for these sources. This restriction does not apply to ordinary capture, plotting, or correction with explicit channel mappings.
+Supports **Windows 10/11 x64**. Release packages include the .NET 8 runtime.
 
-Orthogonality profiles require matching measurement units (`uT`, `µT`, and `μT` are equivalent); offsets are not converted automatically. Legacy profiles without fitting units remain unknown and require refitting or importing an explicitly unit-tagged profile before application. Live/session fitting uses recorded units, and imported CSV samples require an explicit unit declaration. Ordinary capture does not require a correction profile.
+| Download | Usage |
+| --- | --- |
+| [V0.5.0 installer](https://github.com/YIALU/MagnetometerSystem/releases/download/v0.5.0/MagnetometerSystem-v0.5.0-setup.exe) | Install and launch the application |
+| [V0.5.0 portable package](https://github.com/YIALU/MagnetometerSystem/releases/download/v0.5.0/MagnetometerSystem-v0.5.0-portable-win-x64.zip) | Extract and run `MagnetometerSystem.App.exe` |
+| [SHA256 checksums](https://github.com/YIALU/MagnetometerSystem/releases/download/v0.5.0/SHA256SUMS.txt) | Verify the downloaded installer or portable package |
 
-**Written locally, acknowledged, and executed are different states.** A successful send call confirms a local write. Device acceptance and execution must be established using the protocol response or observed device behavior.
+See the [changelog](docs/变更日志.md) for version changes. In-app update checks use Gitee releases; GitHub packages can be downloaded manually using the links above.
 
-Charts retain the latest **100,000 points per channel** for display and interval analysis. The complete session consists of data committed to SQLite. Display channels are no longer truncated at 64, and a 65-channel regression test is included; larger channel counts and higher throughput still require measurement on the intended device and computer.
+## Quick start
 
-## Run and develop
+1. **Set up the connection:** choose serial or TCP and enter the connection parameters.
+2. **Configure the protocol:** select a preset or edit a custom protocol; check fields, channel names, and units.
+3. **Connect and capture:** enter the nominal sampling rate, connect, and check incoming data and storage status. The nominal rate records metadata; adjust actual output using device-supported commands or settings.
+4. **Inspect and analyze:** select channels and a time window, switch plot layouts, and expand statistics or analysis panels as needed. Pausing the plot display keeps original-data recording active.
+5. **Replay and export:** disconnect, wait for storage to finish, then select a session to replay or export as CSV.
 
-- Windows 10/11.
-- .NET 8 SDK for source builds. Visual Studio users need the .NET desktop development workload.
-- WPF application execution and UI tests require Windows. Release packages can include the .NET runtime.
+See the [user guide](docs/user-guide.en.md) for protocol setup, command responses, correction, and troubleshooting.
+
+## Development
+
+Built with **.NET 8, WPF, CommunityToolkit.Mvvm, ScottPlot, and SQLite**. Source builds require Windows and the .NET 8 SDK. Visual Studio users need the .NET desktop development workload.
 
 Run from the repository root:
 
@@ -59,49 +54,16 @@ Run from the repository root:
 dotnet restore MagnetometerSystem.sln
 dotnet build MagnetometerSystem.sln -c Debug
 dotnet run --project src/MagnetometerSystem.App/MagnetometerSystem.App.csproj
-dotnet test MagnetometerSystem.sln -c Debug
+dotnet test MagnetometerSystem.sln -c Debug --no-build -m:1
 ```
 
-See the [release procedure](docs/发布流程.md) for packaging. [Directory.Build.props](Directory.Build.props) is the version source; `AppVersion.cs` reads version, commit, and build metadata. The release script validates version tags and working-tree state.
+`src/MagnetometerSystem.App` contains the desktop UI, `Core` handles protocols, communication, and calculations, and `Infrastructure` implements storage, configuration, and export. Tests are in `tests`.
 
-## Data and troubleshooting
+## Documentation
 
-The default database is `%LOCALAPPDATA%\MagnetometerSystem\magnetometer.db`.
-
-Logs use the application directory's `logs` folder where writable, otherwise `%LOCALAPPDATA%\MagnetometerSystem\logs`. Close the application and retain a database backup before upgrading or migrating. Legacy fixed-column tables are retained as `readings_legacy_*` / `corrected_readings_legacy_*`, and their sessions report that migration is required. These legacy records are not automatically converted for replay or export.
-
-A storage failure immediately stops accepting new measurements and disconnects. Already accepted batches remain in memory and the UI reports the error. After fixing the cause, choose Retry Save to complete the old session before reconnecting. This is not a durable recovery log: power loss or forced process termination can lose uncommitted data. Normal shutdown waits for storage; resolve storage errors before exiting.
-
-| Symptom | Check first |
-| --- | --- |
-| Connected, but no data | Whether the device streams automatically, connection parameters, required start-sampling command |
-| Bytes arrive, but no readings | Delimiters/line endings, frame length/byte order/checksum range, field mappings |
-| Wrong channels or values | Channel indices, units, scaling; distinguish original values, display offsets, and derived values |
-| Curves update, but storage fails | Storage errors, pending writes, database-directory access; a plot update does not prove a committed transaction |
-| Command appears sent, but nothing happens | Bytes received by the peer, terminators/checksum, response matching, device execution conditions |
-
-Include the application version, reproduction steps, connection parameters, protocol JSON, minimal received/sent frames, and relevant logs when reporting an issue.
-
-## Validation boundaries
-
-Automated tests cover modules such as parsers, command frames, calculations, SQLite, and CSV. See [testing and acceptance](docs/testing-and-acceptance.md) for business-flow coverage, execution instructions, and current verification status.
-
-Passing unit tests does not establish that a physical serial link, USB driver, device response, or WPF interaction has been verified. TCP loopback exercises real local sockets; physical and virtual serial-pair acceptance requires separate infrastructure. Test counts and coverage percentages belong to actual run artifacts, not a permanent README claim.
-
-## Repository navigation
-
-```text
-src/
-  MagnetometerSystem.App/             WPF views, ViewModels, application composition, UI dispatch
-  MagnetometerSystem.Core/            Protocols, communications, readings, data bus, calculations, interfaces
-  MagnetometerSystem.Infrastructure/  SQLite, configuration, CSV, update services
-tests/                               Unit and business-flow tests
-docs/                                Acceptance, release, and historical design documents
-```
-
-- Agent entry point: [AGENTS.md](AGENTS.md).
-- Validation and hardware acceptance: [testing-and-acceptance.md](docs/testing-and-acceptance.md).
-- Device-specific reference: [Windows/Linux board protocol](docs/Windows与Linux板通信协议.md).
-- `docs/00-*`, `01-*`, and `TASK-*` documents are historical plans. Some retain old device categories or obsolete test status. Use the implementation, tests, and current README to establish present behavior.
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the GitHub PR and review workflow.
+- [User guide](docs/user-guide.en.md): configuration, data management, correction, and troubleshooting.
+- [Protocol checksums and channel units](docs/协议校验与单位.md) (Chinese): checksum setup, presets, and units.
+- [Testing and acceptance](docs/testing-and-acceptance.md) (Chinese): test instructions, evidence, and device acceptance.
+- [Release procedure](docs/发布流程.md) (Chinese): versioning and packaging.
+- [Contributing](CONTRIBUTING.md) (Chinese): commits, pull requests, and reviews.
+- [AGENTS.md](AGENTS.md) (Chinese): engineering entry points and constraints for agents.
