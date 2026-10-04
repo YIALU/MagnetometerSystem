@@ -405,9 +405,11 @@ public partial class ConnectionViewModel : ObservableObject
                 {
                     if (reading is null) continue;
                     var raw = _sensorAdapter?.Process(reading) ?? reading;
+                    // Count and display only after the storage consumer has accepted ownership.
+                    // The fault can close acceptance after TryParse succeeds but before this call.
+                    if (!_dataBus.TryPublishAcquisitionReading(raw)) break;
                     _parsedCount++;
-                    // 原始值先进入独立总线；任何可选改正失败均不能中断保存。
-                    _dataBus.PublishReading(raw);
+                    // 原始值已被独立保存消费者接纳；任何可选改正失败均不能中断保存。
                     var display = raw.DeepClone();
                     if (IsOrthogonalityCorrectionEnabled)
                     {

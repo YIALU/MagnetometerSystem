@@ -78,23 +78,27 @@ dotnet test MagnetometerSystem.sln --no-build --no-restore -m:1 --verbosity mini
 
 ## 2026-10-04 PR 审查修复验证
 
-在独立 worktree、Windows / SDK 9.0.312（目标 .NET 8）中完成构建与串行回归。构建禁用编译服务器并串行执行；一次 WPF DLL 临时占用失败后，重试构建成功再运行测试，未使用失败构建作为通过证据。
+在独立 worktree、Windows / SDK 9.0.312（目标 .NET 8）中完成构建与串行回归。构建禁用编译服务器并串行执行；WPF DLL 临时被 360 进程占用时，等待后重试构建成功再运行测试，未使用失败构建作为通过证据。
 
 ```powershell
 dotnet build MagnetometerSystem.sln -c Debug --no-restore --disable-build-servers -m:1 -nr:false -p:UseSharedCompilation=false -p:BuildInParallel=false
-dotnet test MagnetometerSystem.sln -c Debug --no-build --no-restore -m:1 --verbosity minimal --logger trx --results-directory .codex_tmp/TestResults-pr-units-final
+dotnet test MagnetometerSystem.sln -c Debug --no-build --no-restore -m:1 --verbosity minimal --logger trx --results-directory .codex_tmp/TestResults-pr-admission-final
 ```
 
 | 项目 | 通过 | 跳过 | 失败 | TRX 时间 |
 | --- | ---: | ---: | ---: | --- |
-| Core | 394 | 1 | 0 | 18_07_29 |
-| Infrastructure | 113 | 0 | 0 | 18_07_31 |
-| App | 68 | 0 | 0 | 18_07_39 |
-| 合计 | **575** | **1** | **0** | 2026-10-04，本机 `.codex_tmp/TestResults-pr-units-final` |
+| Core | 398 | 1 | 0 | 18_31_59 |
+| Infrastructure | 113 | 0 | 0 | 18_32_01 |
+| App | 71 | 0 | 0 | 18_32_08 |
+| 合计 | **582** | **1** | **0** | 2026-10-04，本机 `.codex_tmp/TestResults-pr-admission-final` |
 
 新增证据包括：默认采集/改正失败时真实 TCP 同时到达 SQLite 与图表；CTMBS 状态响应不入测量库、坏长头即时恢复；变长载荷的动态校验与帧尾；单位迁移、回放与异单位轴范围；真实 SQLite 写入失败后的安装阻止、恢复重试、正常关闭尾帧。`InstallerHandoffTests` 的三个真实进程测试验证应用及互斥锁退出后才启动替身安装器、超时不启动、失效进程不能完成交接。
 
 复审补充覆盖：CTMBS 无数据 ERR 不结束命令等待，损坏简单响应后重新同步，UTC 午夜/跨年日期选择；CSV 在导出中、末尾及空会话确定性取消并清理临时文件。`StorageFaultAcquisitionTests` 使用真实 SQLite 故障，验证 UI 阻塞/断连延迟时停止接收、同包故障后的剩余帧拒收、定时尾批屏障、旧任务不影响新会话，以及重试成功后恰一次停止通知和单击重连。
+
+保存接纳再补充 5 项回归：第二帧已经解析、第一批恰在后台 SQLite 失败时，第二帧被拒绝且不增加接收计数或进入显示流；首条已接纳数据保留、重试恰好保存一次，之后可重新连接。四项 Core 用例验证故障关闭接纳、关键消费者拒绝或抛错不发布普通事件，以及准备期间发生故障不能重新开放接收。已接纳后才发生故障的读数仍保留计数、显示和待写责任；接纳不是事务提交。
+
+另有两项三 ViewModel/SQLite 回归，在实时会话异步准备的确定位置结束或手动停止历史回放，确认只结束历史显示，不取消实时连接或清空其单位，立即到达的首帧完整入库且历史会话不变。
 
 进一步覆盖匹配但巨大的 CTMBS 长度头后立即恢复、`dat+0` 收到完整有效实时帧后不再误报超时，以及两个 ZDZ 预设的设备存储下载被拒发（以随后普通命令的 TCP 字节顺序证明未写出下载前缀）。设备内部历史下载未实现隔离流程，不属于已支持功能。区间导出的名称和单位与数值在同一数据锁内复制，后台写出不再读取当前会话单位。
 

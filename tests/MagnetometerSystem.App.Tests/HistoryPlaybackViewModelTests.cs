@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO;
+using System.Reflection;
 using System.Windows;
 using MagnetometerSystem.App.ViewModels;
 using MagnetometerSystem.App.Views;
@@ -291,6 +292,93 @@ public class HistoryPlaybackViewModelTests
                 Assert.Equal(0, fixture.Storage.WriteStatus.PendingReadings);
             }
             finally { await connection.StopAcquisitionAsync(); }
+        });
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public Task PlaybackEndingDuringAsyncLivePreparation_DoesNotCancelConnectionOrEraseUnits(bool completes) =>
+        WpfTestHost.RunAsync(async () =>
+        {
+            using var fixture = await PlaybackFixture.CreateAsync();
+            var profiles = new SqliteCalibrationRepository(fixture.Database);
+            var corrector = new OrthogonalityCorrector();
+            var sessions = new SessionListViewModel(fixture.Storage, new CsvExporter(fixture.Storage),
+                fixture.Bus, corrector, profiles);
+            var preparing = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var releasePreparation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            // Match production subscription order: session preparation precedes History's automatic stop.
+            fixture.Bus.AcquisitionStarting += async _ =>
+            {
+                preparing.TrySetResult();
+                await releasePreparation.Task;
+            };
+            using var history = fixture.CreateViewModel();
+            await history.LoadSessionByIdAsync(fixture.SessionId);
+            history.SeekTo(0);
+            history.PlaybackSpeed = 0.001;
+            await history.PlayCommand.ExecuteAsync(null);
+            string[] units = ["nT", "nT", "nT", "°C"];
+            string[]? unitsAtConnect = null;
+            var transport = new ImmediateFirstFrameConnection(() => unitsAtConnect = fixture.Bus.AcquisitionChannelUnits.ToArray());
+            var connection = new ConnectionViewModel(new ImmediateConnectionFactory(transport), fixture.Bus, corrector, profiles)
+            {
+                SelectedConnectionType = ConnectionType.Tcp,
+                ProtocolConfig = new ProtocolConfig
+                {
+                    FieldMappings = Enumerable.Range(0, 4).Select(i => new FieldMapping
+                    { Name = $"Live{i}", Unit = units[i], ChannelIndex = i, ByteOffset = i }).ToList(),
+                },
+            };
+            var raw = new List<MagnetometerReading>();
+            fixture.Bus.ReadingReceived += raw.Add;
+            var connecting = connection.ConnectCommand.ExecuteAsync(null);
+            try
+            {
+                await preparing.Task.WaitAsync(TimeSpan.FromSeconds(3));
+                string liveSession = Assert.IsType<string>(sessions.ActiveSessionId);
+                Assert.False(connecting.IsCompleted);
+                Assert.Null(fixture.Bus.CurrentConnection);
+                Assert.Equal(units, fixture.Bus.AcquisitionChannelUnits);
+                Assert.True(history.IsPlaying);
+                if (completes)
+                {
+                    // Advance recorded position to the known one-second endpoint, then execute the
+                    // real completion tick. No wall-clock timing decides which side of preparation wins.
+                    typeof(HistoryPlaybackViewModel).GetField("_positionAtTimerStart", BindingFlags.Instance | BindingFlags.NonPublic)!
+                        .SetValue(history, TimeSpan.FromSeconds(1));
+                    typeof(HistoryPlaybackViewModel).GetMethod("OnPlaybackTick", BindingFlags.Instance | BindingFlags.NonPublic)!
+                        .Invoke(history, [null, EventArgs.Empty]);
+                    Assert.Equal(PlaybackState.Completed, history.State);
+                }
+                else
+                {
+                    history.StopCommand.Execute(null);
+                    Assert.Equal(PlaybackState.Ready, history.State);
+                }
+                Assert.False(fixture.Bus.IsPlaybackMode);
+                Assert.Equal(units, fixture.Bus.AcquisitionChannelUnits);
+                Assert.Empty(raw);
+
+                releasePreparation.TrySetResult();
+                await connecting.WaitAsync(TimeSpan.FromSeconds(3));
+                Assert.True(connection.IsConnected, connection.LastError);
+                Assert.Equal(1, transport.ConnectCount);
+                Assert.Equal(units, unitsAtConnect);
+                Assert.Equal(liveSession, sessions.ActiveSessionId);
+                Assert.Equal(new double[] { 101, 102, 103, 104 }, Assert.Single(raw).ChannelValues);
+                await connection.StopAcquisitionAsync();
+                Assert.Equal(new double[] { 101, 102, 103, 104 },
+                    Assert.Single(await fixture.Storage.GetReadingsAsync(liveSession)).ChannelValues);
+                Assert.Equal(3, (await fixture.Storage.GetReadingsAsync(fixture.SessionId)).Count);
+                Assert.Empty(fixture.Bus.AcquisitionChannelUnits); // Actual live stop still clears its metadata.
+            }
+            finally
+            {
+                releasePreparation.TrySetResult();
+                await connecting.WaitAsync(TimeSpan.FromSeconds(3));
+                await connection.StopAcquisitionAsync();
+            }
         });
 
     [Fact]

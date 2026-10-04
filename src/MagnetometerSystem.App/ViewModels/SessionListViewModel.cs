@@ -36,6 +36,8 @@ public partial class SessionListViewModel : ObservableObject
     private int _storageFaulted;
     private long _sessionGeneration;
     private long _savedBaseline;
+    private long _acceptedReadingCount;
+    private int _readingCountUiPending;
 
     [ObservableProperty] private string _storageStatus = "就绪";
     [ObservableProperty] private string? _storageError;
@@ -183,6 +185,7 @@ public partial class SessionListViewModel : ObservableObject
         _dataBus.AcquisitionStarting += OnAcquisitionStartingAsync;
         _dataBus.AcquisitionStopping += OnAcquisitionStoppingAsync;
         _dataBus.AcquisitionFaulted += OnAcquisitionFaulted;
+        _dataBus.RegisterAcquisitionReadingAcceptor(TryAcceptReading);
         _dataBus.ReadingReceived += OnReadingReceived;
         _storageService.WriteStatusChanged += OnStorageWriteStatusChanged;
 
@@ -228,7 +231,11 @@ public partial class SessionListViewModel : ObservableObject
             });
             long generation = Interlocked.Increment(ref _sessionGeneration);
             Interlocked.Exchange(ref _storageFaulted, 0);
-            lock (_bufferLock) _acceptingReadings = true;
+            lock (_bufferLock)
+            {
+                Interlocked.Exchange(ref _acceptedReadingCount, 0);
+                _acceptingReadings = true;
+            }
             _flushTimer = new System.Threading.Timer(_ => _ = ObserveWriteAsync(FlushBufferAsync, generation),
                 null, FlushIntervalMs, FlushIntervalMs);
             await RefreshSessionsAsync();
@@ -275,27 +282,43 @@ public partial class SessionListViewModel : ObservableObject
         finally { _lifecycleGate.Release(); }
     }
 
-    private void OnReadingReceived(MagnetometerReading reading)
+    private bool TryAcceptReading(MagnetometerReading reading)
     {
+        // DataBus holds its short acceptance gate here. Only transfer ownership to the session buffer.
         lock (_bufferLock)
         {
-            if (!Volatile.Read(ref _acceptingReadings) || ActiveSessionId == null) return;
+            if (!_acceptingReadings || ActiveSessionId == null) return false;
             var snapshot = reading.DeepClone();
             snapshot.SessionId = ActiveSessionId;
             _readingBuffer.Add(snapshot);
-            ActiveSessionReadingCount++;
-
-            if (_readingBuffer.Count >= FlushBatchSize ||
-                (DateTime.UtcNow - _lastFlushTime).TotalMilliseconds >= FlushIntervalMs)
-            {
-                var batch = _readingBuffer.ToList();
-                _readingBuffer.Clear();
-                _lastFlushTime = DateTime.UtcNow;
-
-                // 异步写入，不阻塞事件处理
-                _ = ObserveWriteAsync(() => _storageService.SaveReadingsAsync(batch), Volatile.Read(ref _sessionGeneration));
-            }
+            Interlocked.Increment(ref _acceptedReadingCount);
+            return true;
         }
+    }
+
+    private void OnReadingReceived(MagnetometerReading reading)
+    {
+        // Ordinary observers run outside the DataBus acceptance gate. Do not accept the reading again.
+        if (Interlocked.Exchange(ref _readingCountUiPending, 1) == 0)
+        {
+            void UpdateCount()
+            {
+                Interlocked.Exchange(ref _readingCountUiPending, 0);
+                ActiveSessionReadingCount = Interlocked.Read(ref _acceptedReadingCount);
+            }
+            if (Application.Current?.Dispatcher is { } dispatcher && !dispatcher.CheckAccess())
+                dispatcher.BeginInvoke(UpdateCount);
+            else UpdateCount();
+        }
+        bool flush;
+        long generation;
+        lock (_bufferLock)
+        {
+            generation = _sessionGeneration;
+            flush = _readingBuffer.Count >= FlushBatchSize ||
+                (_readingBuffer.Count > 0 && (DateTime.UtcNow - _lastFlushTime).TotalMilliseconds >= FlushIntervalMs);
+        }
+        if (flush) _ = ObserveWriteAsync(FlushBufferAsync, generation);
     }
 
     private Task FlushBufferAsync()
@@ -332,7 +355,7 @@ public partial class SessionListViewModel : ObservableObject
     {
         if (ActiveSessionId == null || Interlocked.Exchange(ref _storageFaulted, 1) != 0) return;
         // This must run on the faulting thread, even while the UI is busy.
-        Volatile.Write(ref _acceptingReadings, false);
+        lock (_bufferLock) _acceptingReadings = false;
         // Keep the timer reference: the stop path awaits DisposeAsync so any
         // callback already taking a tail batch must finish enqueueing it first.
         try { _flushTimer?.Change(Timeout.Infinite, Timeout.Infinite); }

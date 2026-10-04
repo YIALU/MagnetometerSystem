@@ -6,6 +6,7 @@ using MagnetometerSystem.App.ViewModels;
 using MagnetometerSystem.Core.Calibration;
 using MagnetometerSystem.Core.Communication;
 using MagnetometerSystem.Core.Models;
+using MagnetometerSystem.Core.Protocol;
 using MagnetometerSystem.Core.Services;
 using MagnetometerSystem.Core.Storage;
 using MagnetometerSystem.Infrastructure.Database;
@@ -164,6 +165,8 @@ public class StorageFaultAcquisitionTests
     {
         await using var fixture = await Fixture.CreateAsync();
         int accepted = 0;
+        int displayed = 0;
+        fixture.Bus.ProcessedReadingReceived += _ => displayed++;
         fixture.Bus.ReadingReceived += _ =>
         {
             if (++accepted == 3) fixture.Bus.PublishAcquisitionFault(new IOException("consumer cannot save"));
@@ -172,12 +175,84 @@ public class StorageFaultAcquisitionTests
         fixture.Transport.Feed(string.Concat(Enumerable.Repeat("1,2,3\n", 100)));
         Assert.Equal(3, accepted);
         Assert.Equal(3, fixture.Sessions.ActiveSessionReadingCount);
+        Assert.Equal(3, displayed); // The fault happened after the third reading was accepted.
+        await WpfTestHost.PumpAsync();
+        Assert.Equal(3, fixture.ConnectionVm.ParsedReadingCount);
         fixture.Transport.ReleaseDisconnect.TrySetResult();
         await fixture.ConnectionVm.StopAcquisitionAsync();
         var session = Assert.Single(await fixture.Storage.GetSessionsAsync());
         Assert.Equal(3, session.TotalReadings);
         Assert.Equal(3, (await fixture.Storage.GetReadingsAsync(session.Id)).Count);
         Assert.Equal(0, fixture.Storage.WriteStatus.PendingReadings);
+    });
+
+    [Fact]
+    public Task SqliteFaultBetweenParserReturnAndAdmission_DoesNotCountOrDisplayTheRejectedReading() => WpfTestHost.RunAsync(async () =>
+    {
+        DelayedFirstWriteStorage? gatedStorage = null;
+        await using var fixture = await Fixture.CreateAsync(storage => gatedStorage = new DelayedFirstWriteStorage(storage));
+        var fault = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        fixture.Bus.AcquisitionFaulted += _ => fault.TrySetResult();
+        var raw = new System.Collections.Concurrent.ConcurrentQueue<MagnetometerReading>();
+        var displayed = new System.Collections.Concurrent.ConcurrentQueue<MagnetometerReading>();
+        fixture.Bus.ReadingReceived += raw.Enqueue;
+        fixture.Bus.ProcessedReadingReceived += displayed.Enqueue;
+        await fixture.ConnectionVm.ConnectCommand.ExecuteAsync(null);
+        string firstSession = fixture.Sessions.ActiveSessionId!;
+        await fixture.ExecuteAsync("CREATE TRIGGER fail_admission_save BEFORE INSERT ON readings BEGIN SELECT RAISE(FAIL, 'admission disk failure'); END;");
+        var parserField = typeof(ConnectionViewModel).GetField("_parser", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        using var parser = new PauseSecondReadingParser((IDataParser)parserField.GetValue(fixture.ConnectionVm)!);
+        parserField.SetValue(fixture.ConnectionVm, parser);
+        Task receive = Task.CompletedTask;
+        try
+        {
+            receive = Task.Run(() => fixture.Transport.Feed("1,2,3\n4,5,6\n"));
+            await gatedStorage!.WriteEntered.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            await parser.SecondParsed.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            // The connection already checked its receive flag for the second frame. Its parser
+            // now holds that valid frame while the FIRST accepted batch fails in real SQLite.
+            Assert.Single(raw);
+            Assert.Single(displayed);
+            gatedStorage.ReleaseWrite.TrySetResult();
+            await fault.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            parser.ReleaseSecond.Set();
+            await receive.WaitAsync(TimeSpan.FromSeconds(3));
+            await WpfTestHost.PumpAsync();
+
+            Assert.Equal(1, fixture.Sessions.ActiveSessionReadingCount);
+            Assert.Equal(1, fixture.ConnectionVm.ParsedReadingCount);
+            Assert.Equal(new double[] { 1, 2, 3 }, Assert.Single(raw).ChannelValues);
+            Assert.Equal(new double[] { 1, 2, 3 }, Assert.Single(displayed).ChannelValues);
+            Assert.Equal(1, fixture.Storage.WriteStatus.PendingReadings);
+            fixture.Transport.Feed("100,200,300\n");
+            Assert.Single(raw);
+            Assert.Single(displayed);
+
+            fixture.Transport.ReleaseDisconnect.TrySetResult();
+            await Assert.ThrowsAsync<IOException>(() => fixture.ConnectionVm.StopAcquisitionAsync());
+            await fixture.ExecuteAsync("DROP TRIGGER fail_admission_save;");
+            await fixture.Sessions.RetryStorageCommand.ExecuteAsync(null).WaitAsync(TimeSpan.FromSeconds(3));
+            Assert.Equal(1, Assert.Single(await fixture.Storage.GetSessionsAsync()).TotalReadings);
+            Assert.Equal(new double[] { 1, 2, 3 }, Assert.Single(await fixture.Storage.GetReadingsAsync(firstSession)).ChannelValues);
+            Assert.Null(fixture.Sessions.ActiveSessionId);
+            Assert.Equal(0, fixture.Storage.WriteStatus.PendingReadings);
+
+            await fixture.ConnectionVm.ConnectCommand.ExecuteAsync(null).WaitAsync(TimeSpan.FromSeconds(3));
+            string nextSession = fixture.Sessions.ActiveSessionId!;
+            Assert.NotEqual(firstSession, nextSession);
+            fixture.Transport.Feed("7,8,9\n");
+            await fixture.ConnectionVm.StopAcquisitionAsync().WaitAsync(TimeSpan.FromSeconds(3));
+            Assert.Equal(new double[] { 7, 8, 9 }, Assert.Single(await fixture.Storage.GetReadingsAsync(nextSession)).ChannelValues);
+        }
+        finally
+        {
+            gatedStorage!.ReleaseWrite.TrySetResult();
+            parser.ReleaseSecond.Set();
+            await receive.WaitAsync(TimeSpan.FromSeconds(3));
+            fixture.Transport.ReleaseDisconnect.TrySetResult();
+            await fixture.ExecuteAsync("DROP TRIGGER IF EXISTS fail_admission_save;");
+            await fixture.Sessions.RetryStorageCommand.ExecuteAsync(null);
+        }
     });
 
     [Fact]
@@ -245,6 +320,57 @@ public class StorageFaultAcquisitionTests
         }
         finally { wrapper?.ReleaseEnqueue.Set(); }
     });
+
+    private sealed class PauseSecondReadingParser(IDataParser inner) : IDataParser, IDisposable
+    {
+        private int _parsed;
+        public TaskCompletionSource SecondParsed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public ManualResetEventSlim ReleaseSecond { get; } = new(false);
+        public void Feed(byte[] data, int offset, int count) => inner.Feed(data, offset, count);
+        public bool TryParse(out MagnetometerReading? reading)
+        {
+            if (!inner.TryParse(out reading)) return false;
+            if (Interlocked.Increment(ref _parsed) == 2)
+            {
+                SecondParsed.TrySetResult();
+                if (!ReleaseSecond.Wait(TimeSpan.FromSeconds(10))) throw new TimeoutException("second parser reading barrier");
+            }
+            return true;
+        }
+        public void Reset() => inner.Reset();
+        public void Dispose() => ReleaseSecond.Dispose();
+    }
+
+    private sealed class DelayedFirstWriteStorage(IDataStorageService inner) : IDataStorageService
+    {
+        private int _calls;
+        public TaskCompletionSource WriteEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseWrite { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public StorageWriteStatus WriteStatus => inner.WriteStatus;
+        public event Action<StorageWriteStatus>? WriteStatusChanged { add => inner.WriteStatusChanged += value; remove => inner.WriteStatusChanged -= value; }
+        public async Task SaveReadingsAsync(IEnumerable<MagnetometerReading> readings)
+        {
+            if (Interlocked.Increment(ref _calls) == 1)
+            {
+                WriteEntered.TrySetResult();
+                await ReleaseWrite.Task;
+            }
+            await inner.SaveReadingsAsync(readings);
+        }
+        public Task<string> StartSessionAsync(string name, SensorConfig config, ConnectionConfig connection) => inner.StartSessionAsync(name, config, connection);
+        public Task EndSessionAsync(string id) => inner.EndSessionAsync(id);
+        public Task WaitForPendingWritesAsync(int timeoutMs = 5000) => inner.WaitForPendingWritesAsync(timeoutMs);
+        public Task RetryPendingWritesAsync() => inner.RetryPendingWritesAsync();
+        public Task<IReadOnlyList<SessionInfo>> GetSessionsAsync() => inner.GetSessionsAsync();
+        public Task<IReadOnlyList<MagnetometerReading>> GetReadingsAsync(string id, DateTime? startTime = null, DateTime? endTime = null) => inner.GetReadingsAsync(id, startTime, endTime);
+        public Task DeleteSessionAsync(string id) => inner.DeleteSessionAsync(id);
+        public Task UpdateSessionAsync(string id, string name, string? notes) => inner.UpdateSessionAsync(id, name, notes);
+        public Task SaveCorrectedReadingsAsync(IEnumerable<CorrectedReading> readings) => inner.SaveCorrectedReadingsAsync(readings);
+        public Task<IReadOnlyList<CorrectedReading>> GetCorrectedReadingsAsync(string id, string? profile = null) => inner.GetCorrectedReadingsAsync(id, profile);
+        public Task<IReadOnlyList<string>> GetCorrectionVersionIdsAsync(string id) => inner.GetCorrectionVersionIdsAsync(id);
+        public Task DeleteCorrectedReadingsAsync(string id, string? profile = null) => inner.DeleteCorrectedReadingsAsync(id, profile);
+        public Task<bool> HasCorrectedReadingsAsync(string id) => inner.HasCorrectedReadingsAsync(id);
+    }
 
     private sealed class BlockingEnqueueStorage(IDataStorageService inner) : IDataStorageService
     {

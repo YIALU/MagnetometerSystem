@@ -532,7 +532,7 @@ public partial class HistoryPlaybackViewModel : ObservableObject, IDisposable
         _ownsPlayback = false;
         _dataBus.IsPlaybackMode = false;
         if (notifyChart && _dataBus.CurrentConnection == null)
-            _dataBus.PublishAcquisitionStopped();
+            _dataBus.PublishPlaybackStopped();
     }
 
     private TimeSpan CurrentPlaybackPosition()

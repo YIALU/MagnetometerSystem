@@ -33,6 +33,34 @@ public sealed class ManualOrthoState : INotifyPropertyChanged
 /// </summary>
 public class DataBus
 {
+    private readonly object _acquisitionAcceptanceGate = new();
+    private Func<MagnetometerReading, bool>? _acquisitionReadingAcceptor;
+    // Standalone parsers/components may publish without a storage/session lifecycle.
+    private bool _acceptAcquisitionReadings = true;
+    private long _acquisitionAcceptanceGeneration;
+    private Exception? _acquisitionAcceptanceFault;
+
+    /// <summary>注册唯一的关键保存消费者。回调只能同步接纳到受保护的内存缓冲，不得写库或等待 UI。</summary>
+    public void RegisterAcquisitionReadingAcceptor(Func<MagnetometerReading, bool> acceptor)
+    {
+        ArgumentNullException.ThrowIfNull(acceptor);
+        lock (_acquisitionAcceptanceGate)
+        {
+            if (_acquisitionReadingAcceptor != null)
+                throw new InvalidOperationException("采集只能注册一个关键保存接纳者。");
+            _acquisitionReadingAcceptor = acceptor;
+        }
+    }
+
+    private void CloseAcquisitionAcceptance()
+    {
+        lock (_acquisitionAcceptanceGate)
+        {
+            _acceptAcquisitionReadings = false;
+            _acquisitionAcceptanceGeneration++;
+        }
+    }
+
     /// <summary>手动正交度采集状态</summary>
     public ManualOrthoState ManualOrthoState { get; } = new();
 
@@ -65,6 +93,12 @@ public class DataBus
     public void PublishAcquisitionFault(Exception error)
     {
         ArgumentNullException.ThrowIfNull(error);
+        lock (_acquisitionAcceptanceGate)
+        {
+            _acceptAcquisitionReadings = false;
+            _acquisitionAcceptanceFault ??= error;
+        }
+        // Fault handlers may stop transports or schedule UI work. Never invoke them under the acceptance gate.
         if (AcquisitionFaulted is not { } handlers) return;
         foreach (Action<Exception> handler in handlers.GetInvocationList())
         {
@@ -100,9 +134,36 @@ public class DataBus
     /// <summary>是否处于回放模式（回放时不写入数据库）</summary>
     public bool IsPlaybackMode { get; set; }
 
-    public void PublishReading(MagnetometerReading reading)
+    public void PublishReading(MagnetometerReading reading) => TryPublishAcquisitionReading(reading);
+
+    /// <summary>只有关键保存消费者已接纳的读数才通知观察者。false 不得计入采集或绘图。</summary>
+    public bool TryPublishAcquisitionReading(MagnetometerReading reading)
     {
+        ArgumentNullException.ThrowIfNull(reading);
+        Exception? acceptanceError = null;
+        lock (_acquisitionAcceptanceGate)
+        {
+            if (!_acceptAcquisitionReadings) return false;
+            try
+            {
+                if (_acquisitionReadingAcceptor != null && !_acquisitionReadingAcceptor(reading.DeepClone()))
+                    return false;
+            }
+            catch (Exception ex)
+            {
+                _acceptAcquisitionReadings = false;
+                _acquisitionAcceptanceFault ??= ex;
+                acceptanceError = ex;
+            }
+        }
+        if (acceptanceError != null)
+        {
+            PublishAcquisitionFault(acceptanceError);
+            return false;
+        }
+        // The snapshot is now owned by storage. A fault raised by an observer cannot undo this acceptance.
         PublishToSubscribers(ReadingReceived, reading);
+        return true;
     }
 
     public void PublishProcessedReading(MagnetometerReading reading)
@@ -135,12 +196,25 @@ public class DataBus
     /// </summary>
     public async Task PublishAcquisitionStartingAsync(SensorConfig config, ConnectionConfig? connectionConfig = null)
     {
+        long generation;
+        lock (_acquisitionAcceptanceGate)
+        {
+            generation = ++_acquisitionAcceptanceGeneration;
+            _acceptAcquisitionReadings = false;
+            _acquisitionAcceptanceFault = null;
+        }
         _acquisitionChannelUnits = Array.AsReadOnly(config.ChannelUnits.ToArray());
         AcquisitionConnectionConfig = connectionConfig;
         var handlers = AcquisitionStarting;
-        if (handlers == null) return;
-        foreach (Func<SensorConfig, Task> handler in handlers.GetInvocationList())
-            await handler(config);
+        if (handlers != null)
+            foreach (Func<SensorConfig, Task> handler in handlers.GetInvocationList())
+                await handler(config);
+        lock (_acquisitionAcceptanceGate)
+        {
+            if (generation != _acquisitionAcceptanceGeneration || _acquisitionAcceptanceFault != null)
+                throw new InvalidOperationException("采集准备期间已停止或发生保存故障，不能开始接收。", _acquisitionAcceptanceFault);
+            _acceptAcquisitionReadings = true;
+        }
     }
 
     public void PublishAcquisitionStarted(SensorConfig config)
@@ -148,14 +222,19 @@ public class DataBus
         AcquisitionStarted?.Invoke(config);
     }
 
+    /// <summary>回放只结束显示，不改变正在准备的实时采集接纳门或通道单位。</summary>
+    public void PublishPlaybackStopped() => AcquisitionStopped?.Invoke();
+
     public void PublishAcquisitionStopped()
     {
+        CloseAcquisitionAcceptance();
         _acquisitionChannelUnits = Array.AsReadOnly(Array.Empty<string>());
         AcquisitionStopped?.Invoke();
     }
 
     public async Task PublishAcquisitionStoppingAsync()
     {
+        CloseAcquisitionAcceptance();
         var handlers = AcquisitionStopping;
         if (handlers == null) return;
         foreach (Func<Task> handler in handlers.GetInvocationList())
