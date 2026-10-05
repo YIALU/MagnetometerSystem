@@ -26,7 +26,8 @@ builder.Services.AddSingleton(_ => new FeedbackStore(builder.Configuration["Feed
 builder.Services.AddHttpClient("github", client =>
 {
     client.BaseAddress = new Uri("https://api.github.com/"); client.Timeout = TimeSpan.FromSeconds(30);
-    client.DefaultRequestHeaders.UserAgent.ParseAdd("MagnetometerSystem-Feedback/0.5.0");
+    var version = typeof(Program).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
+    client.DefaultRequestHeaders.UserAgent.ParseAdd($"MagnetometerSystem-Feedback/{version}");
     client.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
     client.DefaultRequestHeaders.Add("X-GitHub-Api-Version", "2022-11-28");
 });

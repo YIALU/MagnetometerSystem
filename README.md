@@ -33,7 +33,7 @@
 | [V0.5.0 便携版](https://github.com/YIALU/MagnetometerSystem/releases/download/v0.5.0/MagnetometerSystem-v0.5.0-portable-win-x64.zip) | 解压后运行 `MagnetometerSystem.App.exe` |
 | [SHA256 校验清单](https://github.com/YIALU/MagnetometerSystem/releases/download/v0.5.0/SHA256SUMS.txt) | 校验下载的安装包或便携包 |
 
-版本变化见[更新记录](docs/变更日志.md)。当前开发版支持 GitHub / Gitee 双平台更新，在「系统设置 → 软件更新」中选择自动或指定平台；自动模式比较两边版本，并支持同版本镜像下载。已发布的 V0.5.0 仍使用 Gitee 检查更新。
+版本变化见[更新记录](docs/变更日志.md)。当前开发版为 **V0.5.1（尚未发布）**，支持 GitHub / Gitee 双平台更新，在「系统设置 → 软件更新」中选择自动或指定平台；自动模式比较两边版本，并支持同版本镜像下载。已发布的 V0.5.0 仍使用 Gitee 检查更新。
 
 当前开发版另提供匿名反馈入口和新图标，尚未更新 V0.5.0 发布包。反馈服务已部署，匿名提交到 GitHub 待审核 Issue 的完整链路已验证；部署与维护见[反馈服务说明](docs/feedback-deployment.md)。
 
