@@ -32,7 +32,7 @@ Supports **Windows 10/11 x64**. Release packages include the .NET 8 runtime.
 | [V0.5.0 portable package](https://github.com/YIALU/MagnetometerSystem/releases/download/v0.5.0/MagnetometerSystem-v0.5.0-portable-win-x64.zip) | Extract and run `MagnetometerSystem.App.exe` |
 | [SHA256 checksums](https://github.com/YIALU/MagnetometerSystem/releases/download/v0.5.0/SHA256SUMS.txt) | Verify the downloaded installer or portable package |
 
-See the [changelog](docs/变更日志.md) for version changes. The development version supports GitHub and Gitee updates: choose automatic comparison or a specific platform in Settings → Software updates. Automatic mode supports downloads from mirrors of the same version. The published V0.5.0 still checks Gitee only.
+See the [changelog](docs/变更日志.md) for version changes. The development version is **V0.5.1 (not yet released)** and supports GitHub and Gitee updates: choose automatic comparison or a specific platform in Settings → Software updates. Automatic mode supports downloads from mirrors of the same version. The published V0.5.0 still checks Gitee only.
 
 ## Quick start
 
