@@ -20,12 +20,20 @@
     </None>
   </ItemGroup>
 
+  <ItemGroup>
+    <Resource Include="Assets\Magnetometer.ico" />
+    <AssemblyMetadata Include="FeedbackEndpoint" Value="$(FeedbackEndpoint)" Condition="'$(FeedbackEndpoint)' != ''" />
+  </ItemGroup>
+
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
+    <ApplicationIcon>Assets\Magnetometer.ico</ApplicationIcon>
+    <!-- Public endpoint only; SSH and GitHub credentials are never shipped. -->
+    <FeedbackEndpoint Condition="'$(FeedbackEndpoint)' == ''">https://59.110.232.32/api/feedback</FeedbackEndpoint>
   </PropertyGroup>
 
 </Project>

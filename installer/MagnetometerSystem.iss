@@ -50,6 +50,7 @@ OutputBaseFilename=MagnetometerSystem-v{#MyAppVersion}-setup
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
+SetupIconFile=..\src\MagnetometerSystem.App\Assets\Magnetometer.ico
 
 UninstallDisplayName={#MyAppName}
 UninstallDisplayIcon={app}\{#MyAppExeName}

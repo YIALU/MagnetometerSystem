@@ -45,7 +45,9 @@ Historical batch corrections are saved as separate versions. Their identifiers i
 - Default database: `%LOCALAPPDATA%\MagnetometerSystem\magnetometer.db`.
 - Logs: the application directory's `logs` folder, falling back to `%LOCALAPPDATA%\MagnetometerSystem\logs` if necessary.
 - Close the application and back up the database before upgrading or migrating. Legacy fixed-column records remain in `readings_legacy_*` / `corrected_readings_legacy_*`. Their sessions report that migration is required; they are not automatically converted for replay or export.
-- In-app update checks use Gitee releases. GitHub packages can be downloaded manually. See the [release procedure](发布流程.md) (Chinese) for packaging and publication.
+- The development version supports Automatic, Gitee and GitHub update sources in Settings → Software updates; the preference is saved immediately. Automatic mode compares stable versions, prefers complete assets for the same version, and uses Gitee when both are complete. A network download failure can switch to a mirror of the same version and package kind, using that mirror's own checksum manifest. Missing/invalid checksums, hash mismatch and user cancellation do not trigger fallback.
+- The update dialog shows the download platform and offers manual selection when both platforms have the same version. Downloads are restarted and validated independently; an older mirror is never substituted.
+- Published V0.5.0 checks Gitee only. Manual downloads remain available. See the [release procedure](发布流程.md) (Chinese) for packaging and publication.
 
 ## Troubleshooting
 
@@ -58,3 +60,7 @@ Historical batch corrections are saved as separate versions. Their identifiers i
 | Written command has no effect | Bytes received by the peer, terminators, checksum, response criteria, device execution conditions |
 
 Include the application version, reproduction steps, connection parameters, protocol JSON, minimal incoming/outgoing frames, and relevant logs when reporting an issue. See [testing and acceptance](testing-and-acceptance.md) (Chinese) for test coverage and device-validation records.
+
+## Feedback (development builds)
+
+Open Feedback from the main window status bar or About dialog. Enter the usage scenario and problem or feature description. Name and contact are optional and visible only to the maintainer. No account or login is needed. The window leaves acquisition controls available, saves a local draft, and preserves the submission ID for retries. The deployed service has been authorized, and automatic GitHub Issue creation has been verified; the maintainer decides whether to act on each submission. Published V0.5.0 packages do not yet include this feature.

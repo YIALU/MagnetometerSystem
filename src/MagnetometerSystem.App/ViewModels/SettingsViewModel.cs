@@ -1,6 +1,7 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using MagnetometerSystem.App.Services;
+using MagnetometerSystem.Core.Services;
 using MagnetometerSystem.Infrastructure.Configuration;
 
 namespace MagnetometerSystem.App.ViewModels;
@@ -75,6 +76,16 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private bool _autoCheckUpdateEnabled = true;
 
+    [ObservableProperty]
+    private UpdateSource _updateSource = UpdateSource.Automatic;
+    public IReadOnlyList<KeyValuePair<UpdateSource, string>> UpdateSources { get; } =
+    [new(UpdateSource.Automatic, "自动（Gitee + GitHub）"), new(UpdateSource.Gitee, "Gitee"), new(UpdateSource.GitHub, "GitHub")];
+
+    partial void OnUpdateSourceChanged(UpdateSource value)
+    {
+        if (!_suppressUpdatePreferenceWrite) _ = _updateCoordinator.SetSourceAsync(value);
+    }
+
     /// <summary>加载阶段给属性赋值不应触发回写。</summary>
     private bool _suppressUpdatePreferenceWrite;
 
@@ -114,6 +125,7 @@ public partial class SettingsViewModel : ObservableObject
             try
             {
                 AutoCheckUpdateEnabled = await _updateCoordinator.IsAutoCheckEnabledAsync();
+                UpdateSource = await _updateCoordinator.GetSourceAsync();
             }
             finally
             {
@@ -168,6 +180,7 @@ public partial class SettingsViewModel : ObservableObject
         ChartRefreshRate = 30;
         ThemeName = "Default";
         AutoCheckUpdateEnabled = true;   // 这一项即时保存，不等"保存"按钮
+        UpdateSource = UpdateSource.Automatic;
         StatusMessage = "已恢复默认值（需点击保存生效）";
         IsStatusError = false;
     }

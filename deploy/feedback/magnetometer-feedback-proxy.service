@@ -1,0 +1,22 @@
+[Unit]
+Description=Dedicated HTTPS proxy for magnetometer feedback
+After=network-online.target magnetometer-feedback.service
+Wants=network-online.target
+
+[Service]
+User=magnetometer-feedback
+Group=magnetometer-feedback
+ExecStart=/usr/bin/caddy run --config /etc/magnetometer-feedback/Caddyfile --adapter caddyfile
+Restart=on-failure
+RestartSec=5
+UMask=0077
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/magnetometer-feedback
+
+[Install]
+WantedBy=multi-user.target

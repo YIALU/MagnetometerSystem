@@ -32,6 +32,9 @@ public partial class AboutDialog : Window
                        ?? "https://gitee.com/yialu/MagnetometerSystem";
         HomepageText.Text = homepage;
         HomepageLink.NavigateUri = new Uri(homepage);
+        var github = _updateCoordinator?.Service.Options.GitHubHomepageUrl ?? "https://github.com/YIALU/MagnetometerSystem";
+        GitHubText.Text = github;
+        GitHubLink.NavigateUri = new Uri(github);
 
         CheckUpdateButton.IsEnabled = _updateCoordinator is not null;
     }
@@ -71,12 +74,14 @@ public partial class AboutDialog : Window
             switch (result.Status)
             {
                 case UpdateCheckStatus.UpdateAvailable when result.Info is not null:
-                    UpdateStatusText.Text = $"发现新版本 v{result.Info.Version}";
+                    UpdateStatusText.Text = $"发现新版本 v{result.Info.Version}（{result.Info.SourceDisplay}）";
                     await _updateCoordinator.ShowUpdateDialogAsync(this, result.Info);
                     break;
 
                 case UpdateCheckStatus.UpToDate:
-                    UpdateStatusText.Text = $"当前已是最新版本 v{AppVersion.Number}。";
+                    UpdateStatusText.Text = result.WarningMessage == null
+                        ? $"当前已是最新版本 v{AppVersion.Number}。"
+                        : $"已成功检查的平台未发现更新。{result.WarningMessage}";
                     break;
 
                 default:
@@ -139,4 +144,6 @@ public partial class AboutDialog : Window
     }
 
     private void Close_Click(object sender, RoutedEventArgs e) => Close();
+    private void Feedback_Click(object sender, RoutedEventArgs e) =>
+        App.Services?.GetService<FeedbackCoordinator>()?.Show(Owner ?? this);
 }

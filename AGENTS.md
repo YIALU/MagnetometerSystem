@@ -25,6 +25,7 @@
 | 历史 / 导出 | `App/ViewModels/HistoryPlaybackViewModel.cs`、`Infrastructure/Export/CsvExporter.cs` |
 | 校正扩展 | `Core/Calibration/`、对应校准 ViewModel |
 | 验证 / 发布 | `docs/testing-and-acceptance.md`、`docs/发布流程.md`、`build.ps1` |
+| 匿名反馈 / 部署 | `App/Views/Dialogs/FeedbackDialog.xaml`、`App/ViewModels/FeedbackViewModel.cs`、`Infrastructure/Feedback/`、`src/MagnetometerSystem.Feedback.Server/`、`docs/feedback-deployment.md` |
 
 表中 `App/`、`Core/`、`Infrastructure/` 是 `src/MagnetometerSystem.*` 的简称。
 

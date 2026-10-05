@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Net.Http;
 using Microsoft.Extensions.DependencyInjection;
 using MagnetometerSystem.Core.Calibration;
 using MagnetometerSystem.Core.Communication;
@@ -66,8 +67,13 @@ public partial class App : Application
                 CurrentVersion = AppVersion.Number,
                 PackageKind = AppVersion.PackageKind
             });
-            services.AddSingleton<IUpdateService, GiteeUpdateService>();
+            services.AddSingleton<IUpdateService, MultiPlatformUpdateService>();
             services.AddSingleton<UpdateCoordinator>();
+            services.AddSingleton<Core.Feedback.IFeedbackClient>(_ => new Infrastructure.Feedback.FeedbackClient(
+                new HttpClient { Timeout = TimeSpan.FromSeconds(30) }, FeedbackCoordinator.Endpoint));
+            services.AddSingleton(new Infrastructure.Feedback.FeedbackDraftStore(System.IO.Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MagnetometerSystem", "feedback", "draft.json")));
+            services.AddSingleton<FeedbackCoordinator>();
 
             services.AddTransient<SensorCalibrationViewModel>();
             services.AddTransient<SettingsViewModel>();

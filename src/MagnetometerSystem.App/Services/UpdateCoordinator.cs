@@ -22,6 +22,7 @@ public sealed class UpdateCoordinator
     public const string KeyAutoCheck = "update.autoCheckEnabled";
     public const string KeyLastCheckUtc = "update.lastCheckUtc";
     public const string KeySkippedVersion = "update.skippedVersion";
+    public const string KeySource = "update.source";
 
     /// <summary>两次静默检查的最小间隔。</summary>
     private static readonly TimeSpan SilentCheckInterval = TimeSpan.FromHours(24);
@@ -31,6 +32,8 @@ public sealed class UpdateCoordinator
 
     private readonly IUpdateService _updateService;
     private readonly IUserPreferencesService _preferences;
+    private readonly SemaphoreSlim _sourceGate = new(1, 1);
+    private bool _sourceLoaded;
 
     public UpdateCoordinator(IUpdateService updateService, IUserPreferencesService preferences)
     {
@@ -44,6 +47,38 @@ public sealed class UpdateCoordinator
     public UpdateInfo? LastKnownUpdate { get; private set; }
 
     // ------------------------------------------------------------------ 偏好
+
+    public async Task<UpdateSource> GetSourceAsync()
+    {
+        await _sourceGate.WaitAsync();
+        try
+        {
+            if (!_sourceLoaded)
+            {
+                var saved = await _preferences.GetPreferenceAsync<string>(KeySource);
+                _updateService.Options.PreferredSource = Enum.TryParse<UpdateSource>(saved, out var source) && Enum.IsDefined(source)
+                    ? source : UpdateSource.Automatic;
+                _sourceLoaded = true;
+            }
+            return _updateService.Options.PreferredSource;
+        }
+        catch (Exception ex) { Log.Warning(ex, "读取更新平台失败，保留当前设置"); return _updateService.Options.PreferredSource; }
+        finally { _sourceGate.Release(); }
+    }
+
+    public async Task SetSourceAsync(UpdateSource source)
+    {
+        if (!Enum.IsDefined(source)) throw new ArgumentOutOfRangeException(nameof(source));
+        await _sourceGate.WaitAsync();
+        try
+        {
+            _updateService.Options.PreferredSource = source;
+            _sourceLoaded = true;
+            await _preferences.SetPreferenceAsync(KeySource, source.ToString());
+        }
+        catch (Exception ex) { Log.Warning(ex, "保存更新平台失败"); }
+        finally { _sourceGate.Release(); }
+    }
 
     public async Task<bool> IsAutoCheckEnabledAsync()
     {
@@ -97,7 +132,9 @@ public sealed class UpdateCoordinator
 
             await Task.Delay(StartupDelay);
 
+            await GetSourceAsync();
             var result = await _updateService.CheckForUpdateAsync();
+            if (result.WarningMessage != null) Log.Warning("部分更新平台检查失败: {Message}", result.WarningMessage);
 
             if (result.Status == UpdateCheckStatus.Failed)
             {
@@ -106,11 +143,12 @@ public sealed class UpdateCoordinator
                 return;
             }
 
-            await TrySetLastCheckAsync(DateTime.UtcNow);
+            if (result.WarningMessage == null) await TrySetLastCheckAsync(DateTime.UtcNow);
 
             if (result.Status != UpdateCheckStatus.UpdateAvailable || result.Info is null)
             {
-                Log.Information("当前已是最新版本 v{Version}", AppVersion.Number);
+                if (result.WarningMessage == null) Log.Information("当前已是最新版本 v{Version}", AppVersion.Number);
+                else Log.Information("已成功检查的平台未发现新版本 v{Version}", AppVersion.Number);
                 return;
             }
 
@@ -137,16 +175,18 @@ public sealed class UpdateCoordinator
     /// <summary>"关于"窗口里的手动检查。结果原样返回，由调用方决定怎么提示。</summary>
     public async Task<UpdateCheckResult> CheckManuallyAsync(CancellationToken ct = default)
     {
+        await GetSourceAsync();
+        ct.ThrowIfCancellationRequested();
         var result = await _updateService.CheckForUpdateAsync(ct);
 
         if (result.Status == UpdateCheckStatus.UpdateAvailable && result.Info is not null)
         {
             LastKnownUpdate = result.Info;
-            await TrySetLastCheckAsync(DateTime.UtcNow);
+            if (result.WarningMessage == null) await TrySetLastCheckAsync(DateTime.UtcNow);
         }
         else if (result.Status == UpdateCheckStatus.UpToDate)
         {
-            await TrySetLastCheckAsync(DateTime.UtcNow);
+            if (result.WarningMessage == null) await TrySetLastCheckAsync(DateTime.UtcNow);
         }
 
         return result;

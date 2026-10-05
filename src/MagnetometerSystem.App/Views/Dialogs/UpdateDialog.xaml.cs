@@ -11,11 +11,13 @@ namespace MagnetometerSystem.App.Views.Dialogs;
 public partial class UpdateDialog : Window
 {
     private readonly IUpdateService _updateService;
-    private readonly UpdateInfo _info;
+    private UpdateInfo _info;
+    private readonly IReadOnlyList<UpdateInfo> _sources;
 
     private CancellationTokenSource? _cts;
     private bool _isDownloading;
     private long _lastReportedBytes;
+    private string _downloadSource = "";
 
     /// <summary>用户点了"跳过此版本"。由调用方负责写入偏好。</summary>
     public bool SkipRequested { get; private set; }
@@ -26,6 +28,10 @@ public partial class UpdateDialog : Window
 
         _updateService = updateService;
         _info = info;
+        _sources = new[] { info }.Concat(info.Mirrors).ToArray();
+        SourceSelector.ItemsSource = _sources;
+        SourceSelector.SelectedItem = info;
+        SourceSelector.IsEnabled = _sources.Count > 1;
 
         HeadlineText.Text = $"发现新版本 v{info.Version}";
         VersionSummaryText.Text = $"当前 v{AppVersion.Number}  →  最新 v{info.Version}";
@@ -50,6 +56,15 @@ public partial class UpdateDialog : Window
     }
 
     // ------------------------------------------------------------------ 按钮
+
+    private void Source_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (_isDownloading || SourceSelector.SelectedItem is not UpdateInfo selected) return;
+        _info = selected with { Mirrors = _sources.Where(x => x.Source != selected.Source).ToArray() };
+        PackageInfoText.Text = $"{_info.SourceDisplay}　{_info.FileName ?? "未提供对应安装包"}";
+        ReleaseNotesText.Text = string.IsNullOrWhiteSpace(_info.ReleaseNotes) ? "（本次发布没有填写更新说明）" : _info.ReleaseNotes.Trim();
+        UpdateButton.Content = _info.CanDownload ? "立即更新" : "打开下载页面";
+    }
 
     private async void Update_Click(object sender, RoutedEventArgs e)
     {
@@ -154,9 +169,11 @@ public partial class UpdateDialog : Window
 
     private void OnProgress(DownloadProgress p)
     {
+        if (p.BytesReceived == 0 || p.BytesReceived < _lastReportedBytes) _lastReportedBytes = 0;
+        _downloadSource = p.Source?.ToString() ?? _info.SourceDisplay;
         // 每 80KB 一次回调，全量刷 UI 太浪费；节流到 256KB 或下载完成时刷新
         if (p.BytesReceived - _lastReportedBytes < 256 * 1024 &&
-            p.BytesReceived != p.TotalBytes)
+            p.BytesReceived != p.TotalBytes && p.BytesReceived != 0)
         {
             return;
         }
@@ -166,13 +183,13 @@ public partial class UpdateDialog : Window
         {
             DownloadProgressBar.IsIndeterminate = false;
             DownloadProgressBar.Value = percent;
-            StatusText.Text = $"正在下载… {percent:F0}%  " +
+            StatusText.Text = $"{_downloadSource} 正在下载… {percent:F0}%  " +
                               $"({FormatSize(p.BytesReceived)} / {FormatSize(p.TotalBytes!.Value)})";
         }
         else
         {
             DownloadProgressBar.IsIndeterminate = true;
-            StatusText.Text = $"正在下载… {FormatSize(p.BytesReceived)}";
+            StatusText.Text = $"{_downloadSource} 正在下载… {FormatSize(p.BytesReceived)}";
         }
     }
 
@@ -181,6 +198,7 @@ public partial class UpdateDialog : Window
     private void SetDownloadingState(bool downloading)
     {
         _isDownloading = downloading;
+        SourceSelector.IsEnabled = !downloading && _sources.Count > 1;
 
         ProgressPanel.Visibility = downloading ? Visibility.Visible : Visibility.Collapsed;
         UpdateButton.Visibility = downloading ? Visibility.Collapsed : Visibility.Visible;
@@ -221,7 +239,7 @@ public partial class UpdateDialog : Window
         {
             Log.Error(ex, "打开发行版页面失败");
             MessageBox.Show(this,
-                $"无法打开浏览器，请手动访问：\n{_updateService.Options.ReleasesUrl}",
+                $"无法打开浏览器，请手动访问：\n{_info.HtmlUrl}",
                 "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
