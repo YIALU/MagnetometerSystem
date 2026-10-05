@@ -66,6 +66,13 @@
                 <StackPanel>
                     <CheckBox Content="启动时自动检查更新"
                               IsChecked="{Binding AutoCheckUpdateEnabled}" Margin="0,0,0,4"/>
+                    <StackPanel Orientation="Horizontal" Margin="0,4,0,8">
+                        <TextBlock Text="更新平台：" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <ComboBox ItemsSource="{Binding UpdateSources}" DisplayMemberPath="Value" SelectedValuePath="Key"
+                                  SelectedValue="{Binding UpdateSource}" Width="220"/>
+                    </StackPanel>
+                    <TextBlock Text="自动模式比较两个平台的版本；下载遇到网络故障时尝试同版本镜像。每个平台的包均需通过 SHA256 校验。"
+                               FontSize="12" Foreground="#666" TextWrapping="Wrap" Margin="0,0,0,6"/>
                     <TextBlock Text="每天最多检查一次，需要连接互联网。此项修改后立即生效，无需点击保存。"
                                FontSize="11" Foreground="#888" TextWrapping="Wrap"/>
                 </StackPanel>

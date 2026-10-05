@@ -9,7 +9,7 @@
         xmlns:converters="clr-namespace:MagnetometerSystem.App.Converters"
         mc:Ignorable="d"
         Title="磁力仪数据采集与分析系统" Height="900" Width="1440" MinWidth="1000" MinHeight="650"
-        WindowStartupLocation="CenterScreen">
+        WindowStartupLocation="CenterScreen" Icon="Assets/Magnetometer.ico">
     <Window.Resources>
         <converters:InverseBoolToVisibilityConverter x:Key="InverseBoolToVisibilityConverter"/>
         <BooleanToVisibilityConverter x:Key="BoolToVisibilityConverter"/>
@@ -76,6 +76,8 @@
                             <Run Text="{x:Static local:AppVersion.Display}" Foreground="#0078D4"/>
                         </TextBlock>
                     </Button>
+                    <Button Content="反馈与建议" Click="ShowFeedback_Click" BorderThickness="0"
+                            Background="Transparent" Padding="8,0" Cursor="Hand"/>
                 </StackPanel>
             </StatusBarItem>
         </StatusBar>

@@ -36,7 +36,10 @@ param(
     [switch]$AllowDirty,
 
     # 允许 git tag 与 Directory.Build.props 的 <Version> 不一致
-    [switch]$SkipVersionCheck
+    [switch]$SkipVersionCheck,
+
+    # Public HTTPS receiving endpoint, no credentials. Empty uses the project default.
+    [string]$FeedbackEndpoint = $env:MAGNETOMETER_FEEDBACK_ENDPOINT
 )
 
 $ErrorActionPreference = 'Stop'
@@ -155,6 +158,13 @@ function Invoke-Publish {
         '--nologo'
     )
     if ($SingleFile) { $publishArgs += '-p:IncludeNativeLibrariesForSelfExtract=true' }
+    if ($FeedbackEndpoint) {
+        $endpointUri = $null
+        if (-not [Uri]::TryCreate($FeedbackEndpoint, [UriKind]::Absolute, [ref]$endpointUri) -or $endpointUri.Scheme -ne 'https') {
+            Fail 'FeedbackEndpoint must be an absolute HTTPS URL.'
+        }
+        $publishArgs += "-p:FeedbackEndpoint=$FeedbackEndpoint"
+    }
 
     Write-Ok "dotnet publish ($Label) ..."
     & dotnet @publishArgs

@@ -32,7 +32,7 @@ Supports **Windows 10/11 x64**. Release packages include the .NET 8 runtime.
 | [V0.5.0 portable package](https://github.com/YIALU/MagnetometerSystem/releases/download/v0.5.0/MagnetometerSystem-v0.5.0-portable-win-x64.zip) | Extract and run `MagnetometerSystem.App.exe` |
 | [SHA256 checksums](https://github.com/YIALU/MagnetometerSystem/releases/download/v0.5.0/SHA256SUMS.txt) | Verify the downloaded installer or portable package |
 
-See the [changelog](docs/变更日志.md) for version changes. In-app update checks use Gitee releases; GitHub packages can be downloaded manually using the links above.
+See the [changelog](docs/变更日志.md) for version changes. The development version supports GitHub and Gitee updates: choose automatic comparison or a specific platform in Settings → Software updates. Automatic mode supports downloads from mirrors of the same version. The published V0.5.0 still checks Gitee only.
 
 ## Quick start
 
@@ -67,3 +67,5 @@ dotnet test MagnetometerSystem.sln -c Debug --no-build -m:1
 - [Release procedure](docs/发布流程.md) (Chinese): versioning and packaging.
 - [Contributing](CONTRIBUTING.md) (Chinese): commits, pull requests, and reviews.
 - [AGENTS.md](AGENTS.md) (Chinese): engineering entry points and constraints for agents.
+
+Development builds also include a simple anonymous feedback form and the selected application icon. Scenario and description are required; name and contact are optional and kept private on the receiver. The service is deployed, and anonymous submission through automatic GitHub Issue creation has been verified. These changes are not part of the published V0.5.0 packages. See [feedback deployment](docs/feedback-deployment.md).

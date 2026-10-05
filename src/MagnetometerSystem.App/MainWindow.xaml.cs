@@ -56,6 +56,8 @@ public partial class MainWindow : Window
         IsEnabled = false;
         try
         {
+            foreach (var feedback in Application.Current.Windows.OfType<FeedbackDialog>())
+                await feedback.SaveDraftAsync();
             await App.PrepareForExitAsync(vm, _exitConfigService);
             _closeReady = true;
         }
@@ -78,6 +80,9 @@ public partial class MainWindow : Window
         var dlg = new AboutDialog { Owner = this };
         dlg.ShowDialog();
     }
+
+    private void ShowFeedback_Click(object sender, RoutedEventArgs e) =>
+        App.Services.GetRequiredService<FeedbackCoordinator>().Show(this);
 
     /// <summary>
     /// 状态栏"有新版本"角标。用启动检查时缓存的结果直接开窗，不重新联网。

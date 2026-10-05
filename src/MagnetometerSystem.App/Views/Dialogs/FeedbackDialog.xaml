@@ -1,0 +1,43 @@
+<Window x:Class="MagnetometerSystem.App.Views.Dialogs.FeedbackDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="反馈与建议" Width="580" Height="620" MinWidth="500" MinHeight="540"
+        WindowStartupLocation="CenterOwner" ShowInTaskbar="False">
+    <Grid Margin="24">
+        <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+            <StackPanel>
+                <TextBlock Text="反馈与建议" FontSize="22" FontWeight="SemiBold" Margin="0,0,0,18"/>
+                <TextBlock Text="使用场景" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                <TextBox x:Name="ScenarioInput" Text="{Binding Scenario, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding CanEdit}"
+                         AcceptsReturn="True" TextWrapping="Wrap" Height="80" MaxLength="5000" VerticalScrollBarVisibility="Auto"
+                         VerticalContentAlignment="Top"
+                         ToolTip="你在做什么？例如：串口采集后导出某个时间段的数据。" Padding="8"/>
+                <TextBlock Text="问题或需求描述" FontWeight="SemiBold" Margin="0,16,0,6"/>
+                <TextBox x:Name="DescriptionInput" Text="{Binding Description, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding CanEdit}"
+                         AcceptsReturn="True" TextWrapping="Wrap" Height="140" MaxLength="20000" VerticalScrollBarVisibility="Auto"
+                         VerticalContentAlignment="Top"
+                         ToolTip="遇到什么问题，或希望增加什么功能？可以说明实际结果和希望达到的效果。" Padding="8"/>
+                <Grid Margin="0,16,0,0">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="2*"/></Grid.ColumnDefinitions>
+                    <StackPanel Margin="0,0,12,0"><TextBlock Text="姓名（选填）" Margin="0,0,0,6"/>
+                        <TextBox x:Name="NameInput" Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding CanEdit}" MaxLength="100" Padding="8"/></StackPanel>
+                    <StackPanel Grid.Column="1"><TextBlock Text="联系方式（选填）" Margin="0,0,0,6"/>
+                        <TextBox x:Name="ContactInput" Text="{Binding Contact, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding CanEdit}" MaxLength="250" Padding="8" ToolTip="邮箱、电话或其他联系方式"/></StackPanel>
+                </Grid>
+                <TextBlock Margin="0,16,0,0" Foreground="#64748B" TextWrapping="Wrap" FontSize="12"
+                           Text="无需登录。场景、描述和软件版本将公开到项目 GitHub；姓名和联系方式仅供维护者查看。"/>
+                <TextBlock x:Name="StatusText" Text="{Binding Status}" TextWrapping="Wrap" Margin="0,12,0,0" Foreground="#2563EB"/>
+                <TextBlock Margin="0,8,0,0">
+                    <TextBlock.Style><Style TargetType="TextBlock"><Setter Property="Visibility" Value="Visible"/>
+                        <Style.Triggers><DataTrigger Binding="{Binding IssueUrl}" Value="{x:Null}"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger></Style.Triggers>
+                    </Style></TextBlock.Style>
+                    <Hyperlink x:Name="IssueLink" NavigateUri="{Binding IssueUrl}" RequestNavigate="IssueLink_RequestNavigate">查看反馈</Hyperlink></TextBlock>
+            </StackPanel>
+        </ScrollViewer>
+        <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+            <Button x:Name="CloseButton" Content="关闭" Padding="18,7" Margin="0,0,10,0" Click="Close_Click"/>
+            <Button x:Name="SubmitButton" Content="提交反馈" Command="{Binding SubmitCommand}" Padding="18,7"/>
+        </StackPanel>
+    </Grid>
+</Window>

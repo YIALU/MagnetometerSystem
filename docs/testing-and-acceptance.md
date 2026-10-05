@@ -49,6 +49,7 @@ dotnet test MagnetometerSystem.sln -c Debug --collect:"XPlat Code Coverage" --re
 - `AcquisitionStorageWorkflowTests`：原始/显示数据隔离、存储提交与失败后重试、停止尾批、原始/校正导出，以及旧固定列数据保留。
 - `App.Tests`：在共享 STA / WPF Dispatcher 环境运行实际 ViewModel。`ProtocolFlowTests` 通过真实 TCP → `ConnectionViewModel` → `SessionListViewModel` → SQLite，覆盖 21 通道、温度单位、首帧/定时批次/停止尾批，以及 `DeviceCommandViewModel` 对端字节和分片响应。`HistoryPlaybackViewModelTests` 使用真实临时 SQLite，验证通道/单位、显式校正索引、原始值保护、时间戳倍速、完成后复播、实时连接互斥，并加载实际历史视图检查内嵌曲线绑定和温度轴。
 - `RealtimeWorkspaceTests` / `WorkspaceLayoutTests`：实际 WPF 工作台、单图温度轴、原始值统计、通道重排、65 通道、折叠/专注状态恢复和控件绑定。`ShutdownUpdateTests` 验证更新与正常关闭前等待尾批和设置保存、取消更新、真实 SQLite 写入失败阻止安装及显式重试；安装器与这组测试的连接使用替身，不执行真实安装。
+- `MultiPlatformUpdateServiceTests`：真实更新解析、下载与文件校验调用链，使用隔离 HttpMessageHandler 和临时目录验证双平台版本不同步、单平台失败、指定平台、同版本镜像切换、取消和坏校验；不是外网下载证据。`UpdateSourceUiTests` 使用真实临时 SQLite 和 WPF 控件验证平台偏好持久化、下载选择、两项目链接；真实安装升级仍需人工验收。
 - `CtmbsAcquisitionFlowTests`：真实 TCP 夹入状态/参数响应、坏长度头和合法推送，仅合法测量入库与绘图。`VariableLengthSegmentParserTests` 覆盖保留区、未映射尾部、动态校验和帧尾；`ZdzUnitAxesTests` / `UnitWorkflowTests` 覆盖各单位轴范围、回放单位、计算单位及非法来源。
 
 这些条目表示测试代码的覆盖范围。最近一次完整运行结果见下面的日期记录；实体串口、真实设备 ACK/执行结果与长时间稳定性，在没有对应运行记录时一律视为未验证。
@@ -65,14 +66,14 @@ dotnet test MagnetometerSystem.sln --no-build --no-restore -m:1 --verbosity mini
 
 | 项目 | 通过 | 跳过 | 失败 | 最终 TRX |
 | --- | ---: | ---: | ---: | --- |
-| Core | 297 | 1 | 0 | [03_54_59.trx](../.codex_tmp/TestResults-final/22109_LAPTOP-O21DL5NQ_2026-10-04_03_54_59.trx) |
-| Infrastructure | 65 | 0 | 0 | [03_55_00.trx](../.codex_tmp/TestResults-final/22109_LAPTOP-O21DL5NQ_2026-10-04_03_55_00.trx) |
-| App | 20 | 0 | 0 | [03_55_11.trx](../.codex_tmp/TestResults-final/22109_LAPTOP-O21DL5NQ_2026-10-04_03_55_11.trx) |
+| Core | 297 | 1 | 0 | `03_54_59.trx`（首轮本机记录） |
+| Infrastructure | 65 | 0 | 0 | `03_55_00.trx`（首轮本机记录） |
+| App | 20 | 0 | 0 | `03_55_11.trx`（首轮本机记录） |
 | 合计 | **382** | **1** | **0** | 三个项目均已发现并执行 |
 
 唯一跳过项是 `OptionalSerialLoopbackTests.ConnectedSerialPair_ReceivesDataAndWritesExactCommandBytes`，原因是未配置互连串口环境；这不代表串口验收通过。此前一次运行中 Infrastructure 测试发现器临时未加载依赖，该次漏发现没有计入通过结果；其后独立运行 65 项通过，并由上述最终串行全套运行再次确认。
 
-已加载并检查实际 WPF 主窗口，保存了[专注曲线截图](../.codex_tmp/ui-verification/workspace-focus.png)和[辅助面板展开截图](../.codex_tmp/ui-verification/workspace-expanded.png)，并完成目视核验。TRX 与截图是本机 `.codex_tmp` 下的验证产物，不作为源码提交，也不会随新克隆自动出现。
+已加载并检查实际 WPF 主窗口，保存了专注曲线截图 `workspace-focus.png` 和辅助面板展开截图 `workspace-expanded.png`，并完成目视核验。TRX 与截图是本机 `.codex_tmp` 下的验证产物，不作为源码提交，也不会随新克隆自动出现。
 
 构建保留已有 `NU1701` 警告：`SkiaSharp.Views.WPF 3.119.0` 使用 .NET Framework 兼容资源还原；本次 WPF 测试通过不消除此依赖兼容性警告。本轮没有执行虚拟/实体串口验收、真实安装器升级、设备执行确认或长时间吞吐测试，也未给出代码覆盖率百分比。TCP 对端模拟响应证明响应处理路径，不能替代真实设备证据。
 
@@ -217,3 +218,36 @@ python magnetometer_test.py --port COM12 --baud 115200 --rate 100 --sensor triax
 TRX/日志/截图/数据对账文件：
 未覆盖范围与后续验收项：
 ```
+
+## 2026-10-05 双平台更新开发验证
+
+在基于 `459f881` 的独立 `codex/dual-platform-updates` 工作区，Windows、本机 Debug 构建后执行：
+
+```powershell
+dotnet test MagnetometerSystem.sln -c Debug --no-restore -m:1 --logger trx --results-directory .codex_tmp/test-results/final-dual-platform
+```
+
+| 项目 | 通过 | 跳过 | 失败 | 本机 TRX 时间 |
+| --- | ---: | ---: | ---: | --- |
+| Core | 414 | 1 | 0 | 01_02_25 |
+| Infrastructure | 134 | 0 | 0 | 01_02_27 |
+| App | 92 | 0 | 0 | 01_02_36 |
+| 合计 | **640** | **1** | **0** | 本机 `.codex_tmp/test-results/final-dual-platform` |
+
+新增 21 项更新服务与 3 项 WPF 回归：自动比较版本、指定平台、同版本附件完整性、两边不同步不降级、部分/全部接口失败诊断、草稿/预发布过滤、GitHub 发布时间、网络下载失败/中途断流的同版本镜像切换、重新校验镜像自身清单、坏校验拒绝、取消不切换；WPF 与真实 SQLite 验证平台偏好重启保持、退出时全局设置写回不覆盖、更新窗口选源与下载中禁选、两项目链接。其余更新安装交接与采集保存回归仍通过。
+
+使用修改后的更新器匿名访问真实发布：Gitee 正常识别 V0.5.0；GitHub 返回 HTTP 403 `rate limit exceeded`，自动模式仍从 Gitee 获取更新并保留 GitHub 诊断，指定 GitHub 模式如实报告失败。这不是 GitHub 匿名查询成功的证据。两平台正常响应与镜像切换由隔离 Handler 的完整解析/下载/校验调用链验证；本次未重新做两平台全量发布包外网下载。
+
+渲染并目视检查了关于、平台设置及更新选择窗口；截图为本机 `.codex_tmp/update-ui` 中的 `about-project-links.png`、`settings-update-sources.png`、`update-github.png`。上述 TRX、截图与临时联网探针不提交源码。构建保留原有 NU1701 警告；没有串口环境、没有执行真实安装升级。此为开发分支验证，未修改或重新发布既有 V0.5.0 发布包。
+
+## 2026-10-05 匿名反馈实现与部署验证
+
+新增桌面表单、Core 反馈契约、独立草稿、匿名 HttpClient、ASP.NET Core 接收服务及 SQLite 待同步任务。姓名和联系方式保存在私有数据中，不加入 GitHub 正文或公开回执。真实临时 HTTP/SQLite 测试验证重复提交、丢失响应、服务重启、中文最大长度、并发去重、限流、授权失败与未知 POST 结果核对；WPF 测试验证两项必填、可选信息、非模态窗口、重启重试及草稿保存失败时不发送。
+
+部署验证通过 Windows 真实 FeedbackViewModel → FeedbackClient → 公网可信 HTTPS → 服务器 SQLite，并验证相同编号重试、服务器重启后保存及公开回执隐私。测试 CA 续期和部署钩子演练通过；新接收、代理、续期定时器及原有 Caddy 均保持运行。两条专用部署测试记录已定点删除，未向正式 GitHub 仓库建测试 Issue。
+
+上述初次部署验证时尚未配置 GitHub 授权；同日维护者完成配置后，补充真实建单验证，见下文。串口对跳过不等于真实设备通过。维护与授权见 [反馈部署](feedback-deployment.md)。本地 TRX 证据在忽略目录 .codex_tmp/test-results/final-feedback-validated/。
+
+最终 Windows 验证：构建通过；Core 414 通过 / 1 串口环境跳过，Infrastructure 134 通过，App 96 通过，Feedback.Server 11 通过，总计 **655 通过、0 失败、1 跳过**。默认构建已注入公开 HTTPS 反馈地址。公网最大允许中文场景（5000 字）与描述（20000 字）通过真实桌面调用链保存，未截断；这些部署测试记录已清除。没有实际串口验证。
+
+维护者配置服务端 GitHub 令牌后，Windows `FeedbackViewModel → FeedbackClient → 公网可信 HTTPS → SQLite → GitHub` 完整链路通过：编号 `6e3a76b9-bb5c-40b4-bc8e-986d5d1d654a` 生成 [Issue #5](https://github.com/YIALU/MagnetometerSystem/issues/5)，回执状态为 synced。通过服务器内部 GitHub API 核验场景及描述一致、姓名和联系方式未公开、标签为 feedback / needs-triage；首次重复提交与重启反馈后台后的相同编号重试均对应一条数据库记录和一个 Issue。测试单已关闭，数据库回执保留用于追溯；接收、代理、续期定时器及原有 Caddy 均正常运行。该验证使用真实桌面 ViewModel 调用链，不代表已经发布新版安装包，也未同时连接实际串口设备。

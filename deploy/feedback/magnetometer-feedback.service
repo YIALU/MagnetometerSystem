@@ -1,0 +1,25 @@
+[Unit]
+Description=Magnetometer anonymous feedback receiver
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=magnetometer-feedback
+Group=magnetometer-feedback
+WorkingDirectory=/opt/magnetometer-feedback/current
+ExecStart=/opt/magnetometer-feedback/current/MagnetometerSystem.Feedback.Server
+Environment=ASPNETCORE_URLS=http://127.0.0.1:5188
+Environment=ASPNETCORE_ENVIRONMENT=Production
+Environment=Feedback__DatabasePath=/var/lib/magnetometer-feedback/feedback.db
+Environment=Feedback__GitHubTokenFile=/etc/magnetometer-feedback/github-token
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/magnetometer-feedback
+
+[Install]
+WantedBy=multi-user.target

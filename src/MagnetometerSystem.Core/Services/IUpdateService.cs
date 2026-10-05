@@ -12,6 +12,9 @@ public enum AppPackageKind
     Portable
 }
 
+/// <summary>更新平台选择；自动模式比较两边正式发布。</summary>
+public enum UpdateSource { Automatic, Gitee, GitHub }
+
 /// <summary>检查更新的配置。由 App 层在注册 DI 时填入当前版本和分发形态。</summary>
 public sealed class UpdateOptions
 {
@@ -20,6 +23,12 @@ public sealed class UpdateOptions
 
     /// <summary>Gitee 仓库名。</summary>
     public string Repo { get; init; } = "MagnetometerSystem";
+
+    public string GitHubOwner { get; init; } = "YIALU";
+    public UpdateSource PreferredSource { get; set; } = UpdateSource.Automatic;
+
+    public string GitHubHomepageUrl => $"https://github.com/{GitHubOwner}/{Repo}";
+    public string GetHomepageUrl(UpdateSource source) => source == UpdateSource.GitHub ? GitHubHomepageUrl : HomepageUrl;
 
     /// <summary>当前运行的版本号，形如 "0.4.0"（不带 v 前缀、不带 git hash）。</summary>
     public required string CurrentVersion { get; init; }
@@ -36,7 +45,7 @@ public sealed class UpdateOptions
     public string HomepageUrl => $"https://gitee.com/{Owner}/{Repo}";
 
     /// <summary>发行版列表地址。取不到具体 release 时的兜底跳转目标。</summary>
-    public string ReleasesUrl => $"{HomepageUrl}/releases";
+    public string ReleasesUrl => $"{GetHomepageUrl(PreferredSource)}/releases";
 }
 
 /// <summary>检查更新的结果状态。</summary>
@@ -61,6 +70,8 @@ public sealed record UpdateCheckResult(
     UpdateInfo? Info = null,
     string? ErrorMessage = null)
 {
+    /// <summary>部分平台检查失败时保留诊断，不将单平台结果描述为两边均已确认。</summary>
+    public string? WarningMessage { get; init; }
     public static UpdateCheckResult UpToDate() => new(UpdateCheckStatus.UpToDate);
     public static UpdateCheckResult Available(UpdateInfo info) => new(UpdateCheckStatus.UpdateAvailable, info);
     public static UpdateCheckResult Failed(string message) => new(UpdateCheckStatus.Failed, null, message);
@@ -69,6 +80,10 @@ public sealed record UpdateCheckResult(
 /// <summary>一个可用的新版本。</summary>
 public sealed record UpdateInfo
 {
+    public UpdateSource Source { get; init; } = UpdateSource.Gitee;
+    public string SourceDisplay => Source == UpdateSource.GitHub ? "GitHub" : "Gitee";
+    /// <summary>只包含同版本的其他平台发布信息，不在下载时重新选取 latest。</summary>
+    public IReadOnlyList<UpdateInfo> Mirrors { get; init; } = Array.Empty<UpdateInfo>();
     /// <summary>新版本号，形如 "0.4.0"。</summary>
     public required string Version { get; init; }
 
@@ -100,12 +115,13 @@ public sealed record UpdateInfo
 /// <summary>下载进度。</summary>
 public sealed record DownloadProgress(long BytesReceived, long? TotalBytes)
 {
+    public UpdateSource? Source { get; init; }
     /// <summary>0-100。总长度未知时为 null。</summary>
     public double? Percent => TotalBytes is > 0 ? BytesReceived * 100.0 / TotalBytes.Value : null;
 }
 
 /// <summary>
-/// 检查并下载软件更新。数据源是 Gitee 的 Releases API。
+/// 检查并下载软件更新。数据源为 GitHub 和 Gitee Releases API。
 /// </summary>
 public interface IUpdateService
 {
