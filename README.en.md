@@ -1,6 +1,6 @@
 # MagnetometerSystem
 
-[简体中文](README.md) · [Download V0.5.0](https://github.com/YIALU/MagnetometerSystem/releases/tag/v0.5.0) · [User guide](docs/user-guide.en.md) · [Changelog](docs/变更日志.md)
+[简体中文](README.md) · [Download V0.5.2](https://github.com/YIALU/MagnetometerSystem/releases/tag/v0.5.2) · [User guide](docs/user-guide.en.md) · [Changelog](docs/变更日志.md)
 
 **MagnetometerSystem is a general-purpose magnetometer desktop application for everyday debugging and experimental recording.** Connect a device through serial or TCP, receive data using a user-defined protocol, automatically save original readings, and plot live curves.
 
@@ -28,11 +28,11 @@ Supports **Windows 10/11 x64**. Release packages include the .NET 8 runtime.
 
 | Download | Usage |
 | --- | --- |
-| [V0.5.0 installer](https://github.com/YIALU/MagnetometerSystem/releases/download/v0.5.0/MagnetometerSystem-v0.5.0-setup.exe) | Install and launch the application |
-| [V0.5.0 portable package](https://github.com/YIALU/MagnetometerSystem/releases/download/v0.5.0/MagnetometerSystem-v0.5.0-portable-win-x64.zip) | Extract and run `MagnetometerSystem.App.exe` |
-| [SHA256 checksums](https://github.com/YIALU/MagnetometerSystem/releases/download/v0.5.0/SHA256SUMS.txt) | Verify the downloaded installer or portable package |
+| [V0.5.2 installer](https://github.com/YIALU/MagnetometerSystem/releases/download/v0.5.2/MagnetometerSystem-v0.5.2-setup.exe) | Install and launch the application |
+| [V0.5.2 portable package](https://github.com/YIALU/MagnetometerSystem/releases/download/v0.5.2/MagnetometerSystem-v0.5.2-portable-win-x64.zip) | Extract and run `MagnetometerSystem.App.exe` |
+| [SHA256 checksums](https://github.com/YIALU/MagnetometerSystem/releases/download/v0.5.2/SHA256SUMS.txt) | Verify the downloaded installer or portable package |
 
-See the [changelog](docs/变更日志.md) for version changes. The development version is **V0.5.1 (not yet released)** and supports GitHub and Gitee updates: choose automatic comparison or a specific platform in Settings → Software updates. Automatic mode supports downloads from mirrors of the same version. The published V0.5.0 still checks Gitee only.
+See the [changelog](docs/变更日志.md) for version changes. The current version is **V0.5.2** and supports GitHub and Gitee updates: choose automatic comparison or a specific platform in Settings → Software updates. Automatic mode supports downloads from mirrors of the same version. A new version prompt does not start a download or installation; choose Download update to proceed.
 
 ## Quick start
 
@@ -68,4 +68,4 @@ dotnet test MagnetometerSystem.sln -c Debug --no-build -m:1
 - [Contributing](CONTRIBUTING.md) (Chinese): commits, pull requests, and reviews.
 - [AGENTS.md](AGENTS.md) (Chinese): engineering entry points and constraints for agents.
 
-Development builds also include a simple anonymous feedback form and the selected application icon. Scenario and description are required; name and contact are optional and kept private on the receiver. The service is deployed, and anonymous submission through automatic GitHub Issue creation has been verified. These changes are not part of the published V0.5.0 packages. See [feedback deployment](docs/feedback-deployment.md).
+The application also includes a simple anonymous feedback form and the selected application icon. Scenario and description are required; name and contact are optional and kept private on the receiver. The service is deployed, and anonymous submission through automatic GitHub Issue creation has been verified. See [feedback deployment](docs/feedback-deployment.md).

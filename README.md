@@ -1,6 +1,6 @@
 # MagnetometerSystem
 
-[English](README.en.md) · [下载 V0.5.0](https://github.com/YIALU/MagnetometerSystem/releases/tag/v0.5.0) · [使用说明](docs/使用说明.md) · [更新记录](docs/变更日志.md)
+[English](README.en.md) · [下载 V0.5.2](https://github.com/YIALU/MagnetometerSystem/releases/tag/v0.5.2) · [使用说明](docs/使用说明.md) · [更新记录](docs/变更日志.md)
 
 **MagnetometerSystem 是面向日常调试与实验记录的通用磁力仪上位机。** 通过串口或 TCP 连接设备，按用户定义的通信协议接收数据，自动保存原始读数，并实时绘制曲线。
 
@@ -21,7 +21,7 @@
 | **历史回放** | 查询已保存会话，按记录时间戳播放，支持倍速、暂停和定位 |
 | **CSV 导出** | 按时间与通道选择数据，设置导出精度，导出原始值或已保存的改正结果 |
 | **数据改正** | 按需使用偏移/增益校准、正交度采集与参数管理，以及实时、历史数据改正 |
-| **反馈与建议（开发版）** | 无需登录，填写使用场景和问题/需求即可提交；姓名、联系方式选填，仅供维护者查看 |
+| **反馈与建议** | 无需登录，填写使用场景和问题/需求即可提交；姓名、联系方式选填，仅供维护者查看 |
 
 ## 下载与运行
 
@@ -29,13 +29,13 @@
 
 | 下载 | 使用方式 |
 | --- | --- |
-| [V0.5.0 安装版](https://github.com/YIALU/MagnetometerSystem/releases/download/v0.5.0/MagnetometerSystem-v0.5.0-setup.exe) | 运行安装程序后启动应用 |
-| [V0.5.0 便携版](https://github.com/YIALU/MagnetometerSystem/releases/download/v0.5.0/MagnetometerSystem-v0.5.0-portable-win-x64.zip) | 解压后运行 `MagnetometerSystem.App.exe` |
-| [SHA256 校验清单](https://github.com/YIALU/MagnetometerSystem/releases/download/v0.5.0/SHA256SUMS.txt) | 校验下载的安装包或便携包 |
+| [V0.5.2 安装版](https://github.com/YIALU/MagnetometerSystem/releases/download/v0.5.2/MagnetometerSystem-v0.5.2-setup.exe) | 运行安装程序后启动应用 |
+| [V0.5.2 便携版](https://github.com/YIALU/MagnetometerSystem/releases/download/v0.5.2/MagnetometerSystem-v0.5.2-portable-win-x64.zip) | 解压后运行 `MagnetometerSystem.App.exe` |
+| [SHA256 校验清单](https://github.com/YIALU/MagnetometerSystem/releases/download/v0.5.2/SHA256SUMS.txt) | 校验下载的安装包或便携包 |
 
-版本变化见[更新记录](docs/变更日志.md)。当前开发版为 **V0.5.1（尚未发布）**，支持 GitHub / Gitee 双平台更新，在「系统设置 → 软件更新」中选择自动或指定平台；自动模式比较两边版本，并支持同版本镜像下载。已发布的 V0.5.0 仍使用 Gitee 检查更新。
+版本变化见[更新记录](docs/变更日志.md)。当前版本为 **V0.5.2**，支持 GitHub / Gitee 双平台更新，在「系统设置 → 软件更新」中选择自动或指定平台；自动模式比较两边版本，并支持同版本镜像下载。发现新版本只会提示，点击“下载更新”后才开始下载和安装。
 
-当前开发版另提供匿名反馈入口和新图标，尚未更新 V0.5.0 发布包。反馈服务已部署，匿名提交到 GitHub 待审核 Issue 的完整链路已验证；部署与维护见[反馈服务说明](docs/feedback-deployment.md)。
+软件提供匿名反馈入口和磁铁波形图标。反馈服务已部署，匿名提交到 GitHub 待审核 Issue 的完整链路已验证；部署与维护见[反馈服务说明](docs/feedback-deployment.md)。
 
 ## 快速使用
 
