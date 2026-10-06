@@ -46,9 +46,7 @@ public partial class UpdateDialog : Window
             : "暂时无法在软件内下载此版本，可以打开下载页面查看。";
 
         UpdateSummaryText.Text = GetUserSummary(info.ReleaseNotes);
-        ReleaseNotesText.Text = string.IsNullOrWhiteSpace(info.ReleaseNotes)
-            ? "（本次发布没有填写更新说明）"
-            : info.ReleaseNotes.Trim();
+        ReleaseNotesText.Text = GetFullNotes(info.ReleaseNotes);
 
         if (!info.CanDownload)
         {
@@ -66,7 +64,7 @@ public partial class UpdateDialog : Window
             ? $"当前使用{AppVersion.PackageKindDisplay}"
             : "暂时无法在软件内下载此版本，可以打开下载页面查看。";
         UpdateSummaryText.Text = GetUserSummary(_info.ReleaseNotes);
-        ReleaseNotesText.Text = string.IsNullOrWhiteSpace(_info.ReleaseNotes) ? "（本次发布没有填写更新说明）" : _info.ReleaseNotes.Trim();
+        ReleaseNotesText.Text = GetFullNotes(_info.ReleaseNotes);
         UpdateButton.Content = _info.CanDownload ? "下载更新" : "打开下载页面";
     }
 
@@ -251,6 +249,13 @@ public partial class UpdateDialog : Window
             return;
         }
         Close();
+    }
+
+    private static string GetFullNotes(string notes)
+    {
+        var text = notes.Replace("<!-- user-notes:start -->", "", StringComparison.Ordinal)
+            .Replace("<!-- user-notes:end -->", "", StringComparison.Ordinal).Trim();
+        return text.Length == 0 ? "（本次发布没有填写更新说明）" : text;
     }
 
     private static string GetUserSummary(string notes)

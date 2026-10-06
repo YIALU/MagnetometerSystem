@@ -72,10 +72,12 @@ public class UpdateSourceUiTests
         try
         {
             dialog.Show(); await WpfTestHost.PumpAsync();
+            var notes = (TextBlock)dialog.FindName("ReleaseNotesText");
+            Assert.Equal("Gitee 使用体验改善\nGitee 开发详情", notes.Text);
             var selector = (ComboBox)dialog.FindName("SourceSelector");
             selector.SelectedItem = github;
             await WpfTestHost.PumpAsync();
-            Assert.Contains("GitHub", ((TextBlock)dialog.FindName("ReleaseNotesText")).Text);
+            Assert.Equal("GitHub 使用体验改善\nGitHub 开发详情", notes.Text);
             var summary = ((TextBlock)dialog.FindName("UpdateSummaryText")).Text;
             Assert.Contains("GitHub", summary);
             Assert.DoesNotContain("开发详情", summary);
