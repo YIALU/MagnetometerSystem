@@ -13,6 +13,7 @@ using MagnetometerSystem.Infrastructure.Update;
 using MagnetometerSystem.App.Services;
 using MagnetometerSystem.App.Helpers;
 using MagnetometerSystem.App.ViewModels;
+using MagnetometerSystem.App.Views.Dialogs;
 
 namespace MagnetometerSystem.App;
 
@@ -91,8 +92,7 @@ public partial class App : Application
         catch (Exception ex)
         {
             Serilog.Log.Error(ex, "应用启动失败");
-            MessageBox.Show("软件未能启动。请检查磁盘空间和数据目录是否可读写，然后重新启动。详细原因已记录在日志中。",
-                "无法启动", MessageBoxButton.OK, MessageBoxImage.Error);
+            new StartupErrorDialog(ex).ShowDialog();
             Shutdown();
         }
     }
