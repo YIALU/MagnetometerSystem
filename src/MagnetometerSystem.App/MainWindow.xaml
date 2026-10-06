@@ -191,5 +191,13 @@
             <TextBlock Text="正在初始化..." Foreground="White" FontSize="16" HorizontalAlignment="Center"/>
         </StackPanel>
     </Grid>
+    <Grid x:Name="ExitProgressOverlay" Visibility="Collapsed" Background="#EFFFFFFF" Panel.ZIndex="101">
+        <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="420" Margin="24">
+            <TextBlock Text="正在保存，请稍候…" FontSize="18" FontWeight="SemiBold" HorizontalAlignment="Center"/>
+            <TextBlock Text="正在结束采集并保存数据和设置，完成后将关闭程序。"
+                       TextWrapping="Wrap" TextAlignment="Center" Margin="0,12,0,12"/>
+            <ProgressBar IsIndeterminate="True" Height="6"/>
+        </StackPanel>
+    </Grid>
     </Grid>
 </Window>

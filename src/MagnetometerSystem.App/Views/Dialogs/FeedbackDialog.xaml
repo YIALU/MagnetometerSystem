@@ -26,7 +26,7 @@
                         <TextBox x:Name="ContactInput" Text="{Binding Contact, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding CanEdit}" MaxLength="250" Padding="8" ToolTip="邮箱、电话或其他联系方式"/></StackPanel>
                 </Grid>
                 <TextBlock Margin="0,16,0,0" Foreground="#64748B" TextWrapping="Wrap" FontSize="12"
-                           Text="无需登录。场景、描述和软件版本将公开到项目 GitHub；姓名和联系方式仅供维护者查看。"/>
+                           Text="您填写的使用场景、描述和软件版本会公开显示在项目反馈页面，请勿填写密码或其他敏感信息。姓名和联系方式为选填，仅用于维护者与您联系，不会公开。"/>
                 <TextBlock x:Name="StatusText" Text="{Binding Status}" TextWrapping="Wrap" Margin="0,12,0,0" Foreground="#2563EB"/>
                 <TextBlock Margin="0,8,0,0">
                     <TextBlock.Style><Style TargetType="TextBlock"><Setter Property="Visibility" Value="Visible"/>

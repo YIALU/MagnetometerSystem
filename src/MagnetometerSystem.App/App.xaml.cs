@@ -13,6 +13,7 @@ using MagnetometerSystem.Infrastructure.Update;
 using MagnetometerSystem.App.Services;
 using MagnetometerSystem.App.Helpers;
 using MagnetometerSystem.App.ViewModels;
+using MagnetometerSystem.App.Views.Dialogs;
 
 namespace MagnetometerSystem.App;
 
@@ -90,7 +91,8 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"启动失败: {ex.Message}\n\n{ex.StackTrace}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
+            Serilog.Log.Error(ex, "应用启动失败");
+            new StartupErrorDialog(ex).ShowDialog();
             Shutdown();
         }
     }
@@ -140,8 +142,10 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
+            Serilog.Log.Error(ex, "应用初始化失败");
             await Application.Current.Dispatcher.InvokeAsync(() =>
-                MessageBox.Show($"初始化失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error));
+                MessageBox.Show("软件未能完成准备，请重新启动。若仍无法使用，请通过反馈与建议联系维护者并提供日志。",
+                    "暂时无法使用", MessageBoxButton.OK, MessageBoxImage.Error));
         }
     }
 

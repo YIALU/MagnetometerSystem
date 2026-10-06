@@ -28,6 +28,10 @@ public sealed class FeedbackUiTests
             ((TextBox)dialog.FindName("DescriptionInput")).Text = "希望导出时保留更多小数位";
             await WpfTestHost.PumpAsync();
             Assert.True(owner.IsEnabled); Assert.True(vm.CanEdit);
+            dialog.Width = dialog.MinWidth; dialog.Height = dialog.MinHeight;
+            await WpfTestHost.PumpAsync();
+            ((ScrollViewer)((Grid)dialog.Content).Children[0]).ScrollToEnd();
+            await WpfTestHost.PumpAsync();
             SaveScreenshot((FrameworkElement)dialog.Content);
             await vm.SubmitCommand.ExecuteAsync(null);
             Assert.True(vm.HasSubmitted); Assert.False(vm.CanEdit);

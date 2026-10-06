@@ -45,10 +45,12 @@ public class UpdateSourceUiTests
                 Assert.Equal(UpdateSource.GitHub, vm.UpdateSource);
                 await coordinator.GetSourceAsync(); // 等待即刻保存完成。
                 await vm.SaveSettingsCommand.ExecuteAsync(null);
+                await coordinator.SetAutoCheckEnabledAsync(false);
                 await config.SaveSettingsAsync(new()); // 模拟退出时写回全局设置。
                 using var restarted = new MultiPlatformUpdateService(new() { CurrentVersion = "0.5.0", PackageKind = AppPackageKind.Portable });
                 var next = new UpdateCoordinator(restarted, new UserPreferencesService(db));
                 Assert.Equal(UpdateSource.GitHub, await next.GetSourceAsync());
+                Assert.False(await next.IsAutoCheckEnabledAsync());
                 Assert.Equal(UpdateSource.GitHub, restarted.Options.PreferredSource);
                 SaveScreenshot(view, "settings-update-sources.png");
                 vm.ResetToDefaultsCommand.Execute(null);
@@ -70,10 +72,15 @@ public class UpdateSourceUiTests
         try
         {
             dialog.Show(); await WpfTestHost.PumpAsync();
+            var notes = (TextBlock)dialog.FindName("ReleaseNotesText");
+            Assert.Equal("Gitee 使用体验改善\nGitee 开发详情", notes.Text);
             var selector = (ComboBox)dialog.FindName("SourceSelector");
             selector.SelectedItem = github;
             await WpfTestHost.PumpAsync();
-            Assert.Contains("GitHub", ((TextBlock)dialog.FindName("ReleaseNotesText")).Text);
+            Assert.Equal("GitHub 使用体验改善\nGitHub 开发详情", notes.Text);
+            var summary = ((TextBlock)dialog.FindName("UpdateSummaryText")).Text;
+            Assert.Contains("GitHub", summary);
+            Assert.DoesNotContain("开发详情", summary);
             var selected = (UpdateInfo)typeof(UpdateDialog).GetField("_info", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(dialog)!;
             Assert.Equal(github.DownloadUrl, selected.DownloadUrl);
             Assert.Equal(github.ChecksumsUrl, selected.ChecksumsUrl);
@@ -103,7 +110,7 @@ public class UpdateSourceUiTests
 
     private static UpdateInfo Info(UpdateSource source) => new()
     {
-        Source = source, Version = "0.5.0", TagName = "v0.5.0", ReleaseNotes = source + " 更新说明",
+        Source = source, Version = "0.5.0", TagName = "v0.5.0", ReleaseNotes = $"<!-- user-notes:start -->{source} 使用体验改善<!-- user-notes:end -->\n{source} 开发详情",
         HtmlUrl = $"https://{source.ToString().ToLowerInvariant()}.com/releases/tag/v0.5.0",
         FileName = "MagnetometerSystem-v0.5.0-setup.exe",
         DownloadUrl = $"https://{source.ToString().ToLowerInvariant()}.com/setup.exe",
@@ -118,7 +125,7 @@ public class UpdateSourceUiTests
             foreach (var value2 in Descendants<T>(child)) yield return value2;
         }
     }
-    private static void SaveScreenshot(FrameworkElement root, string name)
+    internal static void SaveScreenshot(FrameworkElement root, string name)
     {
         var directory = Environment.GetEnvironmentVariable("MAGNETOMETER_TEST_SCREENSHOTS");
         if (string.IsNullOrWhiteSpace(directory)) return;

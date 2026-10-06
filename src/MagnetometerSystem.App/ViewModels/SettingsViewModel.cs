@@ -1,4 +1,5 @@
 using CommunityToolkit.Mvvm.ComponentModel;
+using Serilog;
 using CommunityToolkit.Mvvm.Input;
 using MagnetometerSystem.App.Services;
 using MagnetometerSystem.Core.Services;
@@ -137,7 +138,8 @@ public partial class SettingsViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            StatusMessage = $"加载设置失败: {ex.Message}";
+            Log.Warning(ex, "加载设置失败");
+            StatusMessage = "未能读取设置，请稍后重新加载。";
             IsStatusError = true;
         }
     }
@@ -163,7 +165,8 @@ public partial class SettingsViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            StatusMessage = $"保存设置失败: {ex.Message}";
+            Log.Warning(ex, "保存设置失败");
+            StatusMessage = "设置未能保存，请检查磁盘空间和保存位置后重试。";
             IsStatusError = true;
         }
     }

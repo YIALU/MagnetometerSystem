@@ -132,6 +132,9 @@ public sealed class UpdateCoordinator
 
             await Task.Delay(StartupDelay);
 
+            // 用户可能在启动延迟期间关闭了自动检查。
+            if (!await IsAutoCheckEnabledAsync()) return;
+
             await GetSourceAsync();
             var result = await _updateService.CheckForUpdateAsync();
             if (result.WarningMessage != null) Log.Warning("部分更新平台检查失败: {Message}", result.WarningMessage);
@@ -161,6 +164,7 @@ public sealed class UpdateCoordinator
                 return;
             }
 
+            if (!await IsAutoCheckEnabledAsync()) return;
             Log.Information("发现新版本 v{Version}", result.Info.Version);
             await onUpdateFound(result.Info);
         }
