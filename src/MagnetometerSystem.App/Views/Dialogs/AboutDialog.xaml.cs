@@ -16,9 +16,9 @@ public partial class AboutDialog : Window
     {
         InitializeComponent();
 
-        VersionText.Text = AppVersion.Display;
+        VersionText.Text = $"v{AppVersion.Number}";
         VersionNumberText.Text = AppVersion.Number;
-        CommitText.Text = AppVersion.Commit ?? "(未注入)";
+        CommitText.Text = AppVersion.Commit ?? "未知";
         BuildTimeText.Text = AppVersion.BuildTime == DateTime.MinValue
             ? "(未知)"
             : AppVersion.BuildTime.ToString("yyyy-MM-dd HH:mm:ss");
@@ -81,12 +81,13 @@ public partial class AboutDialog : Window
                 case UpdateCheckStatus.UpToDate:
                     UpdateStatusText.Text = result.WarningMessage == null
                         ? $"当前已是最新版本 v{AppVersion.Number}。"
-                        : $"已成功检查的平台未发现更新。{result.WarningMessage}";
+                        : "已检查的下载来源未发现新版本，另一个来源暂时无法连接。您可以稍后重新检查。";
+                    if (result.WarningMessage != null) Log.Warning("部分更新平台检查失败: {Message}", result.WarningMessage);
                     break;
 
                 default:
                     Log.Warning("手动检查更新失败: {Message}", result.ErrorMessage);
-                    UpdateStatusText.Text = $"检查失败：{result.ErrorMessage}";
+                    UpdateStatusText.Text = "暂时无法检查新版本，请检查网络连接或稍后重试。";
                     ShowManualDownloadFallback();
                     break;
             }
@@ -94,7 +95,7 @@ public partial class AboutDialog : Window
         catch (Exception ex)
         {
             Log.Error(ex, "手动检查更新出错");
-            UpdateStatusText.Text = $"检查失败：{ex.Message}";
+            UpdateStatusText.Text = "暂时无法检查新版本，请检查网络连接或稍后重试。";
             ShowManualDownloadFallback();
         }
         finally
@@ -109,7 +110,7 @@ public partial class AboutDialog : Window
         if (_updateCoordinator is null) return;
 
         var answer = MessageBox.Show(this,
-            "无法连接到更新服务器，请检查网络连接。\n\n是否打开发行版页面手动查看？",
+            "暂时无法检查新版本。\n\n是否打开下载页面手动查看？",
             "检查更新失败", MessageBoxButton.YesNo, MessageBoxImage.Warning);
 
         if (answer == MessageBoxResult.Yes)
@@ -139,7 +140,8 @@ public partial class AboutDialog : Window
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"复制失败: {ex.Message}", "错误");
+            Log.Warning(ex, "复制版本信息失败");
+            MessageBox.Show("暂时无法复制，请稍后重试。", "提示");
         }
     }
 

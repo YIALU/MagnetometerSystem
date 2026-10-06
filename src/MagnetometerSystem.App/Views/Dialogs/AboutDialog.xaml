@@ -39,7 +39,7 @@
             <TextBlock Grid.Row="0" Grid.Column="0" Text="版本号:" Foreground="#666" Margin="0,2"/>
             <TextBlock Grid.Row="0" Grid.Column="1" x:Name="VersionNumberText" FontFamily="Consolas" Margin="0,2"/>
 
-            <TextBlock Grid.Row="1" Grid.Column="0" Text="Commit:" Foreground="#666" Margin="0,2"/>
+            <TextBlock Grid.Row="1" Grid.Column="0" Text="版本标识:" Foreground="#666" Margin="0,2"/>
             <TextBlock Grid.Row="1" Grid.Column="1" x:Name="CommitText" FontFamily="Consolas" Margin="0,2"/>
 
             <TextBlock Grid.Row="2" Grid.Column="0" Text="构建时间:" Foreground="#666" Margin="0,2"/>
@@ -48,7 +48,7 @@
             <TextBlock Grid.Row="3" Grid.Column="0" Text="安装方式:" Foreground="#666" Margin="0,2"/>
             <TextBlock Grid.Row="3" Grid.Column="1" x:Name="PackageKindText" FontFamily="Consolas" Margin="0,2"/>
 
-            <TextBlock Grid.Row="4" Grid.Column="0" Text="框架:" Foreground="#666" Margin="0,2"/>
+            <TextBlock Grid.Row="4" Grid.Column="0" Text="运行环境:" Foreground="#666" Margin="0,2"/>
             <TextBlock Grid.Row="4" Grid.Column="1" x:Name="RuntimeText" FontFamily="Consolas" Margin="0,2"/>
 
             <TextBlock Grid.Row="5" Grid.Column="0" Text="Gitee:" Foreground="#666" Margin="0,2"/>

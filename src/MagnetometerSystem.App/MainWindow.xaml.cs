@@ -1,4 +1,5 @@
 using System.Windows;
+using Serilog;
 using MagnetometerSystem.App.Services;
 using MagnetometerSystem.App.ViewModels;
 using MagnetometerSystem.App.Views.Dialogs;
@@ -38,11 +39,17 @@ public partial class MainWindow : Window
         try
         {
             await PrepareForExitAsync();
-            Close();
+            // 即使保存同步完成，也必须等本次 Closing 事件返回后再关闭。
+            await Dispatcher.InvokeAsync(Close);
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, "退出前保存未完成：" + ex.Message, "数据尚未保存", MessageBoxButton.OK, MessageBoxImage.Warning);
+            Log.Error(ex, "退出前保存数据或设置失败");
+            MessageBox.Show(this,
+                "数据或设置未能全部保存，暂时无法关闭。\n\n" +
+                "请检查磁盘空间和保存位置是否可写。如果采集工作台提示保存失败，请先点击重试保存，再重新关闭。\n\n" +
+                "请保留此窗口，避免强制结束程序。详细原因已记录在日志中。",
+                "请先完成保存", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
     }
 
@@ -54,6 +61,7 @@ public partial class MainWindow : Window
         if (DataContext is not MainViewModel vm) throw new InvalidOperationException("主窗口尚未就绪。");
         _closing = true;
         IsEnabled = false;
+        ExitProgressOverlay.Visibility = Visibility.Visible;
         try
         {
             foreach (var feedback in Application.Current.Windows.OfType<FeedbackDialog>())
@@ -73,6 +81,7 @@ public partial class MainWindow : Window
         _closeReady = false;
         _closing = false;
         IsEnabled = true;
+        ExitProgressOverlay.Visibility = Visibility.Collapsed;
     }
 
     private void ShowAbout_Click(object sender, RoutedEventArgs e)

@@ -71,9 +71,9 @@
                         <ComboBox ItemsSource="{Binding UpdateSources}" DisplayMemberPath="Value" SelectedValuePath="Key"
                                   SelectedValue="{Binding UpdateSource}" Width="220"/>
                     </StackPanel>
-                    <TextBlock Text="自动模式比较两个平台的版本；下载遇到网络故障时尝试同版本镜像。每个平台的包均需通过 SHA256 校验。"
+                    <TextBlock Text="自动选择可用的新版本下载来源，并检查下载文件是否完整。只提示新版本，由您决定是否下载和安装。"
                                FontSize="12" Foreground="#666" TextWrapping="Wrap" Margin="0,0,0,6"/>
-                    <TextBlock Text="每天最多检查一次，需要连接互联网。此项修改后立即生效，无需点击保存。"
+                    <TextBlock Text="启动时检查，两次成功检查至少间隔 24 小时，需要连接互联网。您也可以在“关于”中随时检查；此开关修改后立即生效。"
                                FontSize="11" Foreground="#888" TextWrapping="Wrap"/>
                 </StackPanel>
             </GroupBox>

@@ -50,7 +50,7 @@ public class ShutdownUpdateTests
             fixture.Settings.ReleaseSave.TrySetResult();
             await WaitForAsync(() => fixture.Window.IsEnabled);
             Assert.Equal(cancel ? 0 : 1, fixture.Updates.ApplyCalls);
-            Assert.Contains(cancel ? "已取消" : "测试安装器未启动", fixture.Status);
+            Assert.Contains(cancel ? "已取消" : "更新包已下载，但未能开始更新", fixture.Status);
             Assert.False(fixture.Main.ConnectionVM.IsAcquiring);
         }
         finally { releaseStorage.TrySetResult(); fixture.Settings.ReleaseSave.TrySetResult(); }
@@ -69,7 +69,7 @@ public class ShutdownUpdateTests
             await fixture.Main.ConnectionVM.ConnectCommand.ExecuteAsync(null);
             fixture.Connection.Feed("4,5,6\n");
             fixture.ClickUpdate();
-            await WaitForAsync(() => fixture.Status.Contains("测试落库失败"));
+            await WaitForAsync(() => fixture.Status.Contains("数据或设置未能全部保存"));
             Assert.Equal(0, fixture.Updates.ApplyCalls);
             Assert.False(fixture.Settings.SaveEntered.Task.IsCompleted);
             Assert.True(fixture.Window.IsEnabled);
@@ -80,7 +80,7 @@ public class ShutdownUpdateTests
             await WaitForAsync(() => fixture.Updates.ApplyCalls == 1 && fixture.Window.IsEnabled);
             Assert.False(fixture.Main.ConnectionVM.IsAcquiring);
             Assert.Null(fixture.Main.SessionListVM.ActiveSessionId);
-            Assert.Contains("测试安装器未启动", fixture.Status);
+            Assert.Contains("更新包已下载，但未能开始更新", fixture.Status);
         }
         finally { fail = false; }
     });
@@ -150,6 +150,7 @@ public class ShutdownUpdateTests
             await fixture.Settings.SaveEntered.Task.WaitAsync(TimeSpan.FromSeconds(3));
             Assert.True(fixture.Window.IsVisible);
             Assert.False(fixture.Window.IsEnabled);
+            Assert.Equal(Visibility.Visible, ((FrameworkElement)fixture.Window.FindName("ExitProgressOverlay")).Visibility);
             var session = Assert.Single(await fixture.Storage.GetSessionsAsync());
             Assert.NotNull(session.EndedAt);
             Assert.Equal(2, (await fixture.Storage.GetReadingsAsync(session.Id)).Count);
@@ -158,6 +159,31 @@ public class ShutdownUpdateTests
             Assert.Equal(0, fixture.Updates.ApplyCalls);
         }
         finally { fixture.Settings.ReleaseSave.TrySetResult(); }
+    });
+
+    [Fact]
+    public Task ImmediatelyCompletedSaveClosesAfterOriginalClosingEventReturns() => WpfTestHost.RunAsync(async () =>
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        fixture.Settings.ReleaseSave.TrySetResult();
+        fixture.Main.CurrentView = null;
+        // 没有活动会话，配置服务立即完成：确保覆盖此前遗漏的同步分支。
+        var saved = App.PrepareForExitAsync(fixture.Main, fixture.Settings);
+        Assert.True(saved.IsCompletedSuccessfully);
+        fixture.Window.ShowInTaskbar = false;
+        fixture.Window.ShowActivated = false;
+        fixture.Window.Left = -10000;
+        fixture.Window.Top = -10000;
+        fixture.Window.Show();
+        var closingEvents = 0;
+        fixture.Window.Closing += (_, _) => closingEvents++;
+        fixture.Window.Close();
+        Assert.Equal(1, closingEvents);
+        Assert.True(fixture.Window.IsVisible);
+        await WaitForAsync(() => !fixture.Window.IsVisible);
+        Assert.Equal(2, closingEvents);
+        Assert.True(fixture.Settings.SaveEntered.Task.IsCompleted);
+        Assert.Equal(0, fixture.Updates.ApplyCalls);
     });
 
     private static TaskCompletionSource NewCompletion() => new(TaskCreationOptions.RunContinuationsAsynchronously);

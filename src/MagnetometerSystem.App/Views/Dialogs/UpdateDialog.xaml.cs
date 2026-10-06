@@ -41,10 +41,11 @@ public partial class UpdateDialog : Window
             : null;
 
         PackageInfoText.Text = info.CanDownload
-            ? string.Join("　　", new[] { published, $"当前为{AppVersion.PackageKindDisplay}", info.FileName }
+            ? string.Join("　　", new[] { published, $"当前使用{AppVersion.PackageKindDisplay}" }
                 .Where(s => !string.IsNullOrEmpty(s)))
-            : "该版本未提供与当前安装方式匹配的安装包，请到发行版页面手动下载。";
+            : "暂时无法在软件内下载此版本，可以打开下载页面查看。";
 
+        UpdateSummaryText.Text = GetUserSummary(info.ReleaseNotes);
         ReleaseNotesText.Text = string.IsNullOrWhiteSpace(info.ReleaseNotes)
             ? "（本次发布没有填写更新说明）"
             : info.ReleaseNotes.Trim();
@@ -61,9 +62,12 @@ public partial class UpdateDialog : Window
     {
         if (_isDownloading || SourceSelector.SelectedItem is not UpdateInfo selected) return;
         _info = selected with { Mirrors = _sources.Where(x => x.Source != selected.Source).ToArray() };
-        PackageInfoText.Text = $"{_info.SourceDisplay}　{_info.FileName ?? "未提供对应安装包"}";
+        PackageInfoText.Text = _info.CanDownload
+            ? $"当前使用{AppVersion.PackageKindDisplay}"
+            : "暂时无法在软件内下载此版本，可以打开下载页面查看。";
+        UpdateSummaryText.Text = GetUserSummary(_info.ReleaseNotes);
         ReleaseNotesText.Text = string.IsNullOrWhiteSpace(_info.ReleaseNotes) ? "（本次发布没有填写更新说明）" : _info.ReleaseNotes.Trim();
-        UpdateButton.Content = _info.CanDownload ? "立即更新" : "打开下载页面";
+        UpdateButton.Content = _info.CanDownload ? "下载更新" : "打开下载页面";
     }
 
     private async void Update_Click(object sender, RoutedEventArgs e)
@@ -106,6 +110,7 @@ public partial class UpdateDialog : Window
     {
         MainWindow? preparedWindow = null;
         bool exitRequested = false;
+        var failureMessage = "新版本未能下载。请检查网络连接和下载位置，重试或打开下载页面手动下载。";
         _cts = new CancellationTokenSource();
         SetDownloadingState(true);
 
@@ -121,11 +126,13 @@ public partial class UpdateDialog : Window
             {
                 var mainWindow = Application.Current.MainWindow as MainWindow
                     ?? throw new InvalidOperationException("无法找到主窗口，未启动安装。");
-                StatusText.Text = "正在停止采集并保存数据，完成后启动安装…";
+                failureMessage = "更新暂未开始：数据或设置未能全部保存。请检查保存位置和磁盘空间，在采集工作台重试保存后再更新。";
+                StatusText.Text = "正在保存采集数据，完成后会关闭软件并开始安装…";
                 await mainWindow.PrepareForExitAsync();
                 preparedWindow = mainWindow;
                 _cts.Token.ThrowIfCancellationRequested();
             }
+            failureMessage = "更新包已下载，但未能开始更新。请重试，或打开下载页面按说明手动更新。";
             var shouldExit = _updateService.TryApplyUpdate(_info, localPath);
 
             if (shouldExit)
@@ -140,7 +147,7 @@ public partial class UpdateDialog : Window
             MessageBox.Show(this,
                 $"新版本已下载到：\n{localPath}\n\n" +
                 "请关闭本程序后，把压缩包内的文件解压覆盖到当前程序目录即可完成升级。\n" +
-                "测量数据保存在用户目录，不会因覆盖而丢失。",
+                "更新前请确认采集数据已保存，并备份重要数据。",
                 "下载完成", MessageBoxButton.OK, MessageBoxImage.Information);
             Close();
         }
@@ -155,7 +162,7 @@ public partial class UpdateDialog : Window
         {
             Log.Error(ex, "下载或安装更新失败");
             SetDownloadingState(false);
-            ShowFailure(ex.Message);
+            ShowFailure(failureMessage);
         }
         finally
         {
@@ -222,7 +229,7 @@ public partial class UpdateDialog : Window
         ProgressPanel.Visibility = Visibility.Visible;
         DownloadProgressBar.IsIndeterminate = false;
         DownloadProgressBar.Value = 0;
-        StatusText.Text = $"更新失败：{message}";
+        StatusText.Text = message;
 
         // 自动下载走不通时，把手动下载的路给用户留出来
         UpdateButton.Content = "重试";
@@ -244,6 +251,21 @@ public partial class UpdateDialog : Window
             return;
         }
         Close();
+    }
+
+    private static string GetUserSummary(string notes)
+    {
+        const string startMarker = "<!-- user-notes:start -->";
+        const string endMarker = "<!-- user-notes:end -->";
+        var start = notes.IndexOf(startMarker, StringComparison.Ordinal);
+        if (start >= 0)
+        {
+            start += startMarker.Length;
+            var end = notes.IndexOf(endMarker, start, StringComparison.Ordinal);
+            if (end > start && !string.IsNullOrWhiteSpace(notes[start..end]))
+                return notes[start..end].Trim();
+        }
+        return "发布者未提供简要说明，您可以展开下方的完整更新说明，或打开下载页面了解详细变化。";
     }
 
     private static string FormatSize(long bytes)

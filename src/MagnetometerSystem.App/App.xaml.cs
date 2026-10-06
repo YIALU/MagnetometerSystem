@@ -90,7 +90,9 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"启动失败: {ex.Message}\n\n{ex.StackTrace}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
+            Serilog.Log.Error(ex, "应用启动失败");
+            MessageBox.Show("软件未能启动。请检查磁盘空间和数据目录是否可读写，然后重新启动。详细原因已记录在日志中。",
+                "无法启动", MessageBoxButton.OK, MessageBoxImage.Error);
             Shutdown();
         }
     }
@@ -140,8 +142,10 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
+            Serilog.Log.Error(ex, "应用初始化失败");
             await Application.Current.Dispatcher.InvokeAsync(() =>
-                MessageBox.Show($"初始化失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error));
+                MessageBox.Show("软件未能完成准备，请重新启动。若仍无法使用，请通过反馈与建议联系维护者并提供日志。",
+                    "暂时无法使用", MessageBoxButton.OK, MessageBoxImage.Error));
         }
     }
 
