@@ -300,6 +300,87 @@ public class OrthogonalityFittingLayoutTests
             Assert.Equal(new double[] { 0, 10, 20 }, vm.CollectedData[0]);
         });
 
+    [Theory]
+    [InlineData("live")]
+    [InlineData("switch-source")]
+    public Task SlowSessionLoadDoesNotOverwriteNewerSamplesOrSource(string later) =>
+        WpfTestHost.RunAsync(async () =>
+        {
+            using var fixture = await Fixture.CreateAsync();
+            var session = await fixture.SaveSessionAsync(["nT", "nT", "nT"]);
+            var gated = new GatedReadings(fixture.Storage);
+            var vm = new OrthogonalityCalibrationViewModel(new OrthogonalityCalculator(), fixture.CreateRepository(), fixture.Bus, gated)
+            { SelectedSensorType = SensorType.TriaxialFluxgate };
+            typeof(OrthogonalityCalibrationViewModel).GetField("_rawWriter", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .SetValue(vm, new StreamWriter(new MemoryStream()));
+            try
+            {
+                var pending = ImportSessionAsync(vm, session);
+                await gated.Requested.Task;   // 会话读取进行中
+
+                if (later == "live")
+                {
+                    // 读取期间开始实时采集：新样本不能被迟到的会话结果覆盖。
+                    await fixture.PrepareLiveAsync(["nT", "nT", "nT"]);
+                    vm.DataSource = CalibrationDataSource.Live;
+                    vm.StartCollectingCommand.Execute(null);
+                    Assert.True(vm.IsCollecting, vm.CollectionStatus);
+                    fixture.Bus.PublishReading(new MagnetometerReading { Timestamp = DateTime.UtcNow, ChannelValues = [7, 8, 9] });
+                }
+                else
+                {
+                    vm.DataSource = CalibrationDataSource.File;   // 用户已离开会话来源
+                }
+
+                gated.Release.SetResult();
+                await pending;
+                if (later == "live")
+                {
+                    Assert.Equal(new double[] { 7, 8, 9 }, Assert.Single(vm.CollectedData));
+                    Assert.True(vm.IsCollecting);
+                    vm.StopCollectingCommand.Execute(null);
+                }
+                else
+                {
+                    Assert.Empty(vm.CollectedData);
+                    Assert.Equal(CalibrationDataSource.File, vm.DataSource);
+                }
+            }
+            finally { vm.Cleanup(); }
+        });
+
+    /// <summary>真实存储外包一层：读取会话读数时暂停，直到测试放行。</summary>
+    private sealed class GatedReadings(IDataStorageService inner) : IDataStorageService
+    {
+        public TaskCompletionSource Requested { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task<IReadOnlyList<MagnetometerReading>> GetReadingsAsync(string sessionId, DateTime? startTime = null, DateTime? endTime = null)
+        {
+            Requested.TrySetResult();
+            await Release.Task;
+            return await inner.GetReadingsAsync(sessionId, startTime, endTime);
+        }
+
+        public Task<ReadingPage> GetReadingsPageAsync(string sessionId, DateTime startTime, DateTime endTime, ReadingPageCursor? after, int limit) =>
+            inner.GetReadingsPageAsync(sessionId, startTime, endTime, after, limit);
+        public StorageWriteStatus WriteStatus => inner.WriteStatus;
+        public event Action<StorageWriteStatus>? WriteStatusChanged { add => inner.WriteStatusChanged += value; remove => inner.WriteStatusChanged -= value; }
+        public Task<string> StartSessionAsync(string name, SensorConfig sensorConfig, ConnectionConfig connectionConfig) => inner.StartSessionAsync(name, sensorConfig, connectionConfig);
+        public Task EndSessionAsync(string sessionId) => inner.EndSessionAsync(sessionId);
+        public Task SaveReadingsAsync(IEnumerable<MagnetometerReading> readings) => inner.SaveReadingsAsync(readings);
+        public Task WaitForPendingWritesAsync(int timeoutMs = 5000) => inner.WaitForPendingWritesAsync(timeoutMs);
+        public Task RetryPendingWritesAsync() => inner.RetryPendingWritesAsync();
+        public Task<IReadOnlyList<SessionInfo>> GetSessionsAsync() => inner.GetSessionsAsync();
+        public Task DeleteSessionAsync(string sessionId) => inner.DeleteSessionAsync(sessionId);
+        public Task UpdateSessionAsync(string sessionId, string name, string? notes) => inner.UpdateSessionAsync(sessionId, name, notes);
+        public Task SaveCorrectedReadingsAsync(IEnumerable<CorrectedReading> readings) => inner.SaveCorrectedReadingsAsync(readings);
+        public Task<IReadOnlyList<CorrectedReading>> GetCorrectedReadingsAsync(string sessionId, string? correctionProfileId = null) => inner.GetCorrectedReadingsAsync(sessionId, correctionProfileId);
+        public Task DeleteCorrectedReadingsAsync(string sessionId, string? correctionProfileId = null) => inner.DeleteCorrectedReadingsAsync(sessionId, correctionProfileId);
+        public Task<bool> HasCorrectedReadingsAsync(string sessionId) => inner.HasCorrectedReadingsAsync(sessionId);
+        public Task<IReadOnlyList<string>> GetCorrectionVersionIdsAsync(string sessionId) => inner.GetCorrectionVersionIdsAsync(sessionId);
+    }
+
     private static async Task WaitUntil(Func<bool> condition)
     {
         for (var deadline = DateTime.UtcNow.AddSeconds(5); !condition();)
@@ -431,6 +512,8 @@ public class OrthogonalityFittingLayoutTests
             fixture.Profiles = new SqliteCalibrationRepository(fixture._database);
             return fixture;
         }
+
+        public SqliteCalibrationRepository CreateRepository() => Profiles;
 
         public OrthogonalityCalibrationViewModel CreateVm(int channels)
         {

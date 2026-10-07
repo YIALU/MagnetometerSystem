@@ -1641,6 +1641,8 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
             else RefreshFittingChannels();
         }
         var version = ++_sessionLoadVersion;
+        // 导入文件、开始实时采集等替换样本时都会推进这批数据的代号。
+        var generation = Interlocked.Read(ref _collectedGeneration);
         try
         {
             if (session.ChannelNames.Length != session.ChannelCount || session.ChannelUnits.Length != session.ChannelCount)
@@ -1650,7 +1652,9 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
             int requiredCols = map.Length;
             var sourceUnit = FittingChannelMap.Validate(map, session.ChannelUnits, FittingGroups);
             var readings = await _storageService.GetReadingsAsync(session.Id);
-            if (version != _sessionLoadVersion) return;   // 期间又改了通道或换了会话，以最后一次为准
+            // 读取期间又改了通道、换了会话或来源，或样本已被导入文件、实时采集替换：以后来的为准，丢弃这次结果。
+            if (version != _sessionLoadVersion || generation != Interlocked.Read(ref _collectedGeneration) || IsCollecting
+                || DataSource != CalibrationDataSource.Session || !ReferenceEquals(_loadedSession, session)) return;
             if (readings.Count == 0)
             {
                 CollectionStatus = $"会话 '{session.Name}' 中没有数据";
