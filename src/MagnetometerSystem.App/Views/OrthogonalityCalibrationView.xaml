@@ -193,7 +193,7 @@
                         </StackPanel>
                     </Border>
                     <TextBlock Style="{StaticResource Hint}" Margin="0,0,0,16"
-                               Text="实时或会话直接拟合：单三轴要求恰好 3 个通道，顺序 X/Y/Z；双三轴要求恰好 6 个通道，顺序 X1/Y1/Z1/X2/Y2/Z2，两组分别计算。全部通道须使用相同的明确磁场单位；含其他通道或顺序时，请整理为三轴 CSV 后导入。"/>
+                               Text="单三轴拟合一组 X/Y/Z，双三轴拟合两组、分别计算。实时或会话数据在第 2 步的“拟合通道”中从协议定义的通道里选出各探头的 X/Y/Z（按名称自动识别，可更改），其余通道不参与；所选通道须使用相同的明确磁场单位。"/>
 
                     <TextBlock Text="传感器序列号（可选）" Style="{StaticResource FieldLabel}"/>
                     <TextBox Text="{Binding SensorSerial, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,16"/>

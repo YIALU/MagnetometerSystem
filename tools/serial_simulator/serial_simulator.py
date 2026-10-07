@@ -494,6 +494,35 @@ class Protocol:
             self._corrupt_anchor(frame, offsets)
         return bytes(frame)
 
+    def fault_support(self) -> tuple[bool, bool]:
+        """(坏帧, 截断帧) 能否构造出上位机一定会拒绝的帧。
+        解析器只能靠启用的校验、帧尾、参与同步的固定值或长度值发现损坏；都没有的协议里，
+        “坏帧”与正常帧无法区分，截断帧还会和下一帧拼成一帧被接收，这些故障只会产生虚假的验证结果。
+        截断只有启用的校验或帧尾（帧末的锚点）才能识别。"""
+        if not self.is_binary:
+            return True, True   # 文本协议：某列写成 ERR / 少一列
+        if self.segments:
+            checksum = self.checksum_segment is not None and not self.checksum_disabled
+            tail = any(seg_type(seg) == "Tail" for seg in self.segments)
+            length = (any(seg_type(seg) == "LengthField" for seg in self.segments)
+                      and self._required_payload_length() > 0)
+            return checksum or self._has_corruptible_anchor() or length, checksum or tail
+        cfg = self.config
+        checksum = enum_value(cfg.get("Checksum"), CHECKSUM_TYPES, "None") != "None"
+        tail = bool(hex_to_bytes(cfg.get("FrameTail", "")))
+        length = bool(cfg.get("HasLengthByte", True)) and self._legacy_data_length() > 0
+        return checksum or tail or length, checksum or tail
+
+    def _required_payload_length(self) -> int:
+        """同解析器 _requiredPayloadLength：长度段之后、校验 / 帧尾之前，映射字段与固定值锚点占到的最远位置。"""
+        start, end = self._payload_bounds()
+        offsets, pos = [], 0
+        for seg in self.segments:
+            offsets.append(pos)
+            pos += seg_count(seg)
+        return max((off + seg_count(seg) - start for seg, off in zip(self.segments, offsets)
+                    if start <= off < end and (seg_type(seg) == "DataField" or seg.get("ValidateFixedValue"))), default=0)
+
     def _has_corruptible_anchor(self) -> bool:
         return any(seg_type(s) == "Tail" or (seg_type(s) == "Padding" and s.get("ValidateFixedValue"))
                    for s in self.segments)
@@ -519,13 +548,14 @@ class Protocol:
             value = values.get(int(f.get("ChannelIndex") or 0), 0.0)
             data[off:off + TYPE_SIZES[data_type]] = encode_number(
                 value, data_type, bool(f.get("BigEndian")), _number(f, "Scale", 1.0), _number(f, "Offset", 0.0))
+        checksum = enum_value(cfg.get("Checksum"), CHECKSUM_TYPES, "None")
+        tail = hex_to_bytes(cfg.get("FrameTail", ""))
         frame = bytearray(hex_to_bytes(cfg.get("FrameHeader", "AA55")))
         if cfg.get("HasLengthByte", True):
             count = int(cfg.get("LengthByteCount") or 1)
-            frame += len(data).to_bytes(count, "big" if cfg.get("LengthBigEndian") else "little")
+            length = 0 if fault == "bad" and checksum == "None" and not tail else len(data)
+            frame += length.to_bytes(count, "big" if cfg.get("LengthBigEndian") else "little")
         frame += data
-        checksum = enum_value(cfg.get("Checksum"), CHECKSUM_TYPES, "None")
-        tail = hex_to_bytes(cfg.get("FrameTail", ""))
         if checksum != "None":
             covered = bytes(frame[int(cfg.get("ChecksumStartOffset") or 0):])
             if checksum == "CRC16":
@@ -690,6 +720,7 @@ class Stats:
     rx_bytes: int = 0
     write_timeouts: int = 0
     skipped: int = 0
+    unsent: int = 0            # 写出超时、没有完整发出的帧
     last_frame: bytes = b""
     last_values: dict = field(default_factory=dict)
 
@@ -707,32 +738,57 @@ class FrameSource:
         self.generator = SignalGenerator(protocol.channels(), self.rng)
         self.sim_time = 0.0
         self.stats = Stats()
+        self.can_bad, self.can_truncate = protocol.fault_support()
+        self._pending = Stats()   # 已生成、尚未确认完整写出的帧
 
     def next(self, settings: RunSettings, fault: str | None = None) -> bytes:
+        """生成一帧（可能带前置噪声）。计数先记在待确认里，写出成功后由 commit() 计入统计。"""
         out = bytearray()
         if fault is None and settings.noise_pct > 0 and self.rng.random() * 100 < settings.noise_pct:
             out += self.noise()
         self.sim_time += 1.0 / max(settings.rate, 0.01)
         values = self.generator.sample(self.sim_time, settings.signal)
         if fault is None:
+            # 协议无法识别的故障不注入，否则统计会把会被接收的帧算成“坏帧”
+            bad_pct = settings.bad_pct if self.can_bad else 0.0
+            truncate_pct = settings.truncate_pct if self.can_truncate else 0.0
             roll = self.rng.random() * 100
-            if roll < settings.bad_pct:
+            if roll < bad_pct:
                 fault = "bad"
-            elif roll < settings.bad_pct + settings.truncate_pct:
+            elif roll < bad_pct + truncate_pct:
                 fault = "truncate"
         frame = self.protocol.build(values, fault, settings.decimals, self.rng)
+        pending = self._pending
         if fault == "bad":
-            self.stats.bad += 1
+            pending.bad += 1
         elif fault == "truncate":
-            self.stats.truncated += 1
+            pending.truncated += 1
         else:
-            self.stats.good += 1
-            self.stats.last_values = values
-        self.stats.last_frame = frame
+            pending.good += 1
+            pending.last_values = values
+        pending.last_frame = frame
         return bytes(out + frame)
 
+    def commit(self):
+        """上一批字节已完整写出：计入发送统计。"""
+        s, p = self.stats, self._pending
+        s.good += p.good
+        s.bad += p.bad
+        s.truncated += p.truncated
+        s.noise += p.noise
+        if p.last_frame:
+            s.last_frame = p.last_frame
+        if p.last_values:
+            s.last_values = p.last_values
+        self._pending = Stats()
+
+    def discard(self):
+        """上一批没有完整写出（超时）：不算已发送，记为未发出。"""
+        self.stats.unsent += self._pending.frames
+        self._pending = Stats()
+
     def noise(self) -> bytes:
-        self.stats.noise += 1
+        self._pending.noise += 1
         n = self.rng.randint(1, 16)
         if self.protocol.is_binary:
             return bytes(self.rng.randrange(256) for _ in range(n))
@@ -826,9 +882,12 @@ class SimulatorEngine:
             elif action == "stop":
                 self.sending = False
             elif action == "frame":
-                self._write(self.source.next(settings, argument), settings)
+                if (argument == "bad" and not self.source.can_bad) or (argument == "truncate" and not self.source.can_truncate):
+                    self._emit("warn", "该协议没有启用的校验、帧尾或其他锚点，解析器无法识别这种损坏，未发送")
+                    continue
+                self._send(self.source.next(settings, argument), settings)
             elif action == "noise":
-                self._write(self.source.noise(), settings)
+                self._send(self.source.noise(), settings)
             elif action == "header":
                 self._write(self.source.protocol.header_lines(), settings)
             elif action == "spike":
@@ -862,11 +921,18 @@ class SimulatorEngine:
         for _ in range(due):
             chunk += self.source.next(settings)
         self._scheduled += due
-        self._write(bytes(chunk), settings)
+        self._send(bytes(chunk), settings)
 
-    def _write(self, data: bytes, settings: RunSettings):
+    def _send(self, data: bytes, settings: RunSettings):
+        """写出生成的帧：完整写出才计入统计，超时则记为未发出。"""
+        if self._write(data, settings):
+            self.source.commit()
+        else:
+            self.source.discard()
+
+    def _write(self, data: bytes, settings: RunSettings) -> bool:
         if not data:
-            return
+            return True
         pieces = [data]
         if settings.split and len(data) > 1:
             pieces, pos = [], 0
@@ -876,14 +942,19 @@ class SimulatorEngine:
                 pos += n
         for n, piece in enumerate(pieces):
             try:
-                self.stats.bytes_sent += self.port.write(piece) or 0
+                written = self.port.write(piece) or 0
             except serial.SerialTimeoutException:
+                written = -1
+            if written != len(piece):
+                self.stats.bytes_sent += max(written, 0)
                 self.stats.write_timeouts += 1
                 if self.stats.write_timeouts in (1, 10, 100) or self.stats.write_timeouts % 1000 == 0:
-                    self._emit("warn", f"写出超时 {self.stats.write_timeouts} 次：对端可能没有打开或没有读取")
-                return
+                    self._emit("warn", f"写出超时 {self.stats.write_timeouts} 次：对端可能没有打开或没有读取，未完整写出的帧不计入已发")
+                return False
+            self.stats.bytes_sent += written
             if n + 1 < len(pieces):
                 time.sleep(self.rng.uniform(0.0, 0.002))
+        return True
 
     def _receive(self):
         waiting = self.port.in_waiting
@@ -1052,9 +1123,11 @@ def run_gui(protocols: list[Protocol], load_errors: list[str]):
             ttk.Checkbutton(box, text="回显收到的数据", variable=self.echo_var).grid(row=0, column=7)
             row = ttk.Frame(box)
             row.grid(row=1, column=0, columnspan=8, sticky="w", pady=(4, 0))
+            self.bad_button = ttk.Button(row, text="发一个坏帧", command=lambda: self._request("frame", "bad"))
+            self.truncate_button = ttk.Button(row, text="发一个截断帧", command=lambda: self._request("frame", "truncate"))
             self.oneshot_buttons = [
-                ttk.Button(row, text="发一个坏帧", command=lambda: self._request("frame", "bad")),
-                ttk.Button(row, text="发一个截断帧", command=lambda: self._request("frame", "truncate")),
+                self.bad_button,
+                self.truncate_button,
                 ttk.Button(row, text="发一段噪声", command=lambda: self._request("noise")),
                 ttk.Button(row, text="注入尖峰", command=lambda: self._request("spike")),
             ]
@@ -1217,6 +1290,9 @@ def run_gui(protocols: list[Protocol], load_errors: list[str]):
                                        state="normal" if usable else "disabled")
             for button in self.oneshot_buttons + [self.single_button]:
                 button.configure(state="normal" if usable else "disabled")
+            can_bad, can_truncate = self.protocol.fault_support() if self.protocol else (False, False)
+            self.bad_button.configure(state="normal" if usable and can_bad else "disabled")
+            self.truncate_button.configure(state="normal" if usable and can_truncate else "disabled")
             header = usable and self.protocol.header_line_count() > 0
             self.header_button.configure(state="normal" if header else "disabled")
             self.export_button.configure(state="normal" if self.protocol and not self.protocol.error else "disabled")
@@ -1266,6 +1342,11 @@ def run_gui(protocols: list[Protocol], load_errors: list[str]):
                                      "虚拟串口通常不受波特率限制，实体串口会堵塞。")
             if p.checksum_disabled:
                 lines.append("校验字段未启用：与固件一致，CRC 位置填随机字节，上位机不比对；“坏校验”改为破坏帧尾或固定值。")
+            if not p.error:
+                can_bad, can_truncate = p.fault_support()
+                if not can_bad or not can_truncate:
+                    missing = "、".join(name for name, ok in (("坏校验", can_bad), ("截断帧", can_truncate)) if not ok)
+                    lines.append(f"该协议缺少能发现这种损坏的校验、帧尾或固定值锚点，解析器无法拒绝，{missing}不可用（不注入）。")
             if p.path is not None and p.origin != "内置":
                 lines.append(f"来源：{p.path}")
             if not p.error:
@@ -1366,7 +1447,7 @@ def run_gui(protocols: list[Protocol], load_errors: list[str]):
                 text += f" · 实际 {rate:.1f} 帧/秒"
             text += f" · 收到 {stats.rx_bytes:,} B"
             if stats.write_timeouts:
-                text += f" · 写超时 {stats.write_timeouts}"
+                text += f" · 写超时 {stats.write_timeouts}（未发出 {stats.unsent} 帧）"
             if stats.skipped:
                 text += f" · 跳过 {stats.skipped}"
             return text
@@ -1417,6 +1498,9 @@ def run_headless(args, protocol: Protocol):
     engine = SimulatorEngine(args.port, args.baud, protocol, settings,
                              random.Random(args.seed) if args.seed is not None else None)
     print(f"{args.port} @ {args.baud}：{protocol.name}，{protocol.describe()}")
+    can_bad, can_truncate = protocol.fault_support()
+    if (args.bad and not can_bad) or (args.truncate and not can_truncate):
+        print("注意：该协议缺少能发现损坏的校验、帧尾或固定值锚点，无法识别的故障不注入。")
     engine.start()
     engine.request("start")
     deadline = time.monotonic() + args.seconds if args.seconds > 0 else None
@@ -1440,7 +1524,7 @@ def run_headless(args, protocol: Protocol):
         engine.close()
     s = engine.stats
     print(f"结束：正常 {s.good} 帧，坏校验 {s.bad}，截断 {s.truncated}，噪声 {s.noise}，"
-          f"共 {s.bytes_sent} B，收到 {s.rx_bytes} B，写超时 {s.write_timeouts}")
+          f"共 {s.bytes_sent} B，收到 {s.rx_bytes} B，写超时 {s.write_timeouts}，未发出 {s.unsent} 帧")
 
 
 def main(argv=None):
