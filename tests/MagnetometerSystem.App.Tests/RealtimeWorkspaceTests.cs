@@ -434,6 +434,14 @@ public class RealtimeWorkspaceTests
             window.UpdateLayout(); await WpfTestHost.PumpAsync();
             Assert.DoesNotContain("System.Windows.Data Error", errors.ToString());
 
+            // 链路条“异常 N”：即使之前切到“数据块”，也打开原始报文的解析记录。
+            connection.ShowRawBlocks = true;
+            main.WorkspaceLayout.DockTab = WorkspaceLayoutViewModel.DockTraffic;
+            main.ShowRawFramesCommand.Execute(null);
+            Assert.Equal(AppPage.Workspace, main.CurrentPage);
+            Assert.Equal(WorkspaceLayoutViewModel.DockRawFrames, main.WorkspaceLayout.DockTab);
+            Assert.False(connection.ShowRawBlocks);
+
             connection.ClearRawDataCommand.Execute(null);
             Assert.Empty(connection.ParseRecords);
         }

@@ -500,6 +500,8 @@ public partial class MainViewModel : ObservableObject
     {
         CurrentPage = AppPage.Workspace;
         WorkspaceLayout.ShowDock(WorkspaceLayoutViewModel.DockRawFrames);
+        // 异常原因在“解析记录”里；之前切到“数据块”时也切回来。
+        ConnectionVM.ShowRawBlocks = false;
     }
 
     [RelayCommand]
