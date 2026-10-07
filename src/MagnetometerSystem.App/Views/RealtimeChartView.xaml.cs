@@ -61,6 +61,8 @@ public partial class RealtimeChartView : UserControl
         _subscribedComputed.Clear();
         if (ReferenceEquals(vm.PlotControl, WpfPlot1))
         { vm.PlotControl = null; vm.MultiPlotControls.Clear(); }
+        // 卸载后这些图不再显示：丢掉叠加层记录，旧图及其数据不再被视图模型留住。
+        vm.ForgetDetachedPlots();
         _boundViewModel = null;
     }
 
@@ -139,6 +141,7 @@ public partial class RealtimeChartView : UserControl
 
         MultiPlotPanel.Children.Clear();
         vm.MultiPlotControls.Clear();
+        vm.ForgetDetachedPlots();
 
         if (!vm.IsMultiPlotMode) { vm.RefreshPlot(); return; }
 

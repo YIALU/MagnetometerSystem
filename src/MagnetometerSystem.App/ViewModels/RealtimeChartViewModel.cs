@@ -1207,7 +1207,35 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
     {
         if (_hoverTime == seconds) return;
         _hoverTime = seconds;
-        RefreshOverlays();
+        RequestOverlayRefresh();
+    }
+
+    private bool _overlayRefreshPending;
+
+    /// <summary>
+    /// 鼠标移动（悬停、拖动预览）的事件远多于绘图刷新：合并为一次叠加层重绘，在界面处理完输入后执行；
+    /// 多图模式下不会每次移动都重绘全部图表。
+    /// </summary>
+    private void RequestOverlayRefresh()
+    {
+        if (_overlayRefreshPending) return;
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher == null) { RefreshOverlays(); return; }
+        _overlayRefreshPending = true;
+        dispatcher.BeginInvoke(() => { _overlayRefreshPending = false; RefreshOverlays(); }, DispatcherPriority.Background);
+    }
+
+    /// <summary>叠加层实际重绘次数（诊断与测试用）。</summary>
+    internal int OverlayRefreshCount { get; private set; }
+
+    /// <summary>仍保留叠加层记录的图数量（诊断与测试用）。</summary>
+    internal int OverlayPlotCount => _overlays.Count;
+
+    /// <summary>视图卸载或重建多图后调用：丢掉不再显示的图的叠加层记录，避免旧 ScottPlot 对象及其数据被留住。</summary>
+    public void ForgetDetachedPlots()
+    {
+        var live = MultiPlotControls.Select(c => c.Plot).Append(PlotControl?.Plot).ToHashSet();
+        foreach (var stale in _overlays.Keys.Where(p => !live.Contains(p)).ToArray()) _overlays.Remove(stale);
     }
 
     public void BeginPlotSelection(double seconds)
@@ -1220,7 +1248,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
     {
         if (_dragStart is null) return;
         _dragEnd = seconds;
-        RefreshOverlays();
+        RequestOverlayRefresh();
     }
 
     public void CancelPlotSelection()
@@ -1315,9 +1343,9 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
     /// <summary>只替换叠加层并重绘，不重新取数。</summary>
     private void RefreshOverlays()
     {
+        OverlayRefreshCount++;
         // 多图重建后旧图已不在界面上，先丢掉它们的记录。
-        var live = MultiPlotControls.Select(c => c.Plot).Append(PlotControl?.Plot).ToHashSet();
-        foreach (var stale in _overlays.Keys.Where(p => !live.Contains(p)).ToArray()) _overlays.Remove(stale);
+        ForgetDetachedPlots();
         foreach (var (plot, (channel, items)) in _overlays.ToArray())
         {
             foreach (var item in items) plot.Remove(item);

@@ -89,6 +89,7 @@ public class RealtimeWorkspaceTests
 
         vm.BeginPlotSelection(10.2);
         vm.UpdatePlotSelection(20.4);
+        await WpfTestHost.PumpAsync(); // 拖动预览合并到界面空闲时重绘
         Assert.Single(Spans()); // 拖动中的预览
         Assert.True(vm.EndPlotSelection(20.4));
         Assert.Equal(10.2, vm.CurrentInterval!.StartTime, 9);
@@ -104,18 +105,55 @@ public class RealtimeWorkspaceTests
         Assert.Equal(60, vm.CurrentInterval!.EndTime, 9);
         vm.BeginPlotSelection(70); Assert.False(vm.EndPlotSelection(80));
 
+        // 连续鼠标移动只触发一次叠加层重绘，显示最后的位置。
+        var refreshes = vm.OverlayRefreshCount;
+        for (int i = 0; i < 50; i++) vm.SetHoverTime(5 + i * 0.5);
         vm.SetHoverTime(30.4);
+        Assert.Equal(refreshes, vm.OverlayRefreshCount);
+        await WpfTestHost.PumpAsync();
+        Assert.Equal(refreshes + 1, vm.OverlayRefreshCount);
         var readout = Assert.Single(vm.PlotControl.Plot.GetPlottables().OfType<ScottPlot.Plottables.Annotation>());
         Assert.StartsWith("30.000 s", readout.Text);
         Assert.Contains("CH0  30 nT", readout.Text);
         Assert.Contains("温度  26.03 °C", readout.Text);
         vm.SetHoverTime(null);
+        await WpfTestHost.PumpAsync();
         Assert.Empty(vm.PlotControl.Plot.GetPlottables().OfType<ScottPlot.Plottables.Annotation>());
 
         vm.ClearIntervalSelectionCommand.Execute(null);
         Assert.Empty(Spans());
         bus.PublishAcquisitionStopped();
         await WpfTestHost.PumpAsync();
+    });
+
+    [Fact]
+    public Task UnloadingChartViewForgetsOverlayPlots() => WpfTestHost.RunAsync(async () =>
+    {
+        var bus = new DataBus();
+        using var vm = new RealtimeChartViewModel(bus);
+        var view = new RealtimeChartView { DataContext = vm };
+        var window = new Window { Content = view, Width = 800, Height = 500, Left = -10000, Top = -10000, ShowActivated = false, ShowInTaskbar = false };
+        try
+        {
+            window.Show(); await WpfTestHost.PumpAsync();
+            bus.PublishAcquisitionStarted(Configuration()); await WpfTestHost.PumpAsync();
+            var start = new DateTime(2020, 1, 1);
+            for (int i = 0; i < 20; i++) Publish(bus, start, i, i);
+            vm.RefreshPlot();
+            vm.SetHoverTime(5);
+            await WpfTestHost.PumpAsync();
+            Assert.Equal(1, vm.OverlayPlotCount);
+
+            // 切页卸载视图后，视图模型不再留住旧图（及其曲线数据）。
+            window.Content = null; await WpfTestHost.PumpAsync();
+            Assert.Null(vm.PlotControl);
+            Assert.Equal(0, vm.OverlayPlotCount);
+        }
+        finally
+        {
+            window.Close();
+            bus.PublishAcquisitionStopped(); await WpfTestHost.PumpAsync();
+        }
     });
 
     [Fact]
