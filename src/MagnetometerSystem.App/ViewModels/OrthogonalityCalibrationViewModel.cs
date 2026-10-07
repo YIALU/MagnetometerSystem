@@ -1359,29 +1359,39 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         if (dlg.ShowDialog() != true) return;
         try
         {
-            var p = SelectedSavedProfile;
-            var sb = new System.Text.StringBuilder();
-            sb.AppendLine("name,sensor_serial,created_at,unit,sample_count,residual_mean,residual_std," +
-                          "offset_x,offset_y,offset_z," +
-                          "m00,m01,m02,m10,m11,m12,m20,m21,m22");
-            string D(double v) => v.ToString("R", CultureInfo.InvariantCulture);
-            string DN(double? v) => v.HasValue ? D(v.Value) : "";
-            sb.Append($"\"{p.Name}\",\"{p.SensorSerial}\",{p.CreatedAt:yyyy-MM-dd HH:mm:ss},");
-            sb.Append($"{OrthogonalityParams.CanonicalUnit(p.Unit)},{p.SampleCount},{DN(p.ResidualMean)},{DN(p.ResidualStd)},");
-            sb.Append($"{D(p.Offset[0])},{D(p.Offset[1])},{D(p.Offset[2])},");
-            for (int i = 0; i < 9; i++)
-            {
-                sb.Append(D(p.CompensationMatrix[i]));
-                if (i < 8) sb.Append(',');
-            }
-            sb.AppendLine();
-            await File.WriteAllTextAsync(dlg.FileName, sb.ToString(), new System.Text.UTF8Encoding(true));
+            var csv = BuildProfileCsv(SelectedSavedProfile);
+            await File.WriteAllTextAsync(dlg.FileName, csv, new System.Text.UTF8Encoding(true));
             System.Windows.MessageBox.Show($"已导出: {dlg.FileName}", "成功");
         }
         catch (Exception ex)
         {
             System.Windows.MessageBox.Show($"导出失败: {ex.Message}", "错误");
         }
+    }
+
+    /// <summary>
+    /// 单个正交度配置的 CSV：名称与序列号按 RFC 4180 加引号（内部引号加倍，逗号与换行留在引号内），
+    /// 数值用不变区域性的往返格式。
+    /// </summary>
+    internal static string BuildProfileCsv(OrthogonalityParams p)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("name,sensor_serial,created_at,unit,sample_count,residual_mean,residual_std," +
+                      "offset_x,offset_y,offset_z," +
+                      "m00,m01,m02,m10,m11,m12,m20,m21,m22");
+        static string Text(string? s) => "\"" + (s ?? "").Replace("\"", "\"\"") + "\"";
+        static string D(double v) => v.ToString("R", CultureInfo.InvariantCulture);
+        static string DN(double? v) => v.HasValue ? D(v.Value) : "";
+        sb.Append($"{Text(p.Name)},{Text(p.SensorSerial)},{p.CreatedAt:yyyy-MM-dd HH:mm:ss},");
+        sb.Append($"{OrthogonalityParams.CanonicalUnit(p.Unit)},{p.SampleCount},{DN(p.ResidualMean)},{DN(p.ResidualStd)},");
+        sb.Append($"{D(p.Offset[0])},{D(p.Offset[1])},{D(p.Offset[2])},");
+        for (int i = 0; i < 9; i++)
+        {
+            sb.Append(D(p.CompensationMatrix[i]));
+            if (i < 8) sb.Append(',');
+        }
+        sb.AppendLine();
+        return sb.ToString();
     }
 
     private static string SanitizeFileName(string name)

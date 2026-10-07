@@ -161,6 +161,55 @@ public class OrthogonalityFittingLayoutTests
         });
 
     [Fact]
+    public void ProfileCsvQuotesNamesAndSerialsPerRfc4180()
+    {
+        var profile = new OrthogonalityParams
+        {
+            Name = "探头 \"A\", 第 2 组", SensorSerial = "SN-1\n备用", Unit = "nT", SampleCount = 48,
+            Offset = [1.5, -2, 3], CompensationMatrix = [1, 0, 0, 0, 1, 0, 0, 0, 1],
+        };
+        var csv = OrthogonalityCalibrationViewModel.BuildProfileCsv(profile);
+        var rows = ParseCsv(csv);
+        Assert.Equal(2, rows.Count);
+        Assert.Equal(19, rows[0].Count);
+        Assert.Equal(19, rows[1].Count); // 引号、逗号与换行都留在字段内，后续数值不错位
+        Assert.Equal(profile.Name, rows[1][0]);
+        Assert.Equal(profile.SensorSerial, rows[1][1]);
+        Assert.Equal("1.5", rows[1][7]);
+        Assert.Equal("1", rows[1][18]);
+    }
+
+    /// <summary>按 RFC 4180 读取 CSV（引号内的逗号、换行与加倍引号）。</summary>
+    private static List<List<string>> ParseCsv(string text)
+    {
+        var rows = new List<List<string>>();
+        var row = new List<string>();
+        var field = new System.Text.StringBuilder();
+        bool quoted = false;
+        for (int i = 0; i < text.Length; i++)
+        {
+            char c = text[i];
+            if (quoted)
+            {
+                if (c == '"' && i + 1 < text.Length && text[i + 1] == '"') { field.Append('"'); i++; }
+                else if (c == '"') quoted = false;
+                else field.Append(c);
+            }
+            else if (c == '"') quoted = true;
+            else if (c == ',') { row.Add(field.ToString()); field.Clear(); }
+            else if (c == '\n' || c == '\r')
+            {
+                if (c == '\r' && i + 1 < text.Length && text[i + 1] == '\n') i++;
+                row.Add(field.ToString()); field.Clear();
+                rows.Add(row); row = new List<string>();
+            }
+            else field.Append(c);
+        }
+        if (field.Length > 0 || row.Count > 0) { row.Add(field.ToString()); rows.Add(row); }
+        return rows;
+    }
+
+    [Fact]
     public Task ReferenceUnitTextFollowsTheFittingUnit() =>
         WpfTestHost.RunAsync(async () =>
         {
