@@ -38,7 +38,8 @@ public sealed class AnalysisResultRow
 public partial class AnalysisViewModel : ObservableObject
 {
     /// <summary>按时间分块读取，块之间可取消；避免长会话一次性占满内存。</summary>
-    private static readonly TimeSpan LoadChunk = TimeSpan.FromMinutes(30);
+    /// <summary>每次从数据库读取的行数上限：高采样率会话也只按固定行数分页读取，读取过程中即可执行数值上限。</summary>
+    internal int ReadPageSize { get; set; } = 20_000;
 
     /// <summary>
     /// 一次分析在内存中保留的数值上限（时间戳 + 所选通道值）。分析需要所选时间段的全部原始点，
@@ -219,7 +220,7 @@ public partial class AnalysisViewModel : ObservableObject
     }
 
     /// <summary>
-    /// 分块读取并只保留所选通道的原始值；按读数 ID 去除块边界的重复行。
+    /// 按固定行数分页读取并只保留所选通道的原始值（键集分页，每条只读一次）。
     /// 点数超过 <paramref name="maxPoints"/> 时立即停止读取，返回的时间点数会大于上限，由调用方提示。
     /// </summary>
     private async Task<(List<DateTime> Times, double[][] Columns)> LoadAsync(
@@ -227,27 +228,23 @@ public partial class AnalysisViewModel : ObservableObject
     {
         var times = new List<DateTime>();
         var columns = indices.Select(_ => new List<double>()).ToArray();
-        var seen = new HashSet<long>();
-        for (var chunkStart = from; chunkStart < to; chunkStart += LoadChunk)
+        ReadingPageCursor? cursor = null;
+        do
         {
             token.ThrowIfCancellationRequested();
-            var chunkEnd = chunkStart + LoadChunk < to ? chunkStart + LoadChunk : to;
-            Report($"正在读取 {chunkStart:HH:mm:ss} — {chunkEnd:HH:mm:ss}，已读 {times.Count:N0} 条…", false);
-            var readings = await _storage.GetReadingsAsync(sessionId, chunkStart, chunkEnd);
-            var lastChunk = new HashSet<long>();
-            foreach (var r in readings)
+            Report($"正在读取，已读 {times.Count:N0} 条…", false);
+            var page = await _storage.GetReadingsPageAsync(sessionId, from, to, cursor, ReadPageSize);
+            foreach (var r in page.Readings)
             {
-                if (r.Id != 0 && !seen.Add(r.Id)) continue;
-                lastChunk.Add(r.Id);
                 var raw = r.OriginalChannelValues ?? r.ChannelValues;
                 times.Add(r.Timestamp);
                 for (int k = 0; k < indices.Length; k++)
                     columns[k].Add(indices[k] < raw.Length ? raw[indices[k]] : double.NaN);
             }
-            // 只需记住最近一块的 ID 即可去除边界重复，避免长会话的集合无限增长。
-            seen = lastChunk;
             if (times.Count > maxPoints) return (times, []);
+            cursor = page.Next;
         }
+        while (cursor != null);
         return (times, columns.Select(c => c.ToArray()).ToArray());
     }
 

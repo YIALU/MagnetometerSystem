@@ -83,6 +83,7 @@ public class AnalysisViewModelTests
     {
         using var f = await Fixture.CreateAsync();
         var vm = await ReadyAsync(f.Storage);
+        vm.ReadPageSize = 700; // 多页读取，覆盖分页边界
 
         await vm.RunCommand.ExecuteAsync(null);
 
@@ -152,15 +153,20 @@ public class AnalysisViewModelTests
     public Task Run_RefusesRangesBeyondTheMemoryBudgetAndSharesTimeAxis() => WpfTestHost.RunAsync(async () =>
     {
         using var f = await Fixture.CreateAsync();
-        var vm = await ReadyAsync(f.Storage);
+        var counting = new GatedStorage(f.Storage);
+        counting.Release.TrySetResult();
+        var vm = await ReadyAsync(counting);
         // 2 个通道 + 时间戳 = 每个时间点 3 个值；上限 3000 个值即 1000 个时间点。
         vm.MaxAnalysisValues = 3000;
+        vm.ReadPageSize = 500;
 
         await vm.RunCommand.ExecuteAsync(null);
         Assert.True(vm.IsError);
         Assert.Contains("超过 1,000 个时间点", vm.StatusMessage);
         Assert.Empty(vm.Results);
         Assert.False(vm.IsBusy);
+        // 读取过程中就执行上限：超过 1000 点的第 3 页之后不再读取（全部约 3800 点需 8 页）。
+        Assert.Equal(3, counting.ChunkCalls);
 
         vm.RangeStartText = "100"; vm.RangeEndText = "200";
         await vm.RunCommand.ExecuteAsync(null);
@@ -202,6 +208,7 @@ public class AnalysisViewModelTests
         using var f = await Fixture.CreateAsync();
         var gated = new GatedStorage(f.Storage);
         var vm = await ReadyAsync(gated);
+        vm.ReadPageSize = 500; // 多页：取消后不应再读后续页
 
         var run = vm.RunCommand.ExecuteAsync(null);
         await gated.FirstChunkRequested.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -241,22 +248,25 @@ public class AnalysisViewModelTests
         return fields;
     }
 
-    /// <summary>真实存储外包一层：第一次按时间段读取时暂停，直到测试放行。</summary>
+    /// <summary>真实存储外包一层：第一次分页读取时暂停，直到测试放行。</summary>
     private sealed class GatedStorage(IDataStorageService inner) : IDataStorageService
     {
         public TaskCompletionSource FirstChunkRequested { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public int ChunkCalls { get; private set; }
 
-        public async Task<IReadOnlyList<MagnetometerReading>> GetReadingsAsync(string sessionId, DateTime? startTime = null, DateTime? endTime = null)
+        public async Task<ReadingPage> GetReadingsPageAsync(string sessionId, DateTime startTime, DateTime endTime, ReadingPageCursor? after, int limit)
         {
-            if (startTime != null && ++ChunkCalls == 1)
+            if (++ChunkCalls == 1)
             {
                 FirstChunkRequested.TrySetResult();
                 await Release.Task;
             }
-            return await inner.GetReadingsAsync(sessionId, startTime, endTime);
+            return await inner.GetReadingsPageAsync(sessionId, startTime, endTime, after, limit);
         }
+
+        public Task<IReadOnlyList<MagnetometerReading>> GetReadingsAsync(string sessionId, DateTime? startTime = null, DateTime? endTime = null) =>
+            inner.GetReadingsAsync(sessionId, startTime, endTime);
 
         public StorageWriteStatus WriteStatus => inner.WriteStatus;
         public event Action<StorageWriteStatus>? WriteStatusChanged { add => inner.WriteStatusChanged += value; remove => inner.WriteStatusChanged -= value; }

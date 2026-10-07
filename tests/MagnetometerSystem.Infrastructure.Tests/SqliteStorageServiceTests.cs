@@ -65,6 +65,40 @@ public class SqliteStorageServiceTests : IAsyncLifetime
     };
 
     [Fact]
+    public async Task GetReadingsPageAsync_ReturnsEveryRowInRangeOnceWithinTheLimit()
+    {
+        var sessionId = await _service.StartSessionAsync("paging", CreateDefaultConfig(), CreateDefaultConnectionConfig());
+        var t0 = new DateTime(2026, 10, 7, 8, 0, 0, DateTimeKind.Local);
+        // 0..39 秒，每秒 3 条（同一时间戳的多行跨页时也不能重复或遗漏）。
+        var readings = Enumerable.Range(0, 120).Select(i => CreateReading(sessionId, t0.AddSeconds(i / 3), [i, 0, 0])).ToList();
+        await _service.SaveReadingsAsync(readings);
+        await _service.WaitForPendingWritesAsync();
+
+        var from = t0.AddSeconds(5);
+        var to = t0.AddSeconds(30);
+        var seen = new List<double>();
+        ReadingPageCursor? cursor = null;
+        int pages = 0;
+        do
+        {
+            var page = await _service.GetReadingsPageAsync(sessionId, from, to, cursor, 7);
+            Assert.True(page.Readings.Count <= 7);
+            seen.AddRange(page.Readings.Select(r => r.ChannelValues[0]));
+            cursor = page.Next;
+            pages++;
+        }
+        while (cursor != null && pages < 100);
+
+        var expected = Enumerable.Range(0, 120).Where(i => i / 3 >= 5 && i / 3 <= 30).Select(i => (double)i).ToArray();
+        Assert.Equal(expected, seen.Order().ToArray());
+        Assert.Equal(seen.Count, seen.Distinct().Count());
+        Assert.True(pages > 1);
+        var empty = await _service.GetReadingsPageAsync(sessionId, t0.AddSeconds(100), t0.AddSeconds(200), null, 7);
+        Assert.Empty(empty.Readings);
+        Assert.Null(empty.Next);
+    }
+
+    [Fact]
     public async Task StartSessionAsync_CreatesSession_ReturnsId()
     {
         // Act

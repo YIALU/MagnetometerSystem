@@ -35,6 +35,14 @@ public interface IDataStorageService
     Task<IReadOnlyList<MagnetometerReading>> GetReadingsAsync(
         string sessionId, DateTime? startTime = null, DateTime? endTime = null);
 
+    /// <summary>
+    /// 有界分页读取 [startTime, endTime] 内的读数：每次至多 <paramref name="limit"/> 条，从 <paramref name="after"/> 之后继续。
+    /// 按存储键（时间戳、ID）顺序返回，每条只出现一次；没有更多数据时 <see cref="ReadingPage.Next"/> 为 null。
+    /// 用于长会话读取时控制内存；需要严格的时间顺序时由调用方排序。
+    /// </summary>
+    Task<ReadingPage> GetReadingsPageAsync(
+        string sessionId, DateTime startTime, DateTime endTime, ReadingPageCursor? after, int limit);
+
     /// <summary>删除会话及其数据</summary>
     Task DeleteSessionAsync(string sessionId);
 
@@ -83,3 +91,9 @@ public class SessionInfo
 }
 
 public sealed record StorageWriteStatus(long SavedReadings, long PendingReadings, string? LastError);
+
+/// <summary>分页读取的续读位置：上一页最后一条的存储时间戳与 ID。</summary>
+public sealed record ReadingPageCursor(string Timestamp, long Id);
+
+/// <summary>一页读数及续读位置；<see cref="Next"/> 为 null 表示已读完。</summary>
+public sealed record ReadingPage(IReadOnlyList<MagnetometerReading> Readings, ReadingPageCursor? Next);

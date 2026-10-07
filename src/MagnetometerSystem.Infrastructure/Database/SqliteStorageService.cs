@@ -288,6 +288,50 @@ public class SqliteStorageService : IDataStorageService, IDisposable
     }
 
     /// <inheritdoc />
+    public async Task<ReadingPage> GetReadingsPageAsync(
+        string sessionId, DateTime startTime, DateTime endTime, ReadingPageCursor? after, int limit)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(limit);
+        using var conn = new SqliteConnection(_dbInit.ConnectionString);
+        await conn.OpenAsync();
+
+        var sensorTypeName = await conn.ExecuteScalarAsync<string?>(
+            "SELECT sensor_type FROM sessions WHERE id = @Id", new { Id = sessionId });
+        if (sensorTypeName == null) return new ReadingPage([], null);
+        var legacyTable = await conn.ExecuteScalarAsync<string?>(
+            "SELECT legacy_data_table FROM sessions WHERE id = @Id", new { Id = sessionId });
+        if (legacyTable != null)
+            throw new NotSupportedException($"旧版原始数据保留在 {legacyTable}，需迁移后读取。");
+        var channelNames = await GetChannelNamesAsync(conn, sessionId);
+        Enum.TryParse<SensorType>(sensorTypeName, out var sensorType);
+
+        // 键集分页：沿 (session_id, timestamp) 索引及隐含的 id 前进，每页只取 limit 行，不重复、不遗漏。
+        var sql = "SELECT id, session_id, timestamp, data FROM readings WHERE session_id = @SessionId"
+            + " AND julianday(timestamp) >= julianday(@StartTime) AND julianday(timestamp) <= julianday(@EndTime)";
+        var parameters = new DynamicParameters();
+        parameters.Add("SessionId", sessionId);
+        parameters.Add("StartTime", startTime.ToUniversalTime().ToString("O"));
+        parameters.Add("EndTime", endTime.ToUniversalTime().ToString("O"));
+        if (after != null)
+        {
+            sql += " AND (timestamp, id) > (@AfterTimestamp, @AfterId)";
+            parameters.Add("AfterTimestamp", after.Timestamp);
+            parameters.Add("AfterId", after.Id);
+        }
+        sql += " ORDER BY timestamp, id LIMIT @Limit";
+        parameters.Add("Limit", limit);
+
+        var readings = new List<MagnetometerReading>();
+        ReadingPageCursor? last = null;
+        foreach (var row in await conn.QueryAsync(sql, parameters))
+        {
+            readings.Add(MapRowToReading(row, channelNames, sensorType));
+            last = new ReadingPageCursor((string)row.timestamp, (long)row.id);
+        }
+        return new ReadingPage(readings, readings.Count == limit ? last : null);
+    }
+
+    /// <inheritdoc />
     public async Task DeleteSessionAsync(string sessionId)
     {
         using var conn = new SqliteConnection(_dbInit.ConnectionString);
