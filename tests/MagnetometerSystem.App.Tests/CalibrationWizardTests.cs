@@ -192,6 +192,11 @@ public class CalibrationWizardTests
         vm.StopCollectingCommand.Execute(null);
         Assert.False(f.Bus.ManualOrthoState.IsActive);
         Assert.Equal(3, vm.CollectedSampleCount);
+        // 退订前已在进行的读数回调在停止之后才执行：不能把链路条状态改回“采集中”。
+        typeof(OrthogonalityCalibrationViewModel)
+            .GetMethod("OnCalibrationDataReceived", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .Invoke(vm, [Reading([1, 2, 3, 4, 5, 6])]);
+        Assert.False(f.Bus.ManualOrthoState.IsActive);
         // 停止后链路条的请求不再记录。
         f.Bus.RaiseManualOrthoRecord();
         Assert.Equal(3, vm.CollectedSampleCount);

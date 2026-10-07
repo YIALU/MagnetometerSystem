@@ -432,7 +432,8 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
 
         if (SelectedMode == CalibrationCollectionMode.Manual48)
         {
-            _dataBus.ManualOrthoState.Update(true, 0, _rawFilePath, "等待数据缓冲...", false);
+            lock (_sampleLock) _manualPublishing = true;
+            PublishManualState(0, "等待数据缓冲...", false);
         }
 
         _dataBus.ReadingReceived += OnCalibrationDataReceived;
@@ -477,9 +478,9 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         {
             // 手动模式：仅保持队列，不入 _collectedData；更新缓冲就绪状态
             bool enough = buffered >= RecentBufferSize;
-            _dataBus.ManualOrthoState.Update(true, _collectedData.Count, _rawFilePath,
+            PublishManualState(_collectedData.Count,
                 enough ? "缓冲就绪，可以记录" : $"缓冲中 ({buffered}/{RecentBufferSize})",
-                enough);
+                enough, generation);
             return;
         }
 
@@ -587,7 +588,12 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         CollectionStatus = $"采集完成，共 {CollectedSampleCount} 个样本";
 
         CloseRawCsv();
-        _dataBus.ManualOrthoState.Update(false, 0, null, "", false);
+        // 退订不会取消已在进行的读数回调：与回调用同一把锁结束发布，回调不会在此之后把状态改回“采集中”。
+        lock (_sampleLock)
+        {
+            _manualPublishing = false;
+            _dataBus.ManualOrthoState.Update(false, 0, null, "", false);
+        }
 
         UpdateCoverageEstimate();
         RunDataValidation();
@@ -708,9 +714,27 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
     private void UpdateManualState(int? buffered)
     {
         int bufferCount = buffered ?? RecentBufferedCount();
-        _dataBus.ManualOrthoState.Update(true, CollectedSampleCount, _rawFilePath,
+        PublishManualState(CollectedSampleCount,
             CollectedSampleCount >= ManualPointTarget ? $"已达 {ManualPointTarget} 点，可以结束采集" : $"已记录 {CollectedSampleCount} 点",
             bufferCount >= RecentBufferSize);
+    }
+
+    /// <summary>手动采集进行中才发布的标志；与 <see cref="StopCollecting"/> 共用 _sampleLock。</summary>
+    private bool _manualPublishing;
+
+    /// <summary>
+    /// 只在手动采集进行中（且仍是同一批数据）发布“采集中”状态。检查与发布在同一把锁内，
+    /// 停止采集之后，在途的读数回调或撤销 / 清空操作都不能把链路条状态改回采集中。
+    /// 订阅者只有界面绑定，跨线程通知由绑定异步转到界面线程，不会在锁内等待界面。
+    /// </summary>
+    private void PublishManualState(int points, string status, bool enoughBuffer, long? generation = null)
+    {
+        lock (_sampleLock)
+        {
+            if (!_manualPublishing) return;
+            if (generation is { } g && g != Interlocked.Read(ref _collectedGeneration)) return;
+            _dataBus.ManualOrthoState.Update(true, points, _rawFilePath, status, enoughBuffer);
+        }
     }
 
     private int RecentBufferedCount()
@@ -1281,7 +1305,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         _dataBus.ManualOrthoRecordRequested -= OnManualOrthoRecordRequested;
         _dataBus.ConnectionChanged -= OnConnectionChanged;
         CloseRawCsv();
-        _dataBus.ManualOrthoState.Update(false, 0, null, "", false);
+        lock (_sampleLock) { _manualPublishing = false; _dataBus.ManualOrthoState.Update(false, 0, null, "", false); }
         lock (_sampleLock)
         {
             _collectedData.Clear();
