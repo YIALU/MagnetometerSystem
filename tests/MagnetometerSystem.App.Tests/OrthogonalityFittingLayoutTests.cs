@@ -160,6 +160,96 @@ public class OrthogonalityFittingLayoutTests
             }
         });
 
+    [Fact]
+    public void ProfileCsvQuotesNamesAndSerialsPerRfc4180()
+    {
+        var profile = new OrthogonalityParams
+        {
+            Name = "探头 \"A\", 第 2 组", SensorSerial = "SN-1\n备用", Unit = "nT", SampleCount = 48,
+            Offset = [1.5, -2, 3], CompensationMatrix = [1, 0, 0, 0, 1, 0, 0, 0, 1],
+        };
+        var csv = OrthogonalityCalibrationViewModel.BuildProfileCsv(profile);
+        var rows = ParseCsv(csv);
+        Assert.Equal(2, rows.Count);
+        Assert.Equal(19, rows[0].Count);
+        Assert.Equal(19, rows[1].Count); // 引号、逗号与换行都留在字段内，后续数值不错位
+        Assert.Equal(profile.Name, rows[1][0]);
+        Assert.Equal(profile.SensorSerial, rows[1][1]);
+        Assert.Equal("1.5", rows[1][7]);
+        Assert.Equal("1", rows[1][18]);
+    }
+
+    /// <summary>按 RFC 4180 读取 CSV（引号内的逗号、换行与加倍引号）。</summary>
+    private static List<List<string>> ParseCsv(string text)
+    {
+        var rows = new List<List<string>>();
+        var row = new List<string>();
+        var field = new System.Text.StringBuilder();
+        bool quoted = false;
+        for (int i = 0; i < text.Length; i++)
+        {
+            char c = text[i];
+            if (quoted)
+            {
+                if (c == '"' && i + 1 < text.Length && text[i + 1] == '"') { field.Append('"'); i++; }
+                else if (c == '"') quoted = false;
+                else field.Append(c);
+            }
+            else if (c == '"') quoted = true;
+            else if (c == ',') { row.Add(field.ToString()); field.Clear(); }
+            else if (c == '\n' || c == '\r')
+            {
+                if (c == '\r' && i + 1 < text.Length && text[i + 1] == '\n') i++;
+                row.Add(field.ToString()); field.Clear();
+                rows.Add(row); row = new List<string>();
+            }
+            else field.Append(c);
+        }
+        if (field.Length > 0 || row.Count > 0) { row.Add(field.ToString()); rows.Add(row); }
+        return rows;
+    }
+
+    [Fact]
+    public Task ReferenceUnitTextFollowsTheFittingUnit() =>
+        WpfTestHost.RunAsync(async () =>
+        {
+            using var fixture = await Fixture.CreateAsync();
+            var vm = fixture.CreateVm(3);
+            Assert.Equal("单位待定", vm.ReferenceUnitText);
+            var changed = new List<string?>();
+            vm.PropertyChanged += (_, e) => changed.Add(e.PropertyName);
+            // 参考场强标题与输入框后缀都显示拟合数据单位，避免按 nT 输入 uT 数据。
+            vm.FittingUnit = "uT";
+            Assert.Equal("uT", vm.ReferenceUnitText);
+            Assert.Contains(nameof(vm.ReferenceUnitText), changed);
+        });
+
+    [Fact]
+    public Task HistoricalImportFitsOriginalValuesOfCorrectedReadings() =>
+        WpfTestHost.RunAsync(async () =>
+        {
+            using var fixture = await Fixture.CreateAsync();
+            var vm = fixture.CreateVm(3);
+            string id = await fixture.Storage.StartSessionAsync("corrected input", new SensorConfig
+            {
+                Type = SensorType.Generic, ChannelCountOverride = 3,
+                ChannelNamesOverride = ["X", "Y", "Z"], ChannelUnitsOverride = ["nT", "nT", "nT"],
+            }, new ConnectionConfig());
+            await fixture.Storage.SaveReadingsAsync([new MagnetometerReading
+            {
+                SessionId = id, Timestamp = DateTime.UtcNow, ChannelValues = [11, 12, 13],
+                OriginalChannelValues = [1, 2, 3], IsOrthogonalityCorrected = true,
+            }]);
+            await fixture.Storage.EndSessionAsync(id);
+            var stored = Assert.Single(await fixture.Storage.GetReadingsAsync(id));
+            Assert.Equal(new double[] { 1, 2, 3 }, stored.OriginalChannelValues);
+
+            await ImportSessionAsync(vm, Assert.Single((await fixture.Storage.GetSessionsAsync()).Where(s => s.Id == id)));
+
+            // 已校正读数用原始值拟合，不在上一次校正的结果上再拟合。
+            Assert.Equal(new double[] { 1, 2, 3 }, Assert.Single(vm.CollectedData));
+        });
+
     private static List<double[]> SecondGroup(OrthogonalityCalibrationViewModel vm) =>
         (List<double[]>)typeof(OrthogonalityCalibrationViewModel)
             .GetField("_collectedDataSecondGroup", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(vm)!;

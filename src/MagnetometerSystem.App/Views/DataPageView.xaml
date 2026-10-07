@@ -1,0 +1,371 @@
+<UserControl x:Class="MagnetometerSystem.App.Views.DataPageView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:views="clr-namespace:MagnetometerSystem.App.Views"
+             xmlns:vm="clr-namespace:MagnetometerSystem.App.ViewModels"
+             xmlns:storage="clr-namespace:MagnetometerSystem.Core.Storage;assembly=MagnetometerSystem.Core"
+             xmlns:core="clr-namespace:MagnetometerSystem.Core.Models;assembly=MagnetometerSystem.Core"
+             Background="{DynamicResource EnclosureBrush}">
+    <!-- 数据页。DataContext = DataPageViewModel。列表模式与回放模式二选一。 -->
+    <UserControl.Resources>
+        <Style x:Key="InfoLabel" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource MutedBrush}"/>
+            <Setter Property="Margin" Value="0,0,16,8"/>
+        </Style>
+        <Style x:Key="InfoValue" TargetType="TextBlock">
+            <Setter Property="Margin" Value="0,0,0,8"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+        </Style>
+    </UserControl.Resources>
+
+    <Grid Margin="12">
+        <!-- ===================== 列表模式 ===================== -->
+        <Grid Visibility="{Binding IsPlaybackOpen, Converter={StaticResource InverseBoolToVis}}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="400" MinWidth="320"/>
+                <ColumnDefinition Width="12"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- 会话列表 -->
+            <Border Style="{StaticResource Panel}">
+                <DockPanel>
+                    <Border DockPanel.Dock="Top" Style="{StaticResource PanelHeader}">
+                        <DockPanel VerticalAlignment="Center">
+                            <Button DockPanel.Dock="Right" Content="刷新" Style="{StaticResource SmallGhostButton}" Command="{Binding Sessions.RefreshSessionsCommand}"/>
+                            <TextBlock Style="{StaticResource PanelTitle}"><Run Text="会话 "/><Run Text="{Binding Sessions.SessionsView.Count, Mode=OneWay}" FontWeight="Normal" Foreground="{DynamicResource MutedBrush}"/></TextBlock>
+                        </DockPanel>
+                    </Border>
+                    <StackPanel DockPanel.Dock="Top" Margin="12,10,12,8">
+                        <TextBox Text="{Binding Sessions.SearchText, UpdateSourceTrigger=PropertyChanged}" ToolTip="按名称或备注搜索" Margin="0,0,0,8"/>
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/><ColumnDefinition/></Grid.ColumnDefinitions>
+                            <DatePicker SelectedDate="{Binding Sessions.FilterStartDate}" ToolTip="开始日期（含）"/>
+                            <TextBlock Grid.Column="1" Text="至" VerticalAlignment="Center" Margin="8,0" Foreground="{DynamicResource MutedBrush}"/>
+                            <DatePicker Grid.Column="2" SelectedDate="{Binding Sessions.FilterEndDate}" ToolTip="结束日期（含）"/>
+                        </Grid>
+                    </StackPanel>
+                    <Grid>
+                        <ListBox ItemsSource="{Binding Sessions.SessionsView}" SelectedItem="{Binding Sessions.SelectedSession}"
+                                 ItemContainerStyle="{StaticResource FlatListItem}" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource Line2Brush}"
+                                 Background="Transparent" ScrollViewer.HorizontalScrollBarVisibility="Disabled" VirtualizingPanel.IsVirtualizing="True">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate DataType="{x:Type storage:SessionInfo}">
+                                    <StackPanel Margin="14,9,12,9">
+                                        <DockPanel>
+                                            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                                <Border Style="{StaticResource ErrBadge}" Margin="6,0,0,0">
+                                                    <Border.Visibility>
+                                                        <MultiBinding Converter="{StaticResource ActiveToVisibility}">
+                                                            <Binding Path="Id"/>
+                                                            <Binding Path="DataContext.Sessions.ActiveSessionId" RelativeSource="{RelativeSource AncestorType=UserControl}"/>
+                                                        </MultiBinding>
+                                                    </Border.Visibility>
+                                                    <TextBlock Text="录制中" FontSize="11"/>
+                                                </Border>
+                                                <Border Style="{StaticResource WarnBadge}" Margin="6,0,0,0"
+                                                        Visibility="{Binding LegacyDataTable, Converter={StaticResource NullToCollapsed}}">
+                                                    <TextBlock Text="旧格式，需迁移" FontSize="11"/>
+                                                </Border>
+                                            </StackPanel>
+                                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                                        </DockPanel>
+                                        <TextBlock Foreground="{DynamicResource MutedBrush}" FontSize="12" Margin="0,3,0,0">
+                                            <Run Text="{Binding StartedAt, Mode=OneWay, StringFormat=yyyy-MM-dd HH:mm:ss}" FontFamily="{DynamicResource MonoFont}"/><Run Text="　"/><Run Text="{Binding TotalReadings, Mode=OneWay, StringFormat={}{0:N0} 条}"/><Run Text="　"/><Run Text="{Binding ChannelCount, Mode=OneWay, StringFormat={}{0} 通道}"/>
+                                        </TextBlock>
+                                        <TextBlock Text="{Binding Notes}" Foreground="{DynamicResource Ink2Brush}" FontSize="12" Margin="0,3,0,0" TextTrimming="CharacterEllipsis"
+                                                   Visibility="{Binding Notes, Converter={StaticResource NullToCollapsed}}"/>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                        <TextBlock Style="{StaticResource Hint}" Text="{Binding Sessions.EmptyListHint}" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   Visibility="{Binding Sessions.SessionsView.Count, Converter={StaticResource ZeroToVisible}}"/>
+                    </Grid>
+                </DockPanel>
+            </Border>
+
+            <!-- 会话详情 -->
+            <Border Grid.Column="2" Style="{StaticResource Panel}">
+                <Grid>
+                    <TextBlock Style="{StaticResource Hint}" Text="在左侧选择一个会话，查看通道、导出或回放。" HorizontalAlignment="Center" VerticalAlignment="Center"
+                               Visibility="{Binding HasSelection, Converter={StaticResource InverseBoolToVis}}"/>
+                    <DockPanel Visibility="{Binding HasSelection, Converter={StaticResource BoolToVis}}">
+                        <Border DockPanel.Dock="Top" Style="{StaticResource PanelHeader}" Padding="18,0,12,0">
+                            <DockPanel VerticalAlignment="Center">
+                                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                    <Button Content="重命名" Style="{StaticResource SmallGhostButton}" Command="{Binding Sessions.RenameSessionCommand}" CommandParameter="{Binding Selected}"/>
+                                    <Button Content="编辑备注" Style="{StaticResource SmallGhostButton}" Command="{Binding Sessions.EditNotesCommand}" CommandParameter="{Binding Selected}"/>
+                                    <Button Content="删除" Style="{StaticResource SmallGhostButton}" Foreground="{DynamicResource ErrBrush}" Margin="8,0,0,0"
+                                            Command="{Binding Sessions.DeleteSessionCommand}" CommandParameter="{Binding Selected}"/>
+                                </StackPanel>
+                                <TextBlock Text="{Binding Selected.Name}" Style="{StaticResource PanelTitle}" FontSize="16" TextTrimming="CharacterEllipsis"/>
+                            </DockPanel>
+                        </Border>
+                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <StackPanel Margin="18,14,18,18" MaxWidth="980" HorizontalAlignment="Left">
+                                <!-- 旧格式提示 -->
+                                <Border Style="{StaticResource WarnCallout}" Margin="0,0,0,14" Visibility="{Binding IsSelectedLegacy, Converter={StaticResource BoolToVis}}">
+                                    <TextBlock TextWrapping="Wrap"><Run Text="这是旧版固定列格式的会话，原始数据保留在表 "/><Run Text="{Binding Selected.LegacyDataTable, Mode=OneWay}" FontFamily="{DynamicResource MonoFont}"/><Run Text=" 中，没有被删除。需要先迁移才能回放、分析和导出。"/></TextBlock>
+                                </Border>
+
+                                <!-- 基本信息 -->
+                                <Grid Margin="0,0,0,8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
+                                    <TextBlock Text="开始" Style="{StaticResource InfoLabel}"/>
+                                    <TextBlock Grid.Column="1" Style="{StaticResource InfoValue}" FontFamily="{DynamicResource MonoFont}" Text="{Binding Selected.StartedAt, StringFormat=yyyy-MM-dd HH:mm:ss}"/>
+                                    <TextBlock Grid.Column="2" Text="结束" Style="{StaticResource InfoLabel}"/>
+                                    <TextBlock Grid.Column="3" Style="{StaticResource InfoValue}" FontFamily="{DynamicResource MonoFont}" Text="{Binding Selected.EndedAt, StringFormat=yyyy-MM-dd HH:mm:ss, TargetNullValue=—}"/>
+                                    <TextBlock Grid.Row="1" Text="时长" Style="{StaticResource InfoLabel}"/>
+                                    <TextBlock Grid.Row="1" Grid.Column="1" Style="{StaticResource InfoValue}" FontFamily="{DynamicResource MonoFont}" Text="{Binding SelectedDurationText}"/>
+                                    <TextBlock Grid.Row="1" Grid.Column="2" Text="读数" Style="{StaticResource InfoLabel}"/>
+                                    <TextBlock Grid.Row="1" Grid.Column="3" Style="{StaticResource InfoValue}" FontFamily="{DynamicResource MonoFont}" Text="{Binding Selected.TotalReadings, StringFormat={}{0:N0} 条}"/>
+                                    <TextBlock Grid.Row="2" Text="标称采样率" Style="{StaticResource InfoLabel}"/>
+                                    <TextBlock Grid.Row="2" Grid.Column="1" Style="{StaticResource InfoValue}" ToolTip="采集时记录的标称值，不代表设备实际输出频率">
+                                        <Run Text="{Binding Selected.SampleRate, Mode=OneWay, StringFormat={}{0:0.###} Hz}" FontFamily="{DynamicResource MonoFont}"/><Run Text="（记录值）" Foreground="{DynamicResource MutedBrush}"/>
+                                    </TextBlock>
+                                    <TextBlock Grid.Row="2" Grid.Column="2" Text="连接方式" Style="{StaticResource InfoLabel}"/>
+                                    <TextBlock Grid.Row="2" Grid.Column="3" Style="{StaticResource InfoValue}" Text="{Binding Selected.ConnectionType, Converter={StaticResource EnumDisplay}}"/>
+                                    <TextBlock Grid.Row="3" Text="备注" Style="{StaticResource InfoLabel}"/>
+                                    <TextBlock Grid.Row="3" Grid.Column="1" Grid.ColumnSpan="3" Style="{StaticResource InfoValue}" Text="{Binding Selected.Notes, TargetNullValue=—}"/>
+                                </Grid>
+
+                                <!-- 回放 -->
+                                <Border Style="{StaticResource Callout}" Margin="0,0,0,18">
+                                    <DockPanel>
+                                        <Button DockPanel.Dock="Right" Content="回放" Style="{StaticResource PrimaryButton}" MinWidth="88" Command="{Binding OpenSelectedPlaybackCommand}"/>
+                                        <StackPanel VerticalAlignment="Center" Margin="0,0,12,0">
+                                            <TextBlock Text="按记录时间戳回放曲线，只用于查看，不写入任何会话。" Foreground="{DynamicResource Ink2Brush}"
+                                                       Visibility="{Binding PlaybackBlockedReason, Converter={StaticResource EmptyToVisible}}"/>
+                                            <TextBlock Text="{Binding PlaybackBlockedReason}" Foreground="{DynamicResource WarnBrush}" TextWrapping="Wrap"
+                                                       Visibility="{Binding PlaybackBlockedReason, Converter={StaticResource NullToCollapsed}}"/>
+                                        </StackPanel>
+                                    </DockPanel>
+                                </Border>
+
+                                <!-- 通道与导出 -->
+                                <DockPanel Margin="0,0,0,8">
+                                    <Button DockPanel.Dock="Right" Content="全选 / 全不选" Style="{StaticResource SmallGhostButton}" Command="{Binding SelectAllExportChannelsCommand}"/>
+                                    <TextBlock Text="通道" Style="{StaticResource SectionTitle}" Margin="0"/>
+                                </DockPanel>
+                                <Border BorderBrush="{DynamicResource LineBrush}" BorderThickness="1" CornerRadius="4" Margin="0,0,0,18">
+                                    <StackPanel>
+                                        <Grid Background="{DynamicResource Panel2Brush}" Height="30">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="60"/><ColumnDefinition Width="*"/><ColumnDefinition Width="90"/><ColumnDefinition Width="70"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="序号" Margin="12,0" VerticalAlignment="Center" FontSize="12" Foreground="{DynamicResource Ink2Brush}"/>
+                                            <TextBlock Grid.Column="1" Text="名称" VerticalAlignment="Center" FontSize="12" Foreground="{DynamicResource Ink2Brush}"/>
+                                            <TextBlock Grid.Column="2" Text="单位" VerticalAlignment="Center" FontSize="12" Foreground="{DynamicResource Ink2Brush}"/>
+                                            <TextBlock Grid.Column="3" Text="导出" VerticalAlignment="Center" FontSize="12" Foreground="{DynamicResource Ink2Brush}"/>
+                                        </Grid>
+                                        <ItemsControl ItemsSource="{Binding ExportChannels}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate DataType="{x:Type vm:ExportChannelOption}">
+                                                    <Grid Height="30">
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="60"/><ColumnDefinition Width="*"/><ColumnDefinition Width="90"/><ColumnDefinition Width="70"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <Border Grid.ColumnSpan="4" BorderBrush="{DynamicResource Line2Brush}" BorderThickness="0,1,0,0"/>
+                                                        <TextBlock Text="{Binding Index}" FontFamily="{DynamicResource MonoFont}" Margin="12,0" VerticalAlignment="Center" Foreground="{DynamicResource MutedBrush}"/>
+                                                        <TextBlock Grid.Column="1" Text="{Binding Name}" VerticalAlignment="Center"/>
+                                                        <TextBlock Grid.Column="2" Text="{Binding Unit}" VerticalAlignment="Center" Foreground="{DynamicResource Ink2Brush}"/>
+                                                        <CheckBox Grid.Column="3" IsChecked="{Binding IsSelected}" VerticalAlignment="Center"/>
+                                                    </Grid>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </StackPanel>
+                                </Border>
+
+                                <TextBlock Text="导出 CSV" Style="{StaticResource SectionTitle}"/>
+                                <WrapPanel Margin="0,0,0,4">
+                                    <StackPanel Margin="0,0,16,10">
+                                        <TextBlock Text="数据来源" Style="{StaticResource FieldLabel}"/>
+                                        <ComboBox Width="170" ItemsSource="{Binding Sessions.ExportSources}" SelectedItem="{Binding Sessions.ExportSource}" ItemTemplate="{StaticResource EnumItemTemplate}"/>
+                                    </StackPanel>
+                                    <StackPanel Margin="0,0,16,10">
+                                        <TextBlock Text="开始时间（留空 = 从头）" Style="{StaticResource FieldLabel}"/>
+                                        <TextBox Width="200" Style="{StaticResource MonoTextBox}" ToolTip="格式 yyyy-MM-dd HH:mm:ss.fff"
+                                                 Text="{Binding Sessions.ExportStartTime, StringFormat=yyyy-MM-dd HH:mm:ss.fff, ValidatesOnExceptions=True, TargetNullValue=''}"/>
+                                    </StackPanel>
+                                    <StackPanel Margin="0,0,16,10">
+                                        <TextBlock Text="结束时间（留空 = 到尾）" Style="{StaticResource FieldLabel}"/>
+                                        <TextBox Width="200" Style="{StaticResource MonoTextBox}" ToolTip="格式 yyyy-MM-dd HH:mm:ss.fff"
+                                                 Text="{Binding Sessions.ExportEndTime, StringFormat=yyyy-MM-dd HH:mm:ss.fff, ValidatesOnExceptions=True, TargetNullValue=''}"/>
+                                    </StackPanel>
+                                    <StackPanel Margin="0,0,16,10">
+                                        <TextBlock Text="小数位（留空 = 全精度）" Style="{StaticResource FieldLabel}"/>
+                                        <TextBox Width="120" Style="{StaticResource MonoTextBox}" Text="{Binding Sessions.ExportDecimalPlaces, ValidatesOnExceptions=True, TargetNullValue=''}"/>
+                                    </StackPanel>
+                                </WrapPanel>
+                                <WrapPanel Margin="0,0,0,12">
+                                    <CheckBox Content="包含表头" IsChecked="{Binding Sessions.ExportIncludeHeader}" Margin="0,0,16,0"/>
+                                    <CheckBox Content="表头包含单位" IsChecked="{Binding Sessions.ExportIncludeUnits}"/>
+                                </WrapPanel>
+                                <!-- 导出校正值时选择已保存的改正版本 -->
+                                <StackPanel Margin="0,0,0,12" Visibility="{Binding Sessions.ExportSource, Converter={StaticResource EnumVisible}, ConverterParameter=!Raw}">
+                                    <TextBlock Text="已保存的改正版本" Style="{StaticResource FieldLabel}"/>
+                                    <StackPanel Orientation="Horizontal">
+                                        <ComboBox ItemsSource="{Binding Sessions.AvailableCorrectionVersions}" SelectedItem="{Binding Sessions.SelectedCorrectionVersion}"
+                                                  DisplayMemberPath="DisplayName" ToolTip="{Binding Sessions.SelectedCorrectionVersion.Id}" MinWidth="220"/>
+                                        <Button Content="刷新" Style="{StaticResource SmallGhostButton}" Command="{Binding Sessions.RefreshCorrectionVersionsCommand}" Margin="6,0,0,0"/>
+                                    </StackPanel>
+                                    <TextBlock Text="{Binding Sessions.CorrectionVersionsStatus}" Style="{StaticResource Hint}" Margin="0,4,0,0"
+                                               Visibility="{Binding Sessions.CorrectionVersionsStatus, Converter={StaticResource NullToCollapsed}}"/>
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,22">
+                                    <Button Content="导出 CSV…" Style="{StaticResource PrimaryButton}" Command="{Binding ExportSessionCommand}"/>
+                                    <TextBlock Style="{StaticResource Hint}" VerticalAlignment="Center" Margin="12,0,0,0" TextWrapping="Wrap" MaxWidth="420"
+                                               Text="校正值来自已保存的改正版本（由下方“生成校正数据”产生）；有多个版本时需选择，CSV 写入完整版本标识。"/>
+                                </StackPanel>
+
+                                <!-- 生成校正数据 -->
+                                <TextBlock Text="生成校正数据" Style="{StaticResource SectionTitle}"/>
+                                <TextBlock Style="{StaticResource Hint}" Margin="0,0,0,10"
+                                           Text="用正交度参数为整个会话计算校正值并另行保存；原始读数不会被覆盖。"/>
+                                <WrapPanel>
+                                    <StackPanel Margin="0,0,16,10">
+                                        <TextBlock Text="第一组参数" Style="{StaticResource FieldLabel}"/>
+                                        <ComboBox Width="200" ItemsSource="{Binding Sessions.AvailableProfiles}" SelectedItem="{Binding Sessions.SelectedCorrectionProfile}" DisplayMemberPath="Name"/>
+                                    </StackPanel>
+                                    <StackPanel Margin="0,0,16,10">
+                                        <TextBlock Text="第一组三轴通道序号" Style="{StaticResource FieldLabel}"/>
+                                        <TextBox Width="120" Style="{StaticResource MonoTextBox}" Text="{Binding Sessions.FirstCorrectionChannels}" ToolTip="例如 0,1,2；不得包含温度等非磁场通道"/>
+                                    </StackPanel>
+                                    <StackPanel Margin="0,0,16,10">
+                                        <TextBlock Text="第二组参数（可选）" Style="{StaticResource FieldLabel}"/>
+                                        <ComboBox Width="200" ItemsSource="{Binding Sessions.AvailableProfiles}" SelectedItem="{Binding Sessions.SelectedCorrectionProfileSecond}" DisplayMemberPath="Name"/>
+                                    </StackPanel>
+                                    <StackPanel Margin="0,0,16,10">
+                                        <TextBlock Text="第二组三轴通道序号" Style="{StaticResource FieldLabel}"/>
+                                        <TextBox Width="120" Style="{StaticResource MonoTextBox}" Text="{Binding Sessions.SecondCorrectionChannels}" ToolTip="例如 3,4,5；两组不得重叠"/>
+                                    </StackPanel>
+                                </WrapPanel>
+                                <StackPanel Orientation="Horizontal">
+                                    <Button Content="生成校正数据" Command="{Binding Sessions.ApplyBatchCorrectionCommand}" CommandParameter="{Binding Selected}" Margin="0,0,6,0"/>
+                                    <Button Content="刷新参数列表" Style="{StaticResource GhostButton}" Command="{Binding Sessions.LoadCorrectionProfilesCommand}"/>
+                                </StackPanel>
+                                <ProgressBar Value="{Binding Sessions.CorrectionProgress}" Maximum="100" Height="4" Margin="0,8,0,0" Width="420" HorizontalAlignment="Left"
+                                             Visibility="{Binding Sessions.IsCorrecting, Converter={StaticResource BoolToVis}}"/>
+                            </StackPanel>
+                        </ScrollViewer>
+                    </DockPanel>
+                </Grid>
+            </Border>
+        </Grid>
+
+        <!-- ===================== 回放模式 ===================== -->
+        <!-- Visibility 取自页面 ViewModel；同一元素上的 DataContext 会改变它自己的绑定源。 -->
+        <Grid Visibility="{Binding DataContext.IsPlaybackOpen, RelativeSource={RelativeSource AncestorType=UserControl}, Converter={StaticResource BoolToVis}}"
+              DataContext="{Binding Playback}">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+            <DockPanel Margin="0,0,0,10">
+                <Button DockPanel.Dock="Left" Content="返回会话列表" Command="{Binding DataContext.BackToListCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"/>
+                <TextBlock DockPanel.Dock="Left" Text="{Binding LoadedSession.Name}" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center" Margin="14,0,8,0"/>
+                <Border DockPanel.Dock="Left" Style="{StaticResource Badge}" Background="{DynamicResource AccentSoftBrush}" TextElement.Foreground="{DynamicResource AccentBrush}">
+                    <TextBlock Text="回放" FontSize="12"/>
+                </Border>
+                <TextBlock Text="{Binding StatusMessage}" Style="{StaticResource Hint}" VerticalAlignment="Center" Margin="14,0,0,0" TextTrimming="CharacterEllipsis"/>
+            </DockPanel>
+
+            <Grid Grid.Row="1">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="12"/>
+                    <ColumnDefinition Width="300"/>
+                </Grid.ColumnDefinitions>
+                <Border Style="{StaticResource Panel}" ClipToBounds="True">
+                    <Grid>
+                        <views:RealtimeChartView DataContext="{Binding DataContext.RealtimeChartVM, RelativeSource={RelativeSource AncestorType=Window}}"/>
+                        <TextBlock Text="正在加载数据…" FontSize="15" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   Visibility="{Binding IsLoading, Converter={StaticResource BoolToVis}}"/>
+                    </Grid>
+                </Border>
+                <Border Grid.Column="2" Style="{StaticResource Panel}">
+                    <DockPanel>
+                        <Border DockPanel.Dock="Top" Style="{StaticResource PanelHeader}">
+                            <TextBlock Style="{StaticResource PanelTitle}"><Run Text="通道"/><Run Text="　来自会话记录" FontSize="12" FontWeight="Normal" Foreground="{DynamicResource MutedBrush}"/></TextBlock>
+                        </Border>
+                        <!-- 正交度校正（仅显示） -->
+                        <Border DockPanel.Dock="Bottom" BorderBrush="{DynamicResource Line2Brush}" BorderThickness="0,1,0,0" Padding="14,12">
+                            <StackPanel>
+                                <CheckBox Style="{StaticResource Switch}" Content="正交度校正（仅显示）" IsChecked="{Binding IsOrthogonalityCorrectionEnabled}" Margin="0,0,0,10"/>
+                                <StackPanel Visibility="{Binding IsOrthogonalityCorrectionEnabled, Converter={StaticResource BoolToVis}}">
+                                    <TextBlock Text="第一组参数 / 通道序号" Style="{StaticResource FieldLabel}"/>
+                                    <DockPanel Margin="0,0,0,8">
+                                        <TextBox DockPanel.Dock="Right" Width="74" Style="{StaticResource MonoTextBox}" Margin="6,0,0,0" Text="{Binding FirstChannelIndices, UpdateSourceTrigger=PropertyChanged}"/>
+                                        <ComboBox ItemsSource="{Binding AvailableProfiles}" SelectedItem="{Binding SelectedOrthogonalityProfile}" DisplayMemberPath="Name"/>
+                                    </DockPanel>
+                                    <TextBlock Text="第二组参数 / 通道序号（可选）" Style="{StaticResource FieldLabel}"/>
+                                    <DockPanel Margin="0,0,0,8">
+                                        <TextBox DockPanel.Dock="Right" Width="74" Style="{StaticResource MonoTextBox}" Margin="6,0,0,0" Text="{Binding SecondChannelIndices, UpdateSourceTrigger=PropertyChanged}"/>
+                                        <ComboBox ItemsSource="{Binding AvailableProfiles}" SelectedItem="{Binding SelectedSecondProfile}" DisplayMemberPath="Name"/>
+                                    </DockPanel>
+                                    <StackPanel Orientation="Horizontal">
+                                        <Button Content="不用第二组" Style="{StaticResource SmallButton}" Command="{Binding ClearSecondProfileCommand}" Margin="0,0,6,0"/>
+                                        <Button Content="刷新参数" Style="{StaticResource SmallGhostButton}" Command="{Binding LoadOrthogonalityProfilesCommand}"/>
+                                    </StackPanel>
+                                    <TextBlock Style="{StaticResource Hint}" Margin="0,8,0,0" Text="只改变回放曲线；历史数据库保持不变。"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+                        <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                      DataContext="{Binding DataContext.RealtimeChartVM, RelativeSource={RelativeSource AncestorType=Window}}">
+                            <ItemsControl ItemsSource="{Binding ChannelConfigs}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate DataType="{x:Type core:ChannelDisplayConfig}">
+                                        <DockPanel Height="38" Margin="14,0,12,0">
+                                            <CheckBox DockPanel.Dock="Left" IsChecked="{Binding Visible}" VerticalAlignment="Center"/>
+                                            <Border DockPanel.Dock="Left" Width="10" Height="10" CornerRadius="2" Margin="8,0" VerticalAlignment="Center"
+                                                    Background="{Binding ColorHex, Converter={StaticResource HexToBrush}}"/>
+                                            <TextBlock DockPanel.Dock="Right" Text="{Binding LatestValue}" FontFamily="{DynamicResource MonoFont}" FontSize="12"
+                                                       VerticalAlignment="Center" Foreground="{DynamicResource Ink2Brush}"/>
+                                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                                        </DockPanel>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                    </DockPanel>
+                </Border>
+            </Grid>
+
+            <!-- 播放控制 -->
+            <Border Grid.Row="2" Style="{StaticResource Panel}" Margin="0,12,0,0" Padding="14,10">
+                <DockPanel>
+                    <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Button Content="播放" Style="{StaticResource PrimaryButton}" MinWidth="72" Command="{Binding PlayCommand}" Margin="0,0,6,0"/>
+                        <Button Content="暂停" MinWidth="64" Command="{Binding PauseCommand}" Margin="0,0,6,0"/>
+                        <Button Content="停止" MinWidth="64" Command="{Binding StopCommand}" Margin="0,0,14,0"/>
+                        <TextBlock Text="速度" VerticalAlignment="Center" Margin="0,0,6,0" Foreground="{DynamicResource Ink2Brush}"/>
+                        <ComboBox ItemsSource="{Binding AvailableSpeeds}" SelectedItem="{Binding PlaybackSpeed}" Width="78" Margin="0,0,16,0">
+                            <ComboBox.ItemTemplate><DataTemplate><TextBlock Text="{Binding StringFormat={}{0}×}"/></DataTemplate></ComboBox.ItemTemplate>
+                        </ComboBox>
+                        <TextBlock VerticalAlignment="Center" FontFamily="{DynamicResource MonoFont}">
+                            <Run Text="{Binding ElapsedTime, Mode=OneWay}"/><Run Text=" / " Foreground="{DynamicResource MutedBrush}"/><Run Text="{Binding TotalDuration, Mode=OneWay}"/>
+                        </TextBlock>
+                    </StackPanel>
+                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center" Margin="16,0,0,0">
+                        <TextBlock VerticalAlignment="Center" FontFamily="{DynamicResource MonoFont}" Foreground="{DynamicResource Ink2Brush}" Margin="0,0,12,0">
+                            <Run Text="{Binding CurrentTime, Mode=OneWay}"/><Run Text="　"/><Run Text="{Binding CurrentIndex, Mode=OneWay, StringFormat=N0}"/><Run Text=" / "/><Run Text="{Binding TotalReadings, Mode=OneWay, StringFormat=N0}"/>
+                        </TextBlock>
+                        <Border Style="{StaticResource Badge}">
+                            <TextBlock Text="{Binding State, Converter={StaticResource EnumDisplay}}" FontSize="12"/>
+                        </Border>
+                    </StackPanel>
+                    <Slider Minimum="0" Maximum="1" Value="{Binding Progress}" IsMoveToPointEnabled="False" Margin="16,0,0,0"
+                            Thumb.DragStarted="OnSeekDragStarted" Thumb.DragCompleted="OnSeekDragCompleted"
+                            SmallChange="0.001" LargeChange="0.01"/>
+                </DockPanel>
+            </Border>
+        </Grid>
+    </Grid>
+</UserControl>

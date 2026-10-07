@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -7,6 +8,7 @@ using System.Windows;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using MagnetometerSystem.App.Helpers;
 using MagnetometerSystem.Core.Communication;
 using MagnetometerSystem.Core.Models;
 using MagnetometerSystem.Core.Protocol;
@@ -50,6 +52,22 @@ public partial class CommandParameterBinding : ObservableObject
     }
 }
 
+/// <summary>收发记录的方向：发送、接收，或没有字节的说明（超时、发送失败等）。</summary>
+public enum TrafficKind { Tx, Rx, Note }
+
+/// <summary>
+/// 收发记录的一行。Result 只写有证据的结论：“已写出”只表示本机写出完成，
+/// “应答匹配 / ACK / ERR”来自收到的字节，超时表示执行结果未知。Level：ok / warn / err / 空。
+/// </summary>
+public sealed record TrafficEntry(DateTime Time, TrafficKind Kind, int ByteCount, string Content, string Result, string Level, string? Command)
+{
+    public string TimeText => Time.ToString("HH:mm:ss.fff");
+    public string KindText => Kind switch { TrafficKind.Tx => "发送", TrafficKind.Rx => "接收", _ => "说明" };
+    public string SizeText => ByteCount > 0 ? $"{ByteCount} B" : "";
+    public override string ToString() =>
+        $"{TimeText}\t{KindText}\t{Content}\t{Result}{(Command is null ? "" : "\t" + Command)}";
+}
+
 /// <summary>
 /// 设备命令 ViewModel — 支持命令目录、命令组、参数化命令，
 /// 保留底部"自由发送"区兼容手动输入。
@@ -70,7 +88,12 @@ public partial class DeviceCommandViewModel : ObservableObject, IDisposable
     private readonly List<byte> _responseBuffer = [];
     private long _responseVersion;
     private long _connectionVersion;
-    private const int MaxLogLength = 50_000;
+    private long _pendingSentTicks;
+    private string? _pendingCommandName;
+    private const int MaxTrafficEntries = 500;
+    /// <summary>一次刷新的新条目不超过该数量时逐条追加，超过时整体替换。</summary>
+    private const int IncrementalTrafficBatch = 32;
+    private const int MaxRxContentChars = 240;
     private const string CatalogKey = "device.commandCatalog";
 
     // ---- 目录 / 组 / 命令 ----
@@ -125,8 +148,12 @@ public partial class DeviceCommandViewModel : ObservableObject, IDisposable
     private bool _showFreeSend;
 
     // ---- 日志 / 状态 ----
+    /// <summary>收发记录（最近 500 条），按 100 ms 节拍从缓冲并入。</summary>
+    public BatchObservableCollection<TrafficEntry> TrafficEntries { get; } = new();
+
+    /// <summary>界面来不及刷新、在缓冲中被挤掉的记录数（高速连续数据时可能出现）。</summary>
     [ObservableProperty]
-    private string _communicationLog = "";
+    private long _droppedTrafficEntries;
 
     [ObservableProperty]
     private bool _isConnected;
@@ -141,7 +168,7 @@ public partial class DeviceCommandViewModel : ObservableObject, IDisposable
     private bool _pauseAutoScroll;
 
     // ---- 日志缓冲（高吞吐下按 100ms 节拍批量 flush，避免每帧都触发 UI 重绘）----
-    private readonly StringBuilder _logBuffer = new();
+    private readonly Queue<TrafficEntry> _logBuffer = new();
     private readonly object _logBufferLock = new();
     private readonly DispatcherTimer _logFlushTimer;
 
@@ -228,7 +255,7 @@ public partial class DeviceCommandViewModel : ObservableObject, IDisposable
         // 只持久化用户组：内置组由协议提供，写进去会在下次加载时重复叠加
         var catalog = new CommandCatalog { Groups = [.. _userGroups] };
         try { await _configService.SetAsync(CatalogKey, catalog); }
-        catch (Exception ex) { AppendToLog($"[ERR] 保存目录失败: {ex.Message}\n"); }
+        catch (Exception ex) { AddNote($"保存命令目录失败：{ex.Message}", "err"); }
     }
 
     /// <summary>内置组只读，拦下所有会被下次加载覆盖掉的编辑操作</summary>
@@ -348,7 +375,7 @@ public partial class DeviceCommandViewModel : ObservableObject, IDisposable
         if (_connection == null)
         {
             WriteStatus = "写出失败: 未连接设备";
-            AppendToLog("[ERR] 未连接设备\n");
+            AddNote("未连接设备，命令未发送", "err", SelectedCommand.Name);
             return;
         }
 
@@ -381,7 +408,7 @@ public partial class DeviceCommandViewModel : ObservableObject, IDisposable
         catch (Exception ex)
         {
             WriteStatus = "写出失败: " + ex.Message;
-            AppendToLog($"[ERR] 发送失败: {ex.Message}\n");
+            AddNote($"发送失败：{ex.Message}", "err", SelectedCommand?.Name);
         }
     }
 
@@ -391,13 +418,13 @@ public partial class DeviceCommandViewModel : ObservableObject, IDisposable
         if (_connection == null)
         {
             WriteStatus = "写出失败: 未连接设备";
-            AppendToLog("[ERR] 未连接设备\n");
+            AddNote("未连接设备，命令未发送", "err", FreeSendName);
             return;
         }
         if (string.IsNullOrEmpty(FreeCommandText)) return;
 
         try { await SendRawAsync(FreeCommandText, FreeIsHexMode, FreeAppendNewline); }
-        catch (Exception ex) { WriteStatus = "写出失败: " + ex.Message; AppendToLog($"[ERR] 发送失败: {ex.Message}\n"); }
+        catch (Exception ex) { WriteStatus = "写出失败: " + ex.Message; AddNote($"发送失败：{ex.Message}", "err", FreeSendName); }
     }
 
     private async Task SendRawAsync(string text, bool isHex, bool appendNewline)
@@ -461,7 +488,7 @@ public partial class DeviceCommandViewModel : ObservableObject, IDisposable
             const string reason = "此命令需要独立传输，当前尚未实现设备存储下载隔离，暂不可用。";
             WriteStatus = "未发送: " + reason;
             LastSendByteCount = 0;
-            AppendToLog("[ERR] " + reason + "\n");
+            AddNote(reason, "err", command.Name);
             return;
         }
         if (data.Length == 0) throw new ArgumentException("命令不能为空");
@@ -496,16 +523,20 @@ public partial class DeviceCommandViewModel : ObservableObject, IDisposable
                 _pendingCtmbs = isCtmbs;
                 _pendingRealtimeParser = awaitCtmbsRealtime
                     ? new Ctmbs3X2000Parser(ProtocolConfig.CreateCtmbs3X2000()) : null;
+                _pendingCommandName = command?.Name ?? FreeSendName;
+                _pendingSentTicks = Stopwatch.GetTimestamp();
                 _responseBuffer.Clear();
             }
             WriteStatus = "正在写出...";
             ResponseStatus = expected is null && !_pendingCtmbs
                 ? "等待接收（未配置响应匹配，不能确认执行结果）" : "等待协议响应";
             // 先登记响应，再写出，避免本机/高速设备应答早于 SendAsync continuation。
+            var writeStarted = DateTime.Now;
             await connection.SendAsync(data);
             LastSendByteCount = data.Length;
             WriteStatus = $"已写出 {data.Length} 字节；不代表设备执行成功";
-            AppendToLog($"[TX {DateTime.Now:HH:mm:ss}] {display}\n");
+            EnqueueEntry(new TrafficEntry(writeStarted, TrafficKind.Tx, data.Length, display, $"已写出 {data.Length} 字节", "",
+                command?.Name ?? FreeSendName));
             // A response without a request ID cannot belong to two outstanding commands.
             // Hold the send gate asynchronously until this wait completes or is canceled.
             await WaitForResponseAsync(token, responseTimeoutMs, version);
@@ -523,14 +554,22 @@ public partial class DeviceCommandViewModel : ObservableObject, IDisposable
         try
         {
             await Task.Delay(timeoutMs, token).ConfigureAwait(false);
+            string? name;
+            int received;
+            bool hasExpectation;
             lock (_responseGate)
             {
                 if (token.IsCancellationRequested || _pendingConnection is null || version != _responseVersion) return;
                 _pendingConnection = null;
                 _pendingRealtimeParser = null;
+                name = _pendingCommandName;
+                received = _responseBuffer.Count;
+                hasExpectation = _expectedResponse is { Length: > 0 } || _pendingCtmbs;
             }
             SetResponseStatus(version, "等待响应超时；设备执行结果未知");
-            EnqueueLog($"[RX {DateTime.Now:HH:mm:ss}] 响应等待超时，未确认设备执行结果\n");
+            AddNote(received == 0 ? $"{timeoutMs} ms 内未收到任何数据；执行结果未知"
+                : hasExpectation ? $"{timeoutMs} ms 内收到 {received} 字节，但没有匹配的应答；执行结果未知"
+                : $"未配置预期应答，{timeoutMs} ms 内收到 {received} 字节；不能确认执行结果", "warn", name);
         }
         catch (OperationCanceledException) { }
     }
@@ -744,7 +783,7 @@ public partial class DeviceCommandViewModel : ObservableObject, IDisposable
     private void ClearLog()
     {
         lock (_logBufferLock) _logBuffer.Clear();
-        CommunicationLog = "";
+        TrafficEntries.Clear();
     }
 
     // ---- 连接 / 接收 ----
@@ -780,83 +819,123 @@ public partial class DeviceCommandViewModel : ObservableObject, IDisposable
     private void OnDataReceived(object? sender, byte[] data)
     {
         if (!ReferenceEquals(sender, _connection)) return;
-        var timestamp = DateTime.Now.ToString("HH:mm:ss");
+        var now = DateTime.Now;
         bool isAscii = data.All(b => (b >= 0x20 && b <= 0x7E) || b == '\r' || b == '\n' || b == '\t');
         var display = isAscii
             ? Encoding.UTF8.GetString(data).Replace("\r\n", "\\r\\n").Replace("\r", "\\r").Replace("\n", "\\n")
             : BitConverter.ToString(data).Replace("-", " ");
+        if (display.Length > MaxRxContentChars) display = display[..MaxRxContentChars] + " …";
 
-        // 直接进缓冲区（线程安全），UI 由 _logFlushTimer 节拍刷新
-        EnqueueLog($"[RX {timestamp}] {display}\n");
+        string result = "", level = "";
+        string? command = null;
         lock (_responseGate)
         {
-            if (!ReferenceEquals(sender, _pendingConnection)) return;
-            _responseBuffer.AddRange(data);
-            if (_responseBuffer.Count > 65536) _responseBuffer.RemoveRange(0, _responseBuffer.Count - 65536);
-            var received = _responseBuffer.ToArray().AsSpan();
-            // CTMBS also pushes $err when no realtime data is available. Without
-            // a request identifier it cannot be evidence that this command failed.
-            var ambiguousError = _pendingCtmbs && received.IndexOf("$err\n"u8) >= 0;
-            var acknowledged = _pendingCtmbs && received.IndexOf("$ack\n"u8) >= 0;
-            var matched = _expectedResponse is { Length: > 0 } && received.IndexOf(_expectedResponse) >= 0;
-            bool realtimeReceived = false;
-            if (_pendingRealtimeParser is { } realtimeParser)
+            if (ReferenceEquals(sender, _pendingConnection))
             {
-                realtimeParser.Feed(data, 0, data.Length);
-                realtimeReceived = realtimeParser.TryParse(out _);
+                _responseBuffer.AddRange(data);
+                if (_responseBuffer.Count > 65536) _responseBuffer.RemoveRange(0, _responseBuffer.Count - 65536);
+                var received = _responseBuffer.ToArray().AsSpan();
+                // CTMBS also pushes $err when no realtime data is available. Without
+                // a request identifier it cannot be evidence that this command failed.
+                var ambiguousError = _pendingCtmbs && received.IndexOf("$err\n"u8) >= 0;
+                var acknowledged = _pendingCtmbs && received.IndexOf("$ack\n"u8) >= 0;
+                var matched = _expectedResponse is { Length: > 0 } && received.IndexOf(_expectedResponse) >= 0;
+                bool realtimeReceived = false;
+                if (_pendingRealtimeParser is { } realtimeParser)
+                {
+                    realtimeParser.Feed(data, 0, data.Length);
+                    realtimeReceived = realtimeParser.TryParse(out _);
+                }
+                command = _pendingCommandName;
+                if (acknowledged || matched || realtimeReceived)
+                {
+                    _pendingConnection = null;
+                    _pendingRealtimeParser = null;
+                    _responseCts?.Cancel();
+                    var message = realtimeReceived ? "已收到实时帧；推送已到达，不能据此归因于本次命令"
+                        : acknowledged ? "收到设备 ACK；执行结果以设备协议为准"
+                        : "收到匹配响应；执行结果以设备协议为准";
+                    SetResponseStatus(_responseVersion, message);
+                    var ms = Stopwatch.GetElapsedTime(_pendingSentTicks).TotalMilliseconds;
+                    (result, level) = realtimeReceived ? ($"收到实时帧，{ms:0} ms（不能归因于本次命令）", "")
+                        : acknowledged ? ($"设备返回 ACK，{ms:0} ms", "ok")
+                        : ($"应答匹配，{ms:0} ms", "ok");
+                }
+                else if (ambiguousError)
+                {
+                    SetResponseStatus(_responseVersion, "收到 CTMBS ERR（也可能为无数据推送）；继续等待命令响应，执行结果未确认");
+                    (result, level) = ("收到 ERR（也可能是无数据推送），继续等待", "warn");
+                }
+                else if (_responseBuffer.Count == data.Length)
+                {
+                    SetResponseStatus(_responseVersion, "已收到数据，尚未匹配命令响应；执行结果未确认");
+                    result = _expectedResponse is { Length: > 0 } || _pendingCtmbs ? "尚未匹配应答" : "未配置预期应答";
+                }
             }
-            if (acknowledged || matched || realtimeReceived)
-            {
-                _pendingConnection = null;
-                _pendingRealtimeParser = null;
-                _responseCts?.Cancel();
-                var message = realtimeReceived ? "已收到实时帧；推送已到达，不能据此归因于本次命令"
-                    : acknowledged ? "收到设备 ACK；执行结果以设备协议为准"
-                    : "收到匹配响应；执行结果以设备协议为准";
-                SetResponseStatus(_responseVersion, message);
-            }
-            else if (ambiguousError)
-                SetResponseStatus(_responseVersion, "收到 CTMBS ERR（也可能为无数据推送）；继续等待命令响应，执行结果未确认");
-            else if (_responseBuffer.Count == data.Length)
-                SetResponseStatus(_responseVersion, "已收到数据，尚未匹配命令响应；执行结果未确认");
         }
+        // 直接进缓冲区（线程安全），UI 由 _logFlushTimer 节拍刷新
+        EnqueueEntry(new TrafficEntry(now, TrafficKind.Rx, data.Length, display, result, level, command));
     }
 
-    private void EnqueueLog(string line)
+    private const string FreeSendName = "自由发送";
+
+    /// <summary>任意线程：记录进缓冲，超过上限时挤掉最旧的并计数。</summary>
+    private void EnqueueEntry(TrafficEntry entry)
     {
         lock (_logBufferLock)
         {
-            _logBuffer.Append(line);
-            if (_logBuffer.Length > MaxLogLength)
-                _logBuffer.Remove(0, _logBuffer.Length - MaxLogLength);
+            _logBuffer.Enqueue(entry);
+            while (_logBuffer.Count > MaxTrafficEntries)
+            {
+                _logBuffer.Dequeue();
+                _droppedPending++;
+            }
         }
     }
 
-    /// <summary>UI 线程：把缓冲合并进 CommunicationLog 并按上限裁剪。100ms/次。</summary>
+    private long _droppedPending;
+
+    /// <summary>没有字节的说明行：发送失败、超时等。</summary>
+    private void AddNote(string result, string level, string? command = null) =>
+        EnqueueEntry(new TrafficEntry(DateTime.Now, TrafficKind.Note, 0, "—", result, level, command));
+
+    /// <summary>UI 线程：把缓冲并入 TrafficEntries 并按上限裁剪。100ms/次。</summary>
     private void FlushLogBuffer()
     {
-        string pending;
+        TrafficEntry[] pending;
+        long dropped;
         lock (_logBufferLock)
         {
-            if (_logBuffer.Length == 0) return;
-            pending = _logBuffer.ToString();
+            if (_logBuffer.Count == 0) return;
+            // 快速设备的应答可能先于发送行入队；按时间排序（发送行用写出开始的时间）。
+            pending = _logBuffer.OrderBy(e => e.Time).ToArray();
             _logBuffer.Clear();
+            dropped = _droppedPending;
         }
-
-        var current = CommunicationLog;
-        // 估算合并后长度，超出 MaxLogLength 时只保留尾部
-        int total = current.Length + pending.Length;
-        string updated = total <= MaxLogLength
-            ? current + pending
-            : (current + pending)[^MaxLogLength..];
-
-        CommunicationLog = updated;
+        // 少量新条目逐条追加；高速设备一次刷新有大量接收块时，先裁剪再整体替换（一个 Reset 通知），
+        // 不在界面线程上产生数百次逐项增删通知。
+        if (pending.Length <= IncrementalTrafficBatch)
+        {
+            foreach (var entry in pending) TrafficEntries.Add(entry);
+            while (TrafficEntries.Count > MaxTrafficEntries) TrafficEntries.RemoveAt(0);
+        }
+        else
+        {
+            var keep = Math.Max(0, MaxTrafficEntries - pending.Length);
+            TrafficEntries.ReplaceAll(TrafficEntries.Skip(Math.Max(0, TrafficEntries.Count - keep))
+                .Concat(pending.Skip(Math.Max(0, pending.Length - MaxTrafficEntries))).ToArray());
+        }
+        DroppedTrafficEntries = dropped;
     }
 
-    private void AppendToLog(string line)
+    /// <summary>把当前收发记录复制为制表符分隔的文本。</summary>
+    [RelayCommand]
+    private void CopyTraffic()
     {
-        // 同步 UI 线程调用（错误/状态信息），仍走缓冲以避免与 RX 流竞争抖动
-        EnqueueLog(line);
+        FlushLogBuffer();
+        if (TrafficEntries.Count == 0) return;
+        try { Clipboard.SetText(string.Join(Environment.NewLine, TrafficEntries)); }
+        catch (Exception ex) { AddNote($"复制失败：{ex.Message}", "err"); }
     }
 
     public void Dispose()

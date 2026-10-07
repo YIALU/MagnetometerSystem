@@ -35,6 +35,14 @@ public interface IDataStorageService
     Task<IReadOnlyList<MagnetometerReading>> GetReadingsAsync(
         string sessionId, DateTime? startTime = null, DateTime? endTime = null);
 
+    /// <summary>
+    /// 有界分页读取 [startTime, endTime] 内的读数：每次至多 <paramref name="limit"/> 条，从 <paramref name="after"/> 之后继续。
+    /// 按存储键（时间戳、ID）顺序返回，每条只出现一次；没有更多数据时 <see cref="ReadingPage.Next"/> 为 null。
+    /// 用于长会话读取时控制内存；需要严格的时间顺序时由调用方排序。
+    /// </summary>
+    Task<ReadingPage> GetReadingsPageAsync(
+        string sessionId, DateTime startTime, DateTime endTime, ReadingPageCursor? after, int limit);
+
     /// <summary>删除会话及其数据</summary>
     Task DeleteSessionAsync(string sessionId);
 
@@ -69,6 +77,18 @@ public class SessionInfo
     public string Name { get; set; } = string.Empty;
     public DateTime StartedAt { get; set; }
     public DateTime? EndedAt { get; set; }
+
+    private DateTime? _startedAtUtc, _endedAtUtc;
+
+    /// <summary>开始时刻（UTC）。存储层直接取自记录，未设置时由本地时间换算；计算时长用它，StartedAt 只用于显示。</summary>
+    public DateTime StartedAtUtc { get => _startedAtUtc ?? StartedAt.ToUniversalTime(); set => _startedAtUtc = value; }
+
+    /// <summary>结束时刻（UTC），未结束为 null；规则同 <see cref="StartedAtUtc"/>。</summary>
+    public DateTime? EndedAtUtc { get => _endedAtUtc ?? EndedAt?.ToUniversalTime(); set => _endedAtUtc = value; }
+
+    /// <summary>会话时长，按 UTC 时刻计算（跨夏令时切换不多也不少一小时）；未结束为 null。</summary>
+    public TimeSpan? Duration => EndedAtUtc is { } end ? end - StartedAtUtc : null;
+
     public SensorType SensorType { get; set; }
     /// <summary>连接时记录的标称采样率，不代表设备实际输出频率；回放使用读数时间戳。</summary>
     public double SampleRate { get; set; }
@@ -83,3 +103,13 @@ public class SessionInfo
 }
 
 public sealed record StorageWriteStatus(long SavedReadings, long PendingReadings, string? LastError);
+
+/// <summary>分页读取的续读位置：上一页最后一条的存储时间戳与 ID。</summary>
+public sealed record ReadingPageCursor(string Timestamp, long Id);
+
+/// <summary>
+/// 一页读数及续读位置；<see cref="Next"/> 为 null 表示已读完。
+/// <see cref="UtcTimestamps"/> 与 <see cref="Readings"/> 一一对应，是存储中的 UTC 时刻（未经本地时间往返），
+/// 计算经过时间时应使用它：读数的 <c>Timestamp</c> 是本地时间，跨夏令时切换时会出现虚假的跳变或回退。
+/// </summary>
+public sealed record ReadingPage(IReadOnlyList<MagnetometerReading> Readings, IReadOnlyList<DateTime> UtcTimestamps, ReadingPageCursor? Next);

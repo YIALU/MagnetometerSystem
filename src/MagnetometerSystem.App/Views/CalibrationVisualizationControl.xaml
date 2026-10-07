@@ -5,8 +5,24 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:scottplot="clr-namespace:ScottPlot.WPF;assembly=ScottPlot.WPF"
              mc:Ignorable="d"
-             d:DesignHeight="600" d:DesignWidth="900">
-    <Grid>
+             d:DesignHeight="480" d:DesignWidth="900">
+    <!-- 校正效果：三面投影、总场对比、残差分布。原始为灰色，校正后为强调色。 -->
+    <UserControl.Resources>
+        <Style x:Key="Figure" TargetType="Border">
+            <Setter Property="Background" Value="White"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource Line2Brush}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="{DynamicResource ControlRadius}"/>
+            <Setter Property="Padding" Value="6,6,6,4"/>
+            <Setter Property="Margin" Value="0,0,10,10"/>
+        </Style>
+        <Style x:Key="Caption" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Foreground" Value="{DynamicResource Ink2Brush}"/>
+            <Setter Property="Margin" Value="2,0,0,2"/>
+        </Style>
+    </UserControl.Resources>
+    <Grid Margin="0,0,-10,-10">
         <Grid.RowDefinitions>
             <RowDefinition Height="*"/>
             <RowDefinition Height="*"/>
@@ -17,29 +33,35 @@
             <ColumnDefinition Width="*"/>
         </Grid.ColumnDefinitions>
 
-        <!-- XY 投影 -->
-        <GroupBox Header="XY 平面投影" Grid.Row="0" Grid.Column="0" Margin="4">
-            <scottplot:WpfPlot x:Name="XYPlot"/>
-        </GroupBox>
-
-        <!-- XZ 投影 -->
-        <GroupBox Header="XZ 平面投影" Grid.Row="0" Grid.Column="1" Margin="4">
-            <scottplot:WpfPlot x:Name="XZPlot"/>
-        </GroupBox>
-
-        <!-- YZ 投影 -->
-        <GroupBox Header="YZ 平面投影" Grid.Row="0" Grid.Column="2" Margin="4">
-            <scottplot:WpfPlot x:Name="YZPlot"/>
-        </GroupBox>
-
-        <!-- 总场时间序列 -->
-        <GroupBox Header="总场强度对比" Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Margin="4">
-            <scottplot:WpfPlot x:Name="TotalFieldPlot"/>
-        </GroupBox>
-
-        <!-- 残差直方图 -->
-        <GroupBox Header="残差分布" Grid.Row="1" Grid.Column="2" Margin="4">
-            <scottplot:WpfPlot x:Name="ResidualPlot"/>
-        </GroupBox>
+        <Border Style="{StaticResource Figure}">
+            <DockPanel>
+                <TextBlock DockPanel.Dock="Top" Style="{StaticResource Caption}" Text="XY 投影"/>
+                <scottplot:WpfPlot x:Name="XYPlot"/>
+            </DockPanel>
+        </Border>
+        <Border Grid.Column="1" Style="{StaticResource Figure}">
+            <DockPanel>
+                <TextBlock DockPanel.Dock="Top" Style="{StaticResource Caption}" Text="XZ 投影"/>
+                <scottplot:WpfPlot x:Name="XZPlot"/>
+            </DockPanel>
+        </Border>
+        <Border Grid.Column="2" Style="{StaticResource Figure}">
+            <DockPanel>
+                <TextBlock DockPanel.Dock="Top" Style="{StaticResource Caption}" Text="YZ 投影"/>
+                <scottplot:WpfPlot x:Name="YZPlot"/>
+            </DockPanel>
+        </Border>
+        <Border Grid.Row="1" Grid.ColumnSpan="2" Style="{StaticResource Figure}">
+            <DockPanel>
+                <TextBlock DockPanel.Dock="Top" Style="{StaticResource Caption}" Text="总场对比（按样本）"/>
+                <scottplot:WpfPlot x:Name="TotalFieldPlot"/>
+            </DockPanel>
+        </Border>
+        <Border Grid.Row="1" Grid.Column="2" Style="{StaticResource Figure}">
+            <DockPanel>
+                <TextBlock DockPanel.Dock="Top" Style="{StaticResource Caption}" Text="残差分布"/>
+                <scottplot:WpfPlot x:Name="ResidualPlot"/>
+            </DockPanel>
+        </Border>
     </Grid>
 </UserControl>

@@ -10,12 +10,18 @@ namespace MagnetometerSystem.App.Views;
 /// <summary>
 /// 校正可视化 UserControl。
 /// 显示正交度校正前后数据的对比：三面投影散点图、总场时间序列、残差直方图。
-/// 可嵌入正交度校正向导的 Step 4（查看结果）。
+/// 嵌入正交度校正向导的第 3 步（计算与结果）。
 /// </summary>
 public partial class CalibrationVisualizationControl : UserControl
 {
     /// <summary>降采样阈值：超过此数量的数据点将进行均匀抽样</summary>
     private const int DownsampleThreshold = 5000;
+
+    // 配色：原始为中性灰，校正后取校验过的 8 色中的蓝；参考线用墨灰虚线，均值用橙。红色只留给错误。
+    private static readonly Color RawColor = Color.FromHex("#9AA6A1");
+    private static readonly Color CorrectedColor = Color.FromHex("#2A78D6");
+    private static readonly Color ReferenceColor = Color.FromHex("#66726E");
+    private static readonly Color MeanColor = Color.FromHex("#EB6834");
 
     #region Dependency Properties
 
@@ -35,6 +41,7 @@ public partial class CalibrationVisualizationControl : UserControl
             typeof(CalibrationVisualizationControl),
             new PropertyMetadata(null, OnDataChanged));
 
+    /// <summary>数据单位（来自协议通道），用于坐标轴标签。</summary>
     public static readonly DependencyProperty UnitProperty = DependencyProperty.Register(
         nameof(Unit), typeof(string), typeof(CalibrationVisualizationControl), new PropertyMetadata("", OnDataChanged));
     public string Unit
@@ -43,7 +50,7 @@ public partial class CalibrationVisualizationControl : UserControl
         set => SetValue(UnitProperty, value);
     }
 
-    /// <summary>参考场强（与数据同单位）</summary>
+    /// <summary>参考场强（与数据同单位）；不大于 0 时用校正后总场的均值（与计算器的残差定义一致）。</summary>
     public static readonly DependencyProperty ReferenceFieldStrengthProperty =
         DependencyProperty.Register(
             nameof(ReferenceFieldStrength),
@@ -88,16 +95,13 @@ public partial class CalibrationVisualizationControl : UserControl
     public CalibrationVisualizationControl()
     {
         InitializeComponent();
-        Loaded += OnLoaded;
-    }
-
-    private void OnLoaded(object sender, RoutedEventArgs e)
-    {
-        ChartFontHelper.Apply(XYPlot.Plot);
-        ChartFontHelper.Apply(XZPlot.Plot);
-        ChartFontHelper.Apply(YZPlot.Plot);
-        ChartFontHelper.Apply(TotalFieldPlot.Plot);
-        ChartFontHelper.Apply(ResidualPlot.Plot);
+        foreach (var plot in new[] { XYPlot, XZPlot, YZPlot, TotalFieldPlot, ResidualPlot })
+        {
+            ChartFontHelper.Apply(plot.Plot);
+            plot.Plot.Axes.Left.TickLabelStyle.FontSize = 11;
+            plot.Plot.Axes.Bottom.TickLabelStyle.FontSize = 11;
+            plot.Plot.Legend.FontSize = 11;
+        }
     }
 
     private static void OnDataChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
@@ -116,21 +120,36 @@ public partial class CalibrationVisualizationControl : UserControl
         if (RawData == null || CorrectedData == null)
             return;
 
-        if (RawData.GetLength(1) < 3 || CorrectedData.GetLength(1) < 3)
+        if (RawData.GetLength(1) < 3 || CorrectedData.GetLength(1) < 3 || RawData.GetLength(0) == 0
+            || RawData.GetLength(0) != CorrectedData.GetLength(0))
             return;
 
-        UpdateProjectionPlot(XYPlot, 0, 1, $"Bx ({Unit})", $"By ({Unit})");
-        UpdateProjectionPlot(XZPlot, 0, 2, $"Bx ({Unit})", $"Bz ({Unit})");
-        UpdateProjectionPlot(YZPlot, 1, 2, $"By ({Unit})", $"Bz ({Unit})");
-        UpdateTotalFieldPlot();
-        UpdateResidualHistogram();
+        var reference = ResolveReference();
+        UpdateProjectionPlot(XYPlot, 0, 1, $"Bx ({Unit})", $"By ({Unit})", reference, showLegend: true);
+        UpdateProjectionPlot(XZPlot, 0, 2, $"Bx ({Unit})", $"Bz ({Unit})", reference, showLegend: false);
+        UpdateProjectionPlot(YZPlot, 1, 2, $"By ({Unit})", $"Bz ({Unit})", reference, showLegend: false);
+        UpdateTotalFieldPlot(reference);
+        UpdateResidualHistogram(reference);
+    }
+
+    private static double Magnitude(double[,] data, int i) =>
+        Math.Sqrt(data[i, 0] * data[i, 0] + data[i, 1] * data[i, 1] + data[i, 2] * data[i, 2]);
+
+    /// <summary>参考场强：显式给定时用给定值，否则用校正后总场均值。</summary>
+    private double ResolveReference()
+    {
+        if (ReferenceFieldStrength > 0) return ReferenceFieldStrength;
+        int n = CorrectedData!.GetLength(0);
+        double sum = 0;
+        for (int i = 0; i < n; i++) sum += Magnitude(CorrectedData, i);
+        return sum / n;
     }
 
     /// <summary>
     /// 更新一个投影散点图（XY / XZ / YZ）
     /// </summary>
     private void UpdateProjectionPlot(WpfPlot wpfPlot, int axisA, int axisB,
-        string xLabel, string yLabel)
+        string xLabel, string yLabel, double reference, bool showLegend)
     {
         var plot = wpfPlot.Plot;
         plot.Clear();
@@ -139,38 +158,31 @@ public partial class CalibrationVisualizationControl : UserControl
         var indices = GetDownsampleIndices(n);
         int count = indices.Length;
 
-        // 原始数据 - 红色半透明散点
         var rawX = new double[count];
         var rawY = new double[count];
-        for (int i = 0; i < count; i++)
-        {
-            int idx = indices[i];
-            rawX[i] = RawData[idx, axisA];
-            rawY[i] = RawData[idx, axisB];
-        }
-
-        var rawScatter = plot.Add.ScatterPoints(rawX, rawY);
-        rawScatter.Color = Colors.Red.WithAlpha(100);
-        rawScatter.MarkerSize = 3;
-        rawScatter.LegendText = "原始数据";
-
-        // 校正数据 - 蓝色半透明散点
         var corX = new double[count];
         var corY = new double[count];
         for (int i = 0; i < count; i++)
         {
             int idx = indices[i];
+            rawX[i] = RawData[idx, axisA];
+            rawY[i] = RawData[idx, axisB];
             corX[i] = CorrectedData![idx, axisA];
             corY[i] = CorrectedData[idx, axisB];
         }
 
-        var corScatter = plot.Add.ScatterPoints(corX, corY);
-        corScatter.Color = Colors.Blue.WithAlpha(150);
-        corScatter.MarkerSize = 3;
-        corScatter.LegendText = "校正数据";
+        var rawScatter = plot.Add.ScatterPoints(rawX, rawY);
+        rawScatter.Color = RawColor.WithAlpha(170);
+        rawScatter.MarkerSize = 3;
+        rawScatter.LegendText = "原始";
 
-        // 参考圆 - 灰色虚线
-        if (ReferenceFieldStrength > 0)
+        var corScatter = plot.Add.ScatterPoints(corX, corY);
+        corScatter.Color = CorrectedColor.WithAlpha(200);
+        corScatter.MarkerSize = 3;
+        corScatter.LegendText = "校正后";
+
+        // 参考圆：校正后的点应落在以原点为圆心、半径为参考场强的圆附近
+        if (reference > 0 && double.IsFinite(reference))
         {
             const int circlePoints = 361;
             var circleX = new double[circlePoints];
@@ -178,22 +190,22 @@ public partial class CalibrationVisualizationControl : UserControl
             for (int i = 0; i < circlePoints; i++)
             {
                 double angle = i * Math.PI / 180.0;
-                circleX[i] = ReferenceFieldStrength * Math.Cos(angle);
-                circleY[i] = ReferenceFieldStrength * Math.Sin(angle);
+                circleX[i] = reference * Math.Cos(angle);
+                circleY[i] = reference * Math.Sin(angle);
             }
 
             var circle = plot.Add.ScatterLine(circleX, circleY);
-            circle.Color = Colors.Gray;
+            circle.Color = ReferenceColor;
             circle.LineWidth = 1;
             circle.LinePattern = LinePattern.Dashed;
             circle.LegendText = "参考圆";
         }
 
-        // 坐标轴设置
         plot.Axes.AutoScale();
+        plot.Axes.SquareUnits();
         plot.Axes.Bottom.Label.Text = xLabel;
         plot.Axes.Left.Label.Text = yLabel;
-        plot.Legend.IsVisible = true;
+        plot.Legend.IsVisible = showLegend;
 
         wpfPlot.Refresh();
     }
@@ -201,30 +213,12 @@ public partial class CalibrationVisualizationControl : UserControl
     /// <summary>
     /// 更新总场时间序列对比图
     /// </summary>
-    private void UpdateTotalFieldPlot()
+    private void UpdateTotalFieldPlot(double reference)
     {
         var plot = TotalFieldPlot.Plot;
         plot.Clear();
 
         int n = RawData!.GetLength(0);
-        var rawTotal = new double[n];
-        var corTotal = new double[n];
-        var indices = new double[n];
-
-        for (int i = 0; i < n; i++)
-        {
-            indices[i] = i;
-            rawTotal[i] = Math.Sqrt(
-                RawData[i, 0] * RawData[i, 0] +
-                RawData[i, 1] * RawData[i, 1] +
-                RawData[i, 2] * RawData[i, 2]);
-            corTotal[i] = Math.Sqrt(
-                CorrectedData![i, 0] * CorrectedData[i, 0] +
-                CorrectedData[i, 1] * CorrectedData[i, 1] +
-                CorrectedData[i, 2] * CorrectedData[i, 2]);
-        }
-
-        // 降采样
         var dsIndices = GetDownsampleIndices(n);
         var dsX = new double[dsIndices.Length];
         var dsRawY = new double[dsIndices.Length];
@@ -232,31 +226,28 @@ public partial class CalibrationVisualizationControl : UserControl
         for (int i = 0; i < dsIndices.Length; i++)
         {
             int idx = dsIndices[i];
-            dsX[i] = indices[idx];
-            dsRawY[i] = rawTotal[idx];
-            dsCorY[i] = corTotal[idx];
+            dsX[i] = idx;
+            dsRawY[i] = Magnitude(RawData, idx);
+            dsCorY[i] = Magnitude(CorrectedData!, idx);
         }
 
-        // 原始总场 - 红色折线
         var rawLine = plot.Add.ScatterLine(dsX, dsRawY);
-        rawLine.Color = Colors.Red;
-        rawLine.LineWidth = 1;
+        rawLine.Color = RawColor;
+        rawLine.LineWidth = 1.5f;
         rawLine.LegendText = "原始总场";
 
-        // 校正总场 - 蓝色折线
         var corLine = plot.Add.ScatterLine(dsX, dsCorY);
-        corLine.Color = Colors.Blue;
-        corLine.LineWidth = 1;
-        corLine.LegendText = "校正总场";
+        corLine.Color = CorrectedColor;
+        corLine.LineWidth = 1.5f;
+        corLine.LegendText = "校正后总场";
 
-        // 参考场强 - 绿色虚线水平线
-        if (ReferenceFieldStrength > 0)
+        if (reference > 0 && double.IsFinite(reference))
         {
-            var refLine = plot.Add.HorizontalLine(ReferenceFieldStrength);
-            refLine.Color = Colors.Green;
+            var refLine = plot.Add.HorizontalLine(reference);
+            refLine.Color = ReferenceColor;
             refLine.LinePattern = LinePattern.Dashed;
             refLine.LineWidth = 1;
-            refLine.LegendText = "参考场强";
+            refLine.LegendText = ReferenceFieldStrength > 0 ? "参考场强" : "校正后均值";
         }
 
         plot.Axes.AutoScale();
@@ -268,9 +259,9 @@ public partial class CalibrationVisualizationControl : UserControl
     }
 
     /// <summary>
-    /// 更新残差分布直方图
+    /// 更新残差分布直方图：残差 = 校正后总场 − 参考场强。
     /// </summary>
-    private void UpdateResidualHistogram()
+    private void UpdateResidualHistogram(double reference)
     {
         var plot = ResidualPlot.Plot;
         plot.Clear();
@@ -278,73 +269,41 @@ public partial class CalibrationVisualizationControl : UserControl
         int n = CorrectedData!.GetLength(0);
         var residuals = new double[n];
         for (int i = 0; i < n; i++)
-        {
-            double total = Math.Sqrt(
-                CorrectedData[i, 0] * CorrectedData[i, 0] +
-                CorrectedData[i, 1] * CorrectedData[i, 1] +
-                CorrectedData[i, 2] * CorrectedData[i, 2]);
-            residuals[i] = total - ReferenceFieldStrength;
-        }
+            residuals[i] = Magnitude(CorrectedData, i) - reference;
 
-        // 手动计算直方图 bin
         const int binCount = 25;
-        double minVal = residuals[0], maxVal = residuals[0];
-        double sum = 0;
-        for (int i = 0; i < n; i++)
-        {
-            if (residuals[i] < minVal) minVal = residuals[i];
-            if (residuals[i] > maxVal) maxVal = residuals[i];
-            sum += residuals[i];
-        }
-
-        double mean = sum / n;
+        double minVal = residuals.Min(), maxVal = residuals.Max();
+        double mean = residuals.Average();
         double range = maxVal - minVal;
         if (range < 1e-10) range = 1.0;
 
         double binWidth = range / binCount;
         var binCenters = new double[binCount];
         var binCounts = new double[binCount];
-
         for (int i = 0; i < binCount; i++)
-        {
             binCenters[i] = minVal + (i + 0.5) * binWidth;
-        }
-
-        for (int i = 0; i < n; i++)
+        foreach (var r in residuals)
         {
-            int bin = (int)((residuals[i] - minVal) / binWidth);
-            if (bin >= binCount) bin = binCount - 1;
-            if (bin < 0) bin = 0;
+            int bin = Math.Clamp((int)((r - minVal) / binWidth), 0, binCount - 1);
             binCounts[bin]++;
         }
 
-        // 用 ScatterLine 模拟柱状图（阶梯线）
-        // 每个 bin 用 4 个点画矩形顶部
-        var barX = new List<double>();
-        var barY = new List<double>();
-        for (int i = 0; i < binCount; i++)
+        var bars = plot.Add.Bars(binCenters, binCounts);
+        bars.Color = CorrectedColor.WithAlpha(210);
+        foreach (var bar in bars.Bars)
         {
-            double left = minVal + i * binWidth;
-            double right = left + binWidth;
-            barX.Add(left);
-            barY.Add(binCounts[i]);
-            barX.Add(right);
-            barY.Add(binCounts[i]);
+            bar.Size = binWidth * 0.85;
+            bar.LineWidth = 0;
         }
 
-        var bars = plot.Add.ScatterLine(barX.ToArray(), barY.ToArray());
-        bars.Color = Colors.Blue;
-        bars.LineWidth = 2;
-        bars.LegendText = "残差分布";
-
-        // 均值标注线
         var meanLine = plot.Add.VerticalLine(mean);
-        meanLine.Color = Colors.Red;
+        meanLine.Color = MeanColor;
         meanLine.LinePattern = LinePattern.Dashed;
         meanLine.LineWidth = 1;
-        meanLine.LegendText = $"均值: {mean:F2} {Unit}";
+        meanLine.LegendText = $"均值 {mean:F2}";
 
         plot.Axes.AutoScale();
+        plot.Axes.Margins(bottom: 0);
         plot.Axes.Bottom.Label.Text = $"残差 ({Unit})";
         plot.Axes.Left.Label.Text = "频次";
         plot.Legend.IsVisible = true;

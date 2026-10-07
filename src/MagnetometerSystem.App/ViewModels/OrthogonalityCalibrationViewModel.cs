@@ -17,6 +17,43 @@ namespace MagnetometerSystem.App.ViewModels;
 /// </summary>
 public enum CalibrationCollectionMode { Continuous, Manual48 }
 
+/// <summary>第 2 步的数据来源：实时读数、外部文件或已保存会话。</summary>
+public enum CalibrationDataSource { Live, File, Session }
+
+/// <summary>结果页一组三轴的显示数据：评级、矩阵、偏移、残差和可视化用的样本。数值单位与拟合数据一致。</summary>
+public sealed class OrthoGroupResult(OrthogonalityResult result, double[,] rawData, double[,] correctedData)
+{
+    public FitQuality Quality { get; } = result.Quality;
+    public double[,] RawData { get; } = rawData;
+    public double[,] CorrectedData { get; } = correctedData;
+
+    /// <summary>拟合数据的磁场单位（nT / uT / mT / T）。</summary>
+    public string Unit { get; } = OrthogonalityParams.CanonicalUnit(result.Parameters.Unit);
+
+    /// <summary>按行排列的补偿矩阵 M（3×3）。</summary>
+    public string[] Matrix { get; } = result.Parameters.CompensationMatrix.Select(v => v.ToString("F6", CultureInfo.InvariantCulture)).ToArray();
+
+    /// <summary>偏移 O（X / Y / Z），与数据同单位。</summary>
+    public string[] Offset { get; } = result.Parameters.Offset.Select(v => v.ToString("G6", CultureInfo.InvariantCulture)).ToArray();
+
+    /// <summary>残差标准差折算到 nT 后分级；阈值与旧版一致，任何单位下物理含义相同。</summary>
+    public string Rating => OrthogonalityCalibrationViewModel.RateQuality(result);
+
+    private double ResidualNt => OrthogonalityCalibrationViewModel.ResidualStdInNt(result);
+
+    /// <summary>评级对应的状态色：ok / warn / err。</summary>
+    public string Level => ResidualNt switch { < 50 => "ok", < 200 => "warn", _ => "err" };
+
+    public string RatingHint => ResidualNt switch
+    {
+        < 10 => "残差标准差低于 10 nT",
+        < 50 => "残差标准差低于 50 nT",
+        < 200 => "残差标准差低于 200 nT，建议增加姿态覆盖后重算",
+        double.NaN => "单位未知，不能评级",
+        _ => "残差标准差不低于 200 nT，建议检查数据后重新采集",
+    };
+}
+
 public partial class OrthogonalityCalibrationViewModel : ObservableObject
 {
     private readonly IOrthogonalityService _orthogonalityService;
@@ -29,32 +66,35 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
     private int _collectedChannelCount;
     private long _collectedGeneration;
 
+    /// <summary>导入 CSV 时数值的磁场单位（不自动猜测或换算）；实时采集与会话导入按协议通道单位自动设置。</summary>
     [ObservableProperty] private string _fittingUnit = "";
     public string[] FittingUnits { get; } = ["nT", "uT", "mT", "T"];
     public string CollectedUnit => _collectedUnit;
     public string ReferenceUnit => _collectedUnit.Length > 0 ? _collectedUnit : FittingUnit;
+    /// <summary>参考场强的单位文字（标题与输入框后缀共用）；单位未知时提示待定。</summary>
+    public string ReferenceUnitText => ReferenceUnit.Length > 0 ? ReferenceUnit : "单位待定";
     partial void OnFittingUnitChanged(string? oldValue, string newValue)
     {
         if (_collectedUnit.Length == 0 && OrthogonalityParams.CanonicalUnit(oldValue) != OrthogonalityParams.CanonicalUnit(newValue))
             ReferenceFieldStrength = null;
-        OnPropertyChanged(nameof(ReferenceUnit));
+        OnPropertyChanged(nameof(ReferenceUnit)); OnPropertyChanged(nameof(ReferenceUnitText));
     }
 
+    /// <summary>换一批拟合数据：记录单位与通道数，清掉上一批的结果，旧批次的回调不能混入。</summary>
     private void SetCollectedUnit(string unit, int channelCount)
     {
         if (OrthogonalityParams.CanonicalUnit(ReferenceUnit) != unit) ReferenceFieldStrength = null;
-        _collectedGeneration++;
+        Interlocked.Increment(ref _collectedGeneration);
         _collectedUnit = unit;
         _collectedChannelCount = channelCount;
         FittingUnit = unit;
         CalculationResult = null;
         SecondCalculationResult = null;
+        FirstGroupResult = SecondGroupResult = null;
         SavedProfile = null;
         SavedSecondProfile = null;
-        VisualizationRawData = null;
-        VisualizationCorrectedData = null;
         OnPropertyChanged(nameof(CollectedUnit));
-        OnPropertyChanged(nameof(ReferenceUnit));
+        OnPropertyChanged(nameof(ReferenceUnit)); OnPropertyChanged(nameof(ReferenceUnitText));
     }
 
     private static string SourceUnit(IReadOnlyList<string> units, int requiredChannels, int? channelCount = null)
@@ -67,9 +107,16 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         return selected[0];
     }
 
-    // 手动模式：保留最近 10 条读数用于记录点时求均值
+    // 手动模式：保留最近 10 条读数用于记录点时求均值。
+    // 读数在接收线程到达，记录点、统计和导入在界面线程进行：样本列表、最近读数和原始 CSV 都在 _sampleLock 内访问。
+    // 接收线程只入队并用 BeginInvoke 通知界面，不能同步等待界面线程（接收端在自己的锁内回调）。
     private readonly Queue<MagnetometerReading> _recentReadings = new(10);
+    private readonly object _sampleLock = new();
+    private readonly List<double[]> _pendingUiSamples = new();
+    private int _uiFlushPending;
     private const int RecentBufferSize = 10;
+    public const int ManualPointTarget = 48;
+    private long _lastLiveValuesTicks;
 
     // raw CSV 写入
     private StreamWriter? _rawWriter;
@@ -90,10 +137,24 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         ProfileName = $"正交度校正_{DateTime.Now:yyyyMMdd_HHmmss}";
         UpdateStepNavigation();
 
-        // 订阅左侧导航栏"记录当前点"按钮
+        // 订阅链路条上的"记录当前点"按钮（任何页面都能记录）
         _dataBus.ManualOrthoRecordRequested += OnManualOrthoRecordRequested;
 
+        _isDeviceConnected = dataBus.CurrentConnection != null;
+        _dataBus.ConnectionChanged += OnConnectionChanged;
+
         // 已保存配置延迟加载
+    }
+
+    /// <summary>实时数据来源需要已连接的设备；未连接时向导给出提示。</summary>
+    [ObservableProperty]
+    private bool _isDeviceConnected;
+
+    private void OnConnectionChanged(Core.Communication.IDeviceConnection? connection)
+    {
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher == null || dispatcher.CheckAccess()) IsDeviceConnected = connection != null;
+        else dispatcher.BeginInvoke(() => IsDeviceConnected = connection != null);
     }
 
     private void OnManualOrthoRecordRequested()
@@ -116,7 +177,16 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
     private ObservableCollection<OrthogonalityParams> _savedProfiles = new();
 
     [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(DeleteSavedProfileCommand))]
+    [NotifyCanExecuteChangedFor(nameof(ExportSelectedProfileJsonCommand))]
+    [NotifyCanExecuteChangedFor(nameof(ExportSelectedProfileCsvCommand))]
     private OrthogonalityParams? _selectedSavedProfile;
+
+    private bool HasSelectedSavedProfile() => SelectedSavedProfile != null;
+
+    /// <summary>配置库的加载 / 删除结果；失败时显示原因，不只写日志。</summary>
+    [ObservableProperty]
+    private string _libraryStatus = string.Empty;
 
     [RelayCommand]
     private async Task LoadSavedProfilesAsync()
@@ -127,33 +197,33 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
             SavedProfiles.Clear();
             foreach (var p in profiles)
                 SavedProfiles.Add(p);
+            LibraryStatus = string.Empty;
         }
         catch (Exception ex)
         {
             System.Diagnostics.Trace.TraceError($"加载校正配置列表失败: {ex.Message}");
+            LibraryStatus = $"加载配置列表失败：{ex.Message}";
         }
     }
 
-    [RelayCommand]
-    private void LoadSelectedProfile()
+    [RelayCommand(CanExecute = nameof(HasSelectedSavedProfile))]
+    private async Task DeleteSavedProfileAsync()
     {
-        if (SelectedSavedProfile == null) return;
-        SavedProfile = SelectedSavedProfile;
-        SaveStatus = $"已加载配置: {SelectedSavedProfile.Name}";
-    }
-
-    [RelayCommand]
-    private async Task DeleteSavedProfileAsync(OrthogonalityParams? profile)
-    {
-        if (profile == null) return;
+        if (SelectedSavedProfile is not { } profile) return;
+        var confirm = System.Windows.MessageBox.Show(
+            $"确定要删除正交度配置“{profile.Name}”吗？此操作不能撤销。",
+            "确认删除", System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Warning);
+        if (confirm != System.Windows.MessageBoxResult.Yes) return;
         try
         {
             await _calibrationRepository.DeleteOrthogonalityProfileAsync(profile.Id);
             SavedProfiles.Remove(profile);
+            LibraryStatus = $"已删除“{profile.Name}”";
         }
         catch (Exception ex)
         {
             System.Diagnostics.Trace.TraceError($"删除配置失败: {ex.Message}");
+            LibraryStatus = $"删除失败：{ex.Message}";
         }
     }
 
@@ -182,7 +252,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         // Step 2 → Step 3：执行校验（仅展示警告，不阻止）
         if (CurrentStep == 2)
         {
-            var validation = CalibrationDataValidator.Validate(_collectedData, _collectedUnit);
+            var validation = CalibrationDataValidator.Validate(SnapshotSamples(), _collectedUnit);
             DataValidation = validation;
             HasValidationWarnings = validation.Warnings.Count > 0;
 
@@ -221,12 +291,37 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
             4 => false, // 最后一步无下一步
             _ => false
         };
+        OnPropertyChanged(nameof(StepGateText));
     }
+
+    /// <summary>底部说明：进入下一步需要满足什么条件，当前是否满足。</summary>
+    public string StepGateText => CurrentStep switch
+    {
+        1 => CanGoNext ? "已选择传感器类型" : "请选择单三轴或双三轴磁通门",
+        2 when IsCollecting => "先结束采集，再进入下一步",
+        2 => CollectedSampleCount >= 3 ? $"至少需要 3 个样本，已有 {CollectedSampleCount:N0} 个" : $"至少需要 3 个样本，当前 {CollectedSampleCount:N0} 个",
+        3 when CanGoNext => "计算完成，可以保存",
+        3 when IsDualSensor => "两组都计算成功后可继续",
+        3 => "计算成功后可继续",
+        _ => "",
+    };
+
+    public bool IsDualSensor => SelectedSensorType == SensorType.DualTriaxialFluxgate;
+
+    /// <summary>步骤条右侧的摘要，例如“双三轴磁通门 · FG-A-0217”。</summary>
+    public string SensorSummary => SelectedSensorType switch
+    {
+        SensorType.TriaxialFluxgate => "单三轴磁通门",
+        SensorType.DualTriaxialFluxgate => "双三轴磁通门",
+        _ => "未选择传感器",
+    } + (string.IsNullOrWhiteSpace(SensorSerial) ? "" : $" · {SensorSerial}");
+
+    partial void OnSensorSerialChanged(string value) => OnPropertyChanged(nameof(SensorSummary));
 
     // ========== Step 1 - 选择传感器 ==========
 
     [ObservableProperty]
-    private SensorType _selectedSensorType;
+    private SensorType _selectedSensorType = SensorType.TriaxialFluxgate;
 
     [ObservableProperty]
     private string _sensorSerial = string.Empty;
@@ -242,6 +337,9 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
 
     partial void OnSelectedSensorTypeChanged(SensorType value)
     {
+        OnPropertyChanged(nameof(IsDualSensor));
+        OnPropertyChanged(nameof(SensorSummary));
+        if (value != SensorType.DualTriaxialFluxgate) SelectedResultGroup = 0;
         UpdateStepNavigation();
     }
 
@@ -276,6 +374,9 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
 
     /// <summary>是否处于手动模式（供 XAML DataTrigger 使用）</summary>
     public bool IsManualMode => SelectedMode == CalibrationCollectionMode.Manual48;
+
+    /// <summary>手动采集的缓冲就绪状态（链路条与本页“记录当前点”按钮共用）。</summary>
+    public ManualOrthoState ManualState => _dataBus.ManualOrthoState;
     partial void OnSelectedModeChanged(CalibrationCollectionMode value)
     {
         OnPropertyChanged(nameof(IsManualMode));
@@ -283,9 +384,23 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
     }
     public bool IsContinuousMode => SelectedMode == CalibrationCollectionMode.Continuous;
 
+    /// <summary>数据来源只决定第 2 步显示哪组操作；三种来源都填充同一份样本。</summary>
+    [ObservableProperty]
+    private CalibrationDataSource _dataSource = CalibrationDataSource.Live;
+
+    /// <summary>手动 48 点的格子：已记录为 "on"，下一个为 "next"，其余为空。</summary>
+    public IReadOnlyList<string> ManualPointSlots => Enumerable.Range(0, ManualPointTarget)
+        .Select(i => i < CollectedSampleCount ? "on" : i == CollectedSampleCount && IsCollecting ? "next" : "")
+        .ToArray();
+
+    /// <summary>最近一条读数的前三个（双三轴为六个）通道值，约每 0.2 秒更新一次。</summary>
+    [ObservableProperty]
+    private string _liveValuesText = "—";
+
     [RelayCommand]
     private void StartCollecting()
     {
+        // 拟合数据的单位来自当前连接的协议通道；未连接、回放中或通道布局不符时不开始。
         try
         {
             if (_dataBus.CurrentConnection == null || _dataBus.IsPlaybackMode)
@@ -294,15 +409,19 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
             SetCollectedUnit(SourceUnit(_dataBus.AcquisitionChannelUnits, count), count);
         }
         catch (Exception ex) { CollectionStatus = ex.Message; return; }
-        _collectedData.Clear();
-        _collectedDataSecondGroup.Clear();
+        lock (_sampleLock)
+        {
+            _collectedData.Clear();
+            _collectedDataSecondGroup.Clear();
+        }
         CollectedData.Clear();
-        _recentReadings.Clear();
+        lock (_sampleLock) _recentReadings.Clear();
         CollectedSampleCount = 0;
         SphericityCoverage = 0;
+        LiveValuesText = "—";
         CollectionStatus = SelectedMode == CalibrationCollectionMode.Manual48
-            ? "已开启手动模式：请回到 [实时采集] 页面，旋转传感器到 48 个方位，每个稳定位置点击导航栏【记录当前点】"
-            : "采集中（连续模式）...";
+            ? "手动模式：把传感器转到一个稳定方位，点「记录当前点」（这里或顶部链路条都可以）。建议 48 个方位在球面上均匀分布。"
+            : "采集中（连续模式）：缓慢旋转传感器，尽量覆盖所有方位。";
         IsCollecting = true;
 
         DataValidation = null;
@@ -313,7 +432,8 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
 
         if (SelectedMode == CalibrationCollectionMode.Manual48)
         {
-            _dataBus.ManualOrthoState.Update(true, 0, _rawFilePath, "等待数据缓冲...", false);
+            lock (_sampleLock) _manualPublishing = true;
+            PublishManualState(0, "等待数据缓冲...", false);
         }
 
         _dataBus.ReadingReceived += OnCalibrationDataReceived;
@@ -322,49 +442,96 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
 
     private void OnCalibrationDataReceived(MagnetometerReading reading)
     {
-        var generation = Volatile.Read(ref _collectedGeneration);
-        var sourceUnits = _dataBus.AcquisitionChannelUnits;
-        void AcceptReading()
+        // 连接通道单位或数量与开始采集时不同：不混入这批数据，在界面线程停止采集。
+        var generation = Interlocked.Read(ref _collectedGeneration);
+        string? unitProblem = null;
+        try
         {
-            if (generation != _collectedGeneration || !IsCollecting) return;
-            try
-            {
-                if (SourceUnit(sourceUnits, _collectedChannelCount, reading.ChannelValues.Length) != _collectedUnit)
-                    throw new ArgumentException("连接通道单位已改变，请重新开始拟合数据采集。");
-            }
-            catch (Exception ex)
-            {
-                StopCollecting();
-                CollectionStatus = ex.Message;
-                return;
-            }
-            if (_recentReadings.Count >= RecentBufferSize) _recentReadings.Dequeue();
-            _recentReadings.Enqueue(reading);
-            if (SelectedMode == CalibrationCollectionMode.Manual48)
-            {
-                bool enough = _recentReadings.Count >= RecentBufferSize;
-                _dataBus.ManualOrthoState.Update(true, _collectedData.Count, _rawFilePath,
-                    enough ? "缓冲就绪，可以记录" : $"缓冲中 ({_recentReadings.Count}/{RecentBufferSize})", enough);
-                return;
-            }
-            double[] sample1 = [reading.ChannelValues[0], reading.ChannelValues[1], reading.ChannelValues[2]];
-            _collectedData.Add(sample1);
-            if (_collectedChannelCount == 6)
-                _collectedDataSecondGroup.Add([reading.ChannelValues[3], reading.ChannelValues[4], reading.ChannelValues[5]]);
-            AppendRawPoint(reading);
-            CollectedData.Add(sample1);
-            CollectedSampleCount = _collectedData.Count;
-            if (_collectedData.Count % 50 == 0)
-            {
-                UpdateCoverageEstimate();
-                RunDataValidation();
-            }
-            UpdateStepNavigation();
+            if (SourceUnit(_dataBus.AcquisitionChannelUnits, _collectedChannelCount, reading.ChannelValues.Length) != _collectedUnit)
+                unitProblem = "连接通道单位已改变，请重新开始拟合数据采集。";
         }
-        // Keep dataset and UI mutations together; queued callbacks from an older dataset cannot mix units.
-        if (System.Windows.Application.Current?.Dispatcher is { } dispatcher && !dispatcher.CheckAccess())
-            dispatcher.Invoke(AcceptReading);
-        else AcceptReading();
+        catch (Exception ex) { unitProblem = ex.Message; }
+        if (unitProblem != null)
+        {
+            RunOnUi(() =>
+            {
+                if (generation != Interlocked.Read(ref _collectedGeneration) || !IsCollecting) return;
+                StopCollecting();
+                CollectionStatus = unitProblem;
+            });
+            return;
+        }
+
+        // 任何模式都先维护"最近 10 条"队列
+        int buffered;
+        lock (_sampleLock)
+        {
+            if (generation != Interlocked.Read(ref _collectedGeneration)) return;
+            if (_recentReadings.Count >= RecentBufferSize)
+                _recentReadings.Dequeue();
+            _recentReadings.Enqueue(reading);
+            buffered = _recentReadings.Count;
+        }
+        PublishLiveValues(reading);
+
+        if (SelectedMode == CalibrationCollectionMode.Manual48)
+        {
+            // 手动模式：仅保持队列，不入 _collectedData；更新缓冲就绪状态
+            bool enough = buffered >= RecentBufferSize;
+            PublishManualState(_collectedData.Count,
+                enough ? "缓冲就绪，可以记录" : $"缓冲中 ({buffered}/{RecentBufferSize})",
+                enough, generation);
+            return;
+        }
+
+        // 连续模式：每条读数取前三个（双三轴为六个）通道作为样本
+        bool dual = _collectedChannelCount == 6;
+        var v = reading.ChannelValues;
+        var sample1 = new[] { v[0], v[1], v[2] };
+        lock (_sampleLock)
+        {
+            if (!IsCollecting || generation != Interlocked.Read(ref _collectedGeneration)) return;
+            _collectedData.Add(sample1);
+            if (dual) _collectedDataSecondGroup.Add(new[] { v[3], v[4], v[5] });
+            _pendingUiSamples.Add(sample1);
+            AppendRawPoint(reading);
+        }
+
+        if (Interlocked.Exchange(ref _uiFlushPending, 1) == 0)
+        {
+            var dispatcher = System.Windows.Application.Current?.Dispatcher;
+            if (dispatcher == null || dispatcher.CheckAccess()) FlushPendingSamples();
+            else dispatcher.BeginInvoke(FlushPendingSamples, System.Windows.Threading.DispatcherPriority.Background);
+        }
+    }
+
+    /// <summary>界面线程：把接收线程新增的样本并入显示集合，并按 50 个样本一次更新覆盖度与校验。</summary>
+    private void FlushPendingSamples()
+    {
+        double[][] added;
+        int count;
+        lock (_sampleLock)
+        {
+            added = _pendingUiSamples.ToArray();
+            _pendingUiSamples.Clear();
+            count = _collectedData.Count;
+            Interlocked.Exchange(ref _uiFlushPending, 0);
+        }
+        if (added.Length == 0) return;
+        var before = CollectedSampleCount;
+        foreach (var sample in added) CollectedData.Add(sample);
+        CollectedSampleCount = count;
+        if (before / 50 != count / 50)
+        {
+            UpdateCoverageEstimate();
+            RunDataValidation();
+        }
+        UpdateStepNavigation();
+    }
+
+    private List<double[]> SnapshotSamples()
+    {
+        lock (_sampleLock) return _collectedData.ToList();
     }
 
     private void UpdateCoverageEstimate()
@@ -372,22 +539,24 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         const int nLon = 12;
         const int nLat = 6;
         var covered = new bool[nLon, nLat];
+        var samples = SnapshotSamples();
 
         double cx = 0, cy = 0, cz = 0;
-        int n = _collectedData.Count;
+        int n = samples.Count;
+        if (n == 0) { SphericityCoverage = 0; return; }
         for (int i = 0; i < n; i++)
         {
-            cx += _collectedData[i][0];
-            cy += _collectedData[i][1];
-            cz += _collectedData[i][2];
+            cx += samples[i][0];
+            cy += samples[i][1];
+            cz += samples[i][2];
         }
         cx /= n; cy /= n; cz /= n;
 
         for (int i = 0; i < n; i++)
         {
-            double dx = _collectedData[i][0] - cx;
-            double dy = _collectedData[i][1] - cy;
-            double dz = _collectedData[i][2] - cz;
+            double dx = samples[i][0] - cx;
+            double dy = samples[i][1] - cy;
+            double dz = samples[i][2] - cz;
             double r = Math.Sqrt(dx * dx + dy * dy + dz * dz);
             if (r < 1e-10) continue;
 
@@ -415,11 +584,18 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
     {
         _dataBus.ReadingReceived -= OnCalibrationDataReceived;
         IsCollecting = false;
+        FlushPendingSamples();
         CollectionStatus = $"采集完成，共 {CollectedSampleCount} 个样本";
 
         CloseRawCsv();
-        _dataBus.ManualOrthoState.Update(false, 0, null, "", false);
+        // 退订不会取消已在进行的读数回调：与回调用同一把锁结束发布，回调不会在此之后把状态改回“采集中”。
+        lock (_sampleLock)
+        {
+            _manualPublishing = false;
+            _dataBus.ManualOrthoState.Update(false, 0, null, "", false);
+        }
 
+        UpdateCoverageEstimate();
         RunDataValidation();
         UpdateStepNavigation();
     }
@@ -431,66 +607,161 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
     private void RecordCurrentPoint()
     {
         if (SelectedMode != CalibrationCollectionMode.Manual48 || !IsCollecting) return;
-        if (_recentReadings.Count == 0)
-        {
-            CollectionStatus = "无可用读数";
-            return;
-        }
 
         bool dual = _collectedChannelCount == 6;
         int n = dual ? 6 : 3;
-
-        // 对每通道求均值
         var sums = new double[n];
-        int validCount = 0;
-        DateTime lastTs = DateTime.Now;
-        foreach (var r in _recentReadings)
+        int validCount = 0, buffered, count;
+        double[] sample1;
+        lock (_sampleLock)
         {
-            if (r.ChannelValues.Length != n) continue;
-            for (int i = 0; i < n; i++) sums[i] += r.ChannelValues[i];
-            validCount++;
-            lastTs = r.Timestamp;
-        }
-        if (validCount == 0)
-        {
-            CollectionStatus = "缓冲中无符合通道数的读数";
-            return;
-        }
-        var avg = new double[n];
-        for (int i = 0; i < n; i++) avg[i] = sums[i] / validCount;
-
-        var sample1 = new double[] { avg[0], avg[1], avg[2] };
-        _collectedData.Add(sample1);
-        if (dual)
-        {
-            var sample2 = new double[] { avg[3], avg[4], avg[5] };
-            _collectedDataSecondGroup.Add(sample2);
-        }
-
-        // 写 raw CSV
-        var avgReading = new MagnetometerReading
-        {
-            Timestamp = lastTs,
-            ChannelValues = avg,
-            SensorType = SelectedSensorType,
-        };
-        AppendRawPoint(avgReading);
-
-        System.Windows.Application.Current?.Dispatcher?.Invoke(() =>
-        {
-            CollectedData.Add(sample1);
-            CollectedSampleCount = _collectedData.Count;
-            CollectionStatus = $"已记录第 {CollectedSampleCount} 点 (基于最近 {validCount} 条均值)";
-            _dataBus.ManualOrthoState.Update(true, _collectedData.Count, _rawFilePath,
-                CollectedSampleCount >= 48 ? "已达 48 点，可以完成" : $"已记录 {CollectedSampleCount} 点",
-                _recentReadings.Count >= RecentBufferSize);
-
-            if (_collectedData.Count % 6 == 0)
+            buffered = _recentReadings.Count;
+            if (buffered == 0)
             {
-                UpdateCoverageEstimate();
-                RunDataValidation();
+                CollectionStatus = "还没有收到读数：确认设备已连接并在输出数据";
+                return;
             }
-        });
+            // 每个点承诺为最近 RecentBufferSize 条读数的均值；不足时不记录（页面按钮、链路条按钮和快捷键一致）。
+            if (buffered < RecentBufferSize)
+            {
+                CollectionStatus = $"缓冲中（{buffered}/{RecentBufferSize}），收满 {RecentBufferSize} 条读数后再记录";
+                return;
+            }
+
+            // 对每通道求均值
+            DateTime lastTs = DateTime.Now;
+            foreach (var r in _recentReadings)
+            {
+                if (r.ChannelValues.Length != n) continue;
+                for (int i = 0; i < n; i++) sums[i] += r.ChannelValues[i];
+                validCount++;
+                lastTs = r.Timestamp;
+            }
+            if (validCount < RecentBufferSize)
+            {
+                CollectionStatus = $"最近 {RecentBufferSize} 条读数中只有 {validCount} 条为 {n} 个通道，不能记录";
+                return;
+            }
+            var avg = new double[n];
+            for (int i = 0; i < n; i++) avg[i] = sums[i] / validCount;
+
+            sample1 = new[] { avg[0], avg[1], avg[2] };
+            _collectedData.Add(sample1);
+            if (dual) _collectedDataSecondGroup.Add(new[] { avg[3], avg[4], avg[5] });
+            count = _collectedData.Count;
+
+            // 写 raw CSV
+            AppendRawPoint(new MagnetometerReading { Timestamp = lastTs, ChannelValues = avg, SensorType = SelectedSensorType });
+        }
+
+        CollectedData.Add(sample1);
+        CollectedSampleCount = count;
+        CollectionStatus = $"已记录第 {count} 点（最近 {validCount} 条读数的均值）";
+        UpdateManualState(buffered);
+        if (count % 6 == 0)
+        {
+            UpdateCoverageEstimate();
+            RunDataValidation();
+        }
+    }
+
+    private bool CanEditManualPoints() => IsManualMode && IsCollecting && CollectedSampleCount > 0;
+
+    /// <summary>撤销最后一个手动点。原始 CSV 只追加一行注释，不改写已记录的行。</summary>
+    [RelayCommand(CanExecute = nameof(CanEditManualPoints))]
+    private void UndoLastPoint()
+    {
+        int count;
+        lock (_sampleLock)
+        {
+            if (_collectedData.Count == 0) return;
+            _collectedData.RemoveAt(_collectedData.Count - 1);
+            if (_collectedDataSecondGroup.Count > _collectedData.Count)
+                _collectedDataSecondGroup.RemoveAt(_collectedDataSecondGroup.Count - 1);
+            count = _collectedData.Count;
+            AppendRawComment($"已撤销第 {count + 1} 点");
+        }
+        if (CollectedData.Count > 0) CollectedData.RemoveAt(CollectedData.Count - 1);
+        CollectedSampleCount = count;
+        CollectionStatus = $"已撤销第 {count + 1} 点";
+        UpdateManualState(null);
+        UpdateCoverageEstimate();
+        RunDataValidation();
+    }
+
+    /// <summary>清空已记录的手动点，继续采集。原始 CSV 追加注释说明之前的点已作废。</summary>
+    [RelayCommand(CanExecute = nameof(CanEditManualPoints))]
+    private void ClearManualPoints()
+    {
+        int removed;
+        lock (_sampleLock)
+        {
+            removed = _collectedData.Count;
+            _collectedData.Clear();
+            _collectedDataSecondGroup.Clear();
+            AppendRawComment($"已清空之前的 {removed} 点，重新记录");
+        }
+        CollectedData.Clear();
+        CollectedSampleCount = 0;
+        SphericityCoverage = 0;
+        DataValidation = null;
+        HasValidationWarnings = false;
+        ValidationStatusText = string.Empty;
+        CollectionStatus = $"已清空 {removed} 点，可以重新记录";
+        UpdateManualState(null);
+    }
+
+    private void UpdateManualState(int? buffered)
+    {
+        int bufferCount = buffered ?? RecentBufferedCount();
+        PublishManualState(CollectedSampleCount,
+            CollectedSampleCount >= ManualPointTarget ? $"已达 {ManualPointTarget} 点，可以结束采集" : $"已记录 {CollectedSampleCount} 点",
+            bufferCount >= RecentBufferSize);
+    }
+
+    /// <summary>手动采集进行中才发布的标志；与 <see cref="StopCollecting"/> 共用 _sampleLock。</summary>
+    private bool _manualPublishing;
+
+    /// <summary>
+    /// 只在手动采集进行中（且仍是同一批数据）发布“采集中”状态。检查与发布在同一把锁内，
+    /// 停止采集之后，在途的读数回调或撤销 / 清空操作都不能把链路条状态改回采集中。
+    /// 订阅者只有界面绑定，跨线程通知由绑定异步转到界面线程，不会在锁内等待界面。
+    /// </summary>
+    private void PublishManualState(int points, string status, bool enoughBuffer, long? generation = null)
+    {
+        lock (_sampleLock)
+        {
+            if (!_manualPublishing) return;
+            if (generation is { } g && g != Interlocked.Read(ref _collectedGeneration)) return;
+            _dataBus.ManualOrthoState.Update(true, points, _rawFilePath, status, enoughBuffer);
+        }
+    }
+
+    private int RecentBufferedCount()
+    {
+        lock (_sampleLock) return _recentReadings.Count;
+    }
+
+    /// <summary>界面显示的实时值，限制在约 5 次/秒，避免每条读数都排一次界面更新。</summary>
+    private void PublishLiveValues(MagnetometerReading reading)
+    {
+        var now = DateTime.UtcNow.Ticks;
+        var last = Interlocked.Read(ref _lastLiveValuesTicks);
+        if (now - last < TimeSpan.TicksPerMillisecond * 200 || Interlocked.CompareExchange(ref _lastLiveValuesTicks, now, last) != last) return;
+        var count = Math.Min(reading.ChannelValues.Length, _collectedChannelCount == 6 ? 6 : 3);
+        var text = count == 0 ? "—" : string.Join("   ", Enumerable.Range(0, count).Select(i =>
+            $"{(i < 3 ? "XYZ"[i] : "XYZ"[i - 3])}{(count > 3 ? (i < 3 ? "1" : "2") : "")} {reading.ChannelValues[i]:0.0}"));
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher == null || dispatcher.CheckAccess()) LiveValuesText = text;
+        else dispatcher.BeginInvoke(() => { if (IsCollecting) LiveValuesText = text; });
+    }
+
+    partial void OnCollectedSampleCountChanged(int value)
+    {
+        OnPropertyChanged(nameof(ManualPointSlots));
+        UndoLastPointCommand.NotifyCanExecuteChanged();
+        ClearManualPointsCommand.NotifyCanExecuteChanged();
+        UpdateStepNavigation();
     }
 
     // ---- raw CSV 写入 ----
@@ -545,11 +816,22 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         _rawWriter.Flush();
     }
 
+    /// <summary>在原始 CSV 中追加注释行（# 开头），记录撤销 / 清空等操作。调用方持有 _sampleLock。</summary>
+    private void AppendRawComment(string text)
+    {
+        if (_rawWriter == null) return;
+        _rawWriter.WriteLine($"# {DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} {text}");
+        _rawWriter.Flush();
+    }
+
     private void CloseRawCsv()
     {
-        try { _rawWriter?.Flush(); } catch { }
-        try { _rawWriter?.Dispose(); } catch { }
-        _rawWriter = null;
+        lock (_sampleLock)
+        {
+            try { _rawWriter?.Flush(); } catch { }
+            try { _rawWriter?.Dispose(); } catch { }
+            _rawWriter = null;
+        }
     }
 
     [RelayCommand]
@@ -647,18 +929,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
                 return;
             }
 
-            if (IsCollecting) StopCollecting();
-            SetCollectedUnit(importUnit, requiredCols);
-            _collectedData.Clear();
-            _collectedDataSecondGroup.Clear();
-            CollectedData.Clear();
-            _collectedData.AddRange(importedData);
-            _collectedDataSecondGroup.AddRange(importedDataSecond);
-            foreach (var d in importedData)
-                CollectedData.Add(d);
-
-            CollectedSampleCount = _collectedData.Count;
-            IsCollecting = false;
+            ReplaceSamples(importedData, importedDataSecond, importUnit, requiredCols);
 
             string skipInfo = skippedLines > 0 ? $"（跳过 {skippedLines} 行）" : "";
             CollectionStatus = $"已从文件导入 {importedData.Count} 个样本{skipInfo}";
@@ -673,11 +944,29 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         }
     }
 
+    /// <summary>用导入的样本替换当前样本（文件或会话来源）。只在未采集时调用。</summary>
+    private void ReplaceSamples(List<double[]> first, List<double[]> second, string unit, int channelCount)
+    {
+        if (IsCollecting) StopCollecting();
+        SetCollectedUnit(unit, channelCount);
+        lock (_sampleLock)
+        {
+            _collectedData.Clear();
+            _collectedDataSecondGroup.Clear();
+            _collectedData.AddRange(first);
+            _collectedDataSecondGroup.AddRange(second);
+        }
+        CollectedData.Clear();
+        foreach (var d in first) CollectedData.Add(d);
+        CollectedSampleCount = first.Count;
+    }
+
     private void RunDataValidation()
     {
-        if (_collectedData.Count < 3) return;
+        var samples = SnapshotSamples();
+        if (samples.Count < 3) return;
 
-        var validation = CalibrationDataValidator.Validate(_collectedData, _collectedUnit);
+        var validation = CalibrationDataValidator.Validate(samples, _collectedUnit);
         DataValidation = validation;
         HasValidationWarnings = validation.Warnings.Count > 0;
 
@@ -691,13 +980,12 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         }
     }
 
-    partial void OnCollectedSampleCountChanged(int value)
-    {
-        UpdateStepNavigation();
-    }
-
     partial void OnIsCollectingChanged(bool value)
     {
+        OnPropertyChanged(nameof(ManualPointSlots));
+        UndoLastPointCommand.NotifyCanExecuteChanged();
+        ClearManualPointsCommand.NotifyCanExecuteChanged();
+        if (!value) LiveValuesText = "—";
         UpdateStepNavigation();
     }
 
@@ -707,7 +995,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
     private bool _isCalculating;
 
     [ObservableProperty]
-    private string _calculationStatus = "点击下方按钮开始计算";
+    private string _calculationStatus = "尚未计算";
 
     [ObservableProperty]
     private OrthogonalityResult? _calculationResult;
@@ -717,20 +1005,24 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
     {
         IsCalculating = true;
         CalculationStatus = "计算中...";
+        // 每次重新计算都清掉旧结果，失败时不能留下上一次的矩阵。
+        CalculationResult = null;
+        SecondCalculationResult = null;
+        FirstGroupResult = SecondGroupResult = null;
 
         try
         {
-            var generation = _collectedGeneration;
+            var generation = Interlocked.Read(ref _collectedGeneration);
             var unit = _collectedUnit;
-            CalculationResult = null;
-            SecondCalculationResult = null;
             if (unit.Length == 0) throw new ArgumentException("拟合数据单位未知，请重新采集或明确单位后导入。");
             var referenceField = ReferenceFieldStrength;
-            var rawData = ConvertToMatrix(_collectedData);
-            var rawData2 = _collectedChannelCount == 6 ? ConvertToMatrix(_collectedDataSecondGroup) : null;
+            List<double[]> first, second;
+            lock (_sampleLock) { first = _collectedData.ToList(); second = _collectedDataSecondGroup.ToList(); }
+
+            var rawData = ConvertToMatrix(first);
             var result = await Task.Run(() =>
                 _orthogonalityService.Calculate(rawData, referenceField, unit));
-            if (generation != _collectedGeneration)
+            if (generation != Interlocked.Read(ref _collectedGeneration))
             {
                 CalculationStatus = "拟合数据已更换，请重新计算。";
                 return;
@@ -739,37 +1031,41 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
             if (result.Success)
             {
                 CalculationResult = result;
+                FirstGroupResult = new OrthoGroupResult(result, rawData, ApplyAll(result, rawData));
                 CalculationStatus = "计算完成";
-
-                // Populate visualization data
-                VisualizationRawData = rawData;
-                var corrected = new double[rawData.GetLength(0), 3];
-                for (int i = 0; i < rawData.GetLength(0); i++)
-                {
-                    var c = result.Parameters.Apply(rawData[i, 0], rawData[i, 1], rawData[i, 2]);
-                    corrected[i, 0] = c[0]; corrected[i, 1] = c[1]; corrected[i, 2] = c[2];
-                }
-                VisualizationCorrectedData = corrected;
-                OnPropertyChanged(nameof(VisualizationRawData));
-                OnPropertyChanged(nameof(VisualizationCorrectedData));
             }
             else
             {
                 CalculationStatus = $"计算失败: {result.ErrorMessage}";
             }
 
-            // Run second group calculation for DualTriaxial
-            if (rawData2 != null && rawData2.GetLength(0) >= 3)
+            // 双三轴：第二组独立计算
+            if (_collectedChannelCount == 6)
             {
-                var result2 = await Task.Run(() =>
-                    _orthogonalityService.Calculate(rawData2, referenceField, unit));
-
-                if (generation != _collectedGeneration)
+                if (second.Count < 3)
                 {
-                    CalculationStatus = "拟合数据已更换，请重新计算。";
-                    return;
+                    CalculationStatus += "；第二组样本不足 3 个，未计算";
                 }
-                SecondCalculationResult = result2.Success ? result2 : null;
+                else
+                {
+                    var rawData2 = ConvertToMatrix(second);
+                    var result2 = await Task.Run(() =>
+                        _orthogonalityService.Calculate(rawData2, referenceField, unit));
+                    if (generation != Interlocked.Read(ref _collectedGeneration))
+                    {
+                        CalculationStatus = "拟合数据已更换，请重新计算。";
+                        return;
+                    }
+                    if (result2.Success)
+                    {
+                        SecondCalculationResult = result2;
+                        SecondGroupResult = new OrthoGroupResult(result2, rawData2, ApplyAll(result2, rawData2));
+                    }
+                    else
+                    {
+                        CalculationStatus += $"；第二组计算失败: {result2.ErrorMessage}";
+                    }
+                }
             }
         }
         catch (Exception ex)
@@ -781,6 +1077,17 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
             IsCalculating = false;
             UpdateStepNavigation();
         }
+    }
+
+    private static double[,] ApplyAll(OrthogonalityResult result, double[,] rawData)
+    {
+        var corrected = new double[rawData.GetLength(0), 3];
+        for (int i = 0; i < rawData.GetLength(0); i++)
+        {
+            var c = result.Parameters.Apply(rawData[i, 0], rawData[i, 1], rawData[i, 2]);
+            corrected[i, 0] = c[0]; corrected[i, 1] = c[1]; corrected[i, 2] = c[2];
+        }
+        return corrected;
     }
 
     private static double[,] ConvertToMatrix(List<double[]> data)
@@ -799,108 +1106,75 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
     partial void OnCalculationResultChanged(OrthogonalityResult? value)
     {
         OnPropertyChanged(nameof(QualityRating));
-        OnPropertyChanged(nameof(MatrixM00));
-        OnPropertyChanged(nameof(MatrixM01));
-        OnPropertyChanged(nameof(MatrixM02));
-        OnPropertyChanged(nameof(MatrixM10));
-        OnPropertyChanged(nameof(MatrixM11));
-        OnPropertyChanged(nameof(MatrixM12));
-        OnPropertyChanged(nameof(MatrixM20));
-        OnPropertyChanged(nameof(MatrixM21));
-        OnPropertyChanged(nameof(MatrixM22));
-        OnPropertyChanged(nameof(OffsetX));
-        OnPropertyChanged(nameof(OffsetY));
-        OnPropertyChanged(nameof(OffsetZ));
         UpdateStepNavigation();
     }
 
-    /// <summary>质量评级</summary>
-    public string QualityRating => RateQuality(CalculationResult);
-
-    private static string RateQuality(OrthogonalityResult? result)
+    /// <summary>从任意线程排到界面线程执行（不等待）。</summary>
+    private static void RunOnUi(Action action)
     {
-        if (result == null) return "—";
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher == null || dispatcher.CheckAccess()) action();
+        else dispatcher.BeginInvoke(action);
+    }
+
+    partial void OnSecondCalculationResultChanged(OrthogonalityResult? value)
+    {
+        OnPropertyChanged(nameof(SecondQualityRating));
+        UpdateStepNavigation();
+    }
+
+    [ObservableProperty]
+    private OrthogonalityResult? _secondCalculationResult;
+
+    /// <summary>第一组 / 第二组的结果显示数据；未计算或失败时为 null。</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(DisplayedResult))]
+    private OrthoGroupResult? _firstGroupResult;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(DisplayedResult))]
+    private OrthoGroupResult? _secondGroupResult;
+
+    /// <summary>结果页当前查看的组：0 = 第一组，1 = 第二组（仅双三轴）。</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(DisplayedResult))]
+    private int _selectedResultGroup;
+
+    public OrthoGroupResult? DisplayedResult => SelectedResultGroup == 1 ? SecondGroupResult : FirstGroupResult;
+
+    partial void OnFirstGroupResultChanged(OrthoGroupResult? value)
+    {
+        OnPropertyChanged(nameof(VisualizationRawData));
+        OnPropertyChanged(nameof(VisualizationCorrectedData));
+    }
+
+    /// <summary>第一组的可视化样本（未计算或换了拟合数据时为 null）。</summary>
+    public double[,]? VisualizationRawData => FirstGroupResult?.RawData;
+    public double[,]? VisualizationCorrectedData => FirstGroupResult?.CorrectedData;
+
+    /// <summary>质量评级（第一组 / 第二组）：残差标准差折算到 nT 后分级。</summary>
+    public string QualityRating => RateQuality(CalculationResult);
+    public string SecondQualityRating => RateQuality(SecondCalculationResult);
+
+    internal static double ResidualStdInNt(OrthogonalityResult? result)
+    {
+        if (result == null) return double.NaN;
         var scale = OrthogonalityParams.CanonicalUnit(result.Parameters.Unit) switch
         {
             "nT" => 1d, "uT" => 1e3, "mT" => 1e6, "T" => 1e9, _ => double.NaN
         };
         var residualNt = result.Quality.ResidualStd * scale;
-        if (!double.IsFinite(residualNt) || residualNt < 0) return "未知";
+        return double.IsFinite(residualNt) && residualNt >= 0 ? residualNt : double.NaN;
+    }
+
+    internal static string RateQuality(OrthogonalityResult? result)
+    {
+        if (result == null) return "—";
+        var residualNt = ResidualStdInNt(result);
+        if (double.IsNaN(residualNt)) return "未知";
         return residualNt switch { < 10 => "优秀", < 50 => "良好", < 200 => "一般", _ => "较差" };
     }
 
-    public string MatrixM00 => FormatMatrixValue(0);
-    public string MatrixM01 => FormatMatrixValue(1);
-    public string MatrixM02 => FormatMatrixValue(2);
-    public string MatrixM10 => FormatMatrixValue(3);
-    public string MatrixM11 => FormatMatrixValue(4);
-    public string MatrixM12 => FormatMatrixValue(5);
-    public string MatrixM20 => FormatMatrixValue(6);
-    public string MatrixM21 => FormatMatrixValue(7);
-    public string MatrixM22 => FormatMatrixValue(8);
-
-    private string FormatMatrixValue(int index)
-    {
-        var m = CalculationResult?.Parameters?.CompensationMatrix;
-        if (m == null || m.Length <= index) return "—";
-        return m[index].ToString("F6");
-    }
-
-    public string OffsetX => CalculationResult?.Parameters?.Offset is { Length: >= 1 } o ? o[0].ToString("G6") : "—";
-    public string OffsetY => CalculationResult?.Parameters?.Offset is { Length: >= 2 } o ? o[1].ToString("G6") : "—";
-    public string OffsetZ => CalculationResult?.Parameters?.Offset is { Length: >= 3 } o ? o[2].ToString("G6") : "—";
-
-    // ========== Visualization Data ==========
-
-    public double[,]? VisualizationRawData { get; private set; }
-    public double[,]? VisualizationCorrectedData { get; private set; }
-
-    // ========== Second Group (DualTriaxial) ==========
-
-    [ObservableProperty]
-    private OrthogonalityResult? _secondCalculationResult;
-
-    partial void OnSecondCalculationResultChanged(OrthogonalityResult? value)
-    {
-        OnPropertyChanged(nameof(SecondQualityRating));
-        OnPropertyChanged(nameof(SecondMatrixM00));
-        OnPropertyChanged(nameof(SecondMatrixM01));
-        OnPropertyChanged(nameof(SecondMatrixM02));
-        OnPropertyChanged(nameof(SecondMatrixM10));
-        OnPropertyChanged(nameof(SecondMatrixM11));
-        OnPropertyChanged(nameof(SecondMatrixM12));
-        OnPropertyChanged(nameof(SecondMatrixM20));
-        OnPropertyChanged(nameof(SecondMatrixM21));
-        OnPropertyChanged(nameof(SecondMatrixM22));
-        OnPropertyChanged(nameof(SecondOffsetX));
-        OnPropertyChanged(nameof(SecondOffsetY));
-        OnPropertyChanged(nameof(SecondOffsetZ));
-        UpdateStepNavigation();
-    }
-
-    /// <summary>第二组质量评级</summary>
-    public string SecondQualityRating => RateQuality(SecondCalculationResult);
-
-    public string SecondMatrixM00 => FormatSecondMatrixValue(0);
-    public string SecondMatrixM01 => FormatSecondMatrixValue(1);
-    public string SecondMatrixM02 => FormatSecondMatrixValue(2);
-    public string SecondMatrixM10 => FormatSecondMatrixValue(3);
-    public string SecondMatrixM11 => FormatSecondMatrixValue(4);
-    public string SecondMatrixM12 => FormatSecondMatrixValue(5);
-    public string SecondMatrixM20 => FormatSecondMatrixValue(6);
-    public string SecondMatrixM21 => FormatSecondMatrixValue(7);
-    public string SecondMatrixM22 => FormatSecondMatrixValue(8);
-
-    private string FormatSecondMatrixValue(int index)
-    {
-        var m = SecondCalculationResult?.Parameters?.CompensationMatrix;
-        if (m == null || m.Length <= index) return "—";
-        return m[index].ToString("F6");
-    }
-
-    public string SecondOffsetX => SecondCalculationResult?.Parameters?.Offset is { Length: >= 1 } o ? o[0].ToString("G6") : "—";
-    public string SecondOffsetY => SecondCalculationResult?.Parameters?.Offset is { Length: >= 2 } o ? o[1].ToString("G6") : "—";
-    public string SecondOffsetZ => SecondCalculationResult?.Parameters?.Offset is { Length: >= 3 } o ? o[2].ToString("G6") : "—";
 
     // ========== Step 4 - 保存配置 ==========
 
@@ -909,9 +1183,6 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
 
     [ObservableProperty]
     private string _profileNotes = string.Empty;
-
-    [ObservableProperty]
-    private bool _setAsDefault = true;
 
     [ObservableProperty]
     private string _saveStatus = string.Empty;
@@ -933,6 +1204,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
 
         try
         {
+            SavedSecondProfile = null;
             // 防御性拷贝，避免直接修改 CalculationResult.Parameters 引用
             var src = CalculationResult.Parameters;
             var parameters = new OrthogonalityParams
@@ -983,7 +1255,10 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
             // 保存校准记录到历史
             await SaveCalibrationRecordAsync(parameters);
 
-            SaveStatus = "已保存到数据库并应用";
+            // 保存只写入配置库，不会自动作用于采集；在采集页“校正”面板选用后才影响曲线显示。
+            SaveStatus = SavedSecondProfile is { } second
+                ? $"已保存“{parameters.Name}”和“{second.Name}”到配置库。在采集页右侧「校正」中选用。"
+                : $"已保存“{parameters.Name}”到配置库。在采集页右侧「校正」中选用。";
         }
         catch (Exception ex)
         {
@@ -1021,17 +1296,21 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
 
     public void Cleanup()
     {
-        _collectedGeneration++;
+        Interlocked.Increment(ref _collectedGeneration);
         if (IsCollecting)
         {
             _dataBus.ReadingReceived -= OnCalibrationDataReceived;
             IsCollecting = false;
         }
         _dataBus.ManualOrthoRecordRequested -= OnManualOrthoRecordRequested;
+        _dataBus.ConnectionChanged -= OnConnectionChanged;
         CloseRawCsv();
-        _dataBus.ManualOrthoState.Update(false, 0, null, "", false);
-        _collectedData.Clear();
-        _collectedDataSecondGroup.Clear();
+        lock (_sampleLock) { _manualPublishing = false; _dataBus.ManualOrthoState.Update(false, 0, null, "", false); }
+        lock (_sampleLock)
+        {
+            _collectedData.Clear();
+            _collectedDataSecondGroup.Clear();
+        }
         CollectedData.Clear();
     }
 
@@ -1057,7 +1336,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         dlg.ShowDialog();
     }
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(HasSelectedSavedProfile))]
     private async Task ExportSelectedProfileJsonAsync()
     {
         if (SelectedSavedProfile == null)
@@ -1086,7 +1365,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         }
     }
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(HasSelectedSavedProfile))]
     private async Task ExportSelectedProfileCsvAsync()
     {
         if (SelectedSavedProfile == null)
@@ -1104,29 +1383,39 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         if (dlg.ShowDialog() != true) return;
         try
         {
-            var p = SelectedSavedProfile;
-            var sb = new System.Text.StringBuilder();
-            sb.AppendLine("name,sensor_serial,created_at,unit,sample_count,residual_mean,residual_std," +
-                          "offset_x,offset_y,offset_z," +
-                          "m00,m01,m02,m10,m11,m12,m20,m21,m22");
-            string D(double v) => v.ToString("R", CultureInfo.InvariantCulture);
-            string DN(double? v) => v.HasValue ? D(v.Value) : "";
-            sb.Append($"\"{p.Name}\",\"{p.SensorSerial}\",{p.CreatedAt:yyyy-MM-dd HH:mm:ss},");
-            sb.Append($"{OrthogonalityParams.CanonicalUnit(p.Unit)},{p.SampleCount},{DN(p.ResidualMean)},{DN(p.ResidualStd)},");
-            sb.Append($"{D(p.Offset[0])},{D(p.Offset[1])},{D(p.Offset[2])},");
-            for (int i = 0; i < 9; i++)
-            {
-                sb.Append(D(p.CompensationMatrix[i]));
-                if (i < 8) sb.Append(',');
-            }
-            sb.AppendLine();
-            await File.WriteAllTextAsync(dlg.FileName, sb.ToString(), new System.Text.UTF8Encoding(true));
+            var csv = BuildProfileCsv(SelectedSavedProfile);
+            await File.WriteAllTextAsync(dlg.FileName, csv, new System.Text.UTF8Encoding(true));
             System.Windows.MessageBox.Show($"已导出: {dlg.FileName}", "成功");
         }
         catch (Exception ex)
         {
             System.Windows.MessageBox.Show($"导出失败: {ex.Message}", "错误");
         }
+    }
+
+    /// <summary>
+    /// 单个正交度配置的 CSV：名称与序列号按 RFC 4180 加引号（内部引号加倍，逗号与换行留在引号内），
+    /// 数值用不变区域性的往返格式。
+    /// </summary>
+    internal static string BuildProfileCsv(OrthogonalityParams p)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("name,sensor_serial,created_at,unit,sample_count,residual_mean,residual_std," +
+                      "offset_x,offset_y,offset_z," +
+                      "m00,m01,m02,m10,m11,m12,m20,m21,m22");
+        static string Text(string? s) => "\"" + (s ?? "").Replace("\"", "\"\"") + "\"";
+        static string D(double v) => v.ToString("R", CultureInfo.InvariantCulture);
+        static string DN(double? v) => v.HasValue ? D(v.Value) : "";
+        sb.Append($"{Text(p.Name)},{Text(p.SensorSerial)},{p.CreatedAt:yyyy-MM-dd HH:mm:ss},");
+        sb.Append($"{OrthogonalityParams.CanonicalUnit(p.Unit)},{p.SampleCount},{DN(p.ResidualMean)},{DN(p.ResidualStd)},");
+        sb.Append($"{D(p.Offset[0])},{D(p.Offset[1])},{D(p.Offset[2])},");
+        for (int i = 0; i < 9; i++)
+        {
+            sb.Append(D(p.CompensationMatrix[i]));
+            if (i < 8) sb.Append(',');
+        }
+        sb.AppendLine();
+        return sb.ToString();
     }
 
     private static string SanitizeFileName(string name)
@@ -1151,6 +1440,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         await LoadSessionDataAsync(picker.SelectedSession);
     }
 
+    /// <summary>会话的通道数和单位必须与拟合模式一致（单三轴 3、双三轴 6，同一磁场单位）；不一致时不加载。</summary>
     private async Task LoadSessionDataAsync(SessionInfo session)
     {
         try
@@ -1169,7 +1459,8 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
             var importedDataSecond = new List<double[]>();
             foreach (var r in readings)
             {
-                var v = r.ChannelValues;
+                // 拟合用校正前的原始值；已校正的读数再拟合会叠加上一次校正。
+                var v = r.OriginalChannelValues ?? r.ChannelValues;
                 if (v.Length != requiredCols)
                     throw new ArgumentException("会话读数与通道元数据不一致，未加载拟合数据。请按格式说明整理为明确三轴 CSV。");
                 importedData.Add(new[] { v[0], v[1], v[2] });
@@ -1177,18 +1468,8 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
                     importedDataSecond.Add(new[] { v[3], v[4], v[5] });
             }
 
-            if (IsCollecting) StopCollecting();
-            SetCollectedUnit(sourceUnit, requiredCols);
-            _collectedData.Clear();
-            _collectedDataSecondGroup.Clear();
-            CollectedData.Clear();
-            _collectedData.AddRange(importedData);
-            _collectedDataSecondGroup.AddRange(importedDataSecond);
-            foreach (var d in importedData) CollectedData.Add(d);
-
-            CollectedSampleCount = _collectedData.Count;
-            IsCollecting = false;
-            CollectionStatus = $"已从会话 '{session.Name}' 加载 {importedData.Count} 个样本";
+            ReplaceSamples(importedData, importedDataSecond, sourceUnit, requiredCols);
+            CollectionStatus = $"已从会话 '{session.Name}' 加载 {importedData.Count} 个样本（{sourceUnit}）";
 
             UpdateCoverageEstimate();
             RunDataValidation();

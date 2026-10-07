@@ -5,4 +5,7 @@ public interface IParserDiagnostics
 {
     long RejectedFrameCount { get; }
     string? LastError { get; }
+
+    /// <summary>逐帧解析记录（通过 / 拒绝 / 丢弃字节），有界；未实现的解析器返回 null。</summary>
+    ParseRecordLog? Records => null;
 }

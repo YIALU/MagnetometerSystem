@@ -10,17 +10,18 @@ The project centers on **customizable protocols, data recording, and live plotti
 
 | Feature | Capabilities |
 | --- | --- |
-| **Device connections** | Serial and TCP, configurable connection parameters, connection status, and raw communication inspection |
+| **Device connections** | Serial and TCP with configurable parameters; a "data link" strip on every page shows receive → parse → save counters and the measured rate |
+| **Frame diagnostics** | Raw frames lists each parse result: accepted, rejected with the reason (for example computed vs. received checksum), and bytes dropped while resynchronizing; Parse test decodes a pasted sample with the current protocol without connecting |
 | **Custom protocols** | ASCII or binary formats, field mappings, frame structure, byte order, scaling, checksums, channel units, and protocol JSON import/export |
 | **Automatic recording** | Original readings organized into sessions, with received counts, saved counts, and storage status |
 | **Live plots** | A combined plot or multiple plots in one/two columns; temperature and other channels with different units use separate axes in the combined plot |
-| **Plot workspace** | Collapsible connection, channel, communication, and analysis panels, plus focus mode and layout restoration |
+| **Acquire page** | Plot + channels / statistics / interval / filter / correction side panel + traffic / raw frames / events dock; collapsible panels and a focus mode that restores the layout |
 | **Channels and calculations** | Visibility, colors, order, display offsets, and total-field, gradient, or formula channels |
-| **Statistics and analysis** | Rolling statistics, interval selection and analysis, moving-average and median display filters |
-| **Device commands** | Protocol-associated command groups, parameterized commands, ASCII/HEX sending, and communication logs |
-| **Historical replay** | Session queries and timestamp-based playback with speed control, pause, and seek |
+| **Statistics and analysis** | Rolling statistics; drag on the plot to select an interval, hover for original values; moving-average and median display filters; the Analysis page computes noise, drift, and data quality for saved sessions by channel and time range |
+| **Device commands** | Protocol-associated command groups, parameterized commands, ASCII/HEX sending; the traffic log records direction, byte count, reply verdict, and latency per row |
+| **Data page** | Session list and details, replay (timestamp-based with speed, pause, and seek; disabled while connected), CSV export by channel |
 | **CSV export** | Time and channel selection, export precision, original values, and saved correction results |
-| **Data correction** | Optional offset/gain calibration, orthogonality collection and profiles, and live/historical correction |
+| **Data correction** | Calibration page: four-step orthogonality wizard (live continuous / manual 48 points, file import, saved session) with a profile library, and offset/gain parameter management; optional live/historical correction |
 
 ## Download and run
 
@@ -39,8 +40,8 @@ See the [changelog](docs/变更日志.md) for version changes. The current versi
 1. **Set up the connection:** choose serial or TCP and enter the connection parameters.
 2. **Configure the protocol:** select a preset or edit a custom protocol; check fields, channel names, and units.
 3. **Connect and capture:** enter the nominal sampling rate, connect, and check incoming data and storage status. The nominal rate records metadata; adjust actual output using device-supported commands or settings.
-4. **Inspect and analyze:** select channels and a time window, switch plot layouts, and expand statistics or analysis panels as needed. Pausing the plot display keeps original-data recording active.
-5. **Replay and export:** disconnect, wait for storage to finish, then select a session to replay or export as CSV.
+4. **Inspect and analyze:** on the Acquire page, select channels and a time window, switch plot layouts, and open side panels as needed; Raw frames in the bottom dock shows the verdict for each frame. Pausing the display, collapsing panels, or switching pages keeps original-data recording active.
+5. **Replay and export:** stop, wait for the final batch ("session ended, final batch committed" under Events), then select a session on the Data page to replay or export as CSV; use the Analysis page for long-range noise and drift.
 
 See the [user guide](docs/user-guide.en.md) for protocol setup, command responses, correction, and troubleshooting.
 

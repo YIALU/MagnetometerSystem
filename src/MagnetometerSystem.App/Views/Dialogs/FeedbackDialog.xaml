@@ -25,9 +25,9 @@
                     <StackPanel Grid.Column="1"><TextBlock Text="联系方式（选填）" Margin="0,0,0,6"/>
                         <TextBox x:Name="ContactInput" Text="{Binding Contact, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding CanEdit}" MaxLength="250" Padding="8" ToolTip="邮箱、电话或其他联系方式"/></StackPanel>
                 </Grid>
-                <TextBlock Margin="0,16,0,0" Foreground="#64748B" TextWrapping="Wrap" FontSize="12"
+                <TextBlock Margin="0,16,0,0" Foreground="{DynamicResource MutedBrush}" TextWrapping="Wrap" FontSize="12"
                            Text="您填写的使用场景、描述和软件版本会公开显示在项目反馈页面，请勿填写密码或其他敏感信息。姓名和联系方式为选填，仅用于维护者与您联系，不会公开。"/>
-                <TextBlock x:Name="StatusText" Text="{Binding Status}" TextWrapping="Wrap" Margin="0,12,0,0" Foreground="#2563EB"/>
+                <TextBlock x:Name="StatusText" Text="{Binding Status}" TextWrapping="Wrap" Margin="0,12,0,0" Foreground="{DynamicResource AccentBrush}"/>
                 <TextBlock Margin="0,8,0,0">
                     <TextBlock.Style><Style TargetType="TextBlock"><Setter Property="Visibility" Value="Visible"/>
                         <Style.Triggers><DataTrigger Binding="{Binding IssueUrl}" Value="{x:Null}"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger></Style.Triggers>
@@ -37,7 +37,7 @@
         </ScrollViewer>
         <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
             <Button x:Name="CloseButton" Content="关闭" Padding="18,7" Margin="0,0,10,0" Click="Close_Click"/>
-            <Button x:Name="SubmitButton" Content="提交反馈" Command="{Binding SubmitCommand}" Padding="18,7"/>
+            <Button x:Name="SubmitButton" Content="提交反馈" Style="{StaticResource PrimaryButton}" Command="{Binding SubmitCommand}" Padding="18,7"/>
         </StackPanel>
     </Grid>
 </Window>

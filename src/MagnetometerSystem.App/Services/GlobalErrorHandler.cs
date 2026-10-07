@@ -20,7 +20,7 @@ public static class GlobalErrorHandler
         Log.Logger = new LoggerConfiguration()
             .MinimumLevel.Information()
             .WriteTo.File(
-                Path.Combine(ResolveLogDirectory(), "app-.log"),
+                Path.Combine(LogDirectory = ResolveLogDirectory(), "app-.log"),
                 rollingInterval: RollingInterval.Day,
                 retainedFileCountLimit: 30,
                 outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] {Message:lj}{NewLine}{Exception}")
@@ -33,6 +33,9 @@ public static class GlobalErrorHandler
 
         Log.Information("应用程序启动");
     }
+
+    /// <summary>实际使用的日志目录；初始化前为 null。</summary>
+    public static string? LogDirectory { get; private set; }
 
     /// <summary>
     /// 决定日志写在哪。

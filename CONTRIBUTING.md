@@ -2,7 +2,7 @@
 
 项目采用“功能分支 → GitHub PR 审查与 Windows CI → 合并 `master` → 手动同步 Gitee”。GitHub 必须收到提交后才能审查，因此审查发生在合并主分支前；本地 `git commit` 仍可正常执行。
 
-远程名称固定区分：`github` 指向 `YIALU/MagnetometerSystem` 的 GitHub 仓库，`origin` 指向 Gitee。操作时明确写出远程，先用 `git remote -v` 核对地址。
+远程名称固定区分：`origin` 指向 `YIALU/MagnetometerSystem` 的 GitHub 仓库，`gitee` 指向 Gitee。操作时明确写出远程，先用 `git remote -v` 核对地址。
 
 ## 一次性设置
 
@@ -18,18 +18,18 @@
 
 ### 1. 从已审查的主分支开始
 
-先确保工作目录干净，并确认当前 HEAD 与最新 `github/master` 完全一致，再创建功能分支。若当前工作区有未提交工作，或本地主分支领先/分叉，请先妥善保留并单独处理，也可以使用干净的独立 worktree；不要用 `reset --hard` 或清理命令覆盖已有工作。
+先确保工作目录干净，并确认当前 HEAD 与最新 `origin/master` 完全一致，再创建功能分支。若当前工作区有未提交工作，或本地主分支领先/分叉，请先妥善保留并单独处理，也可以使用干净的独立 worktree；不要用 `reset --hard` 或清理命令覆盖已有工作。
 
 下面示例中的 `codex/my-change` 应替换为本次任务名，逐步检查命令结果：
 
 ```powershell
 git status --short
 git remote -v
-git fetch github
-# 当前 HEAD 应与 github/master 相同；不同则先处理已有差异。
+git fetch origin
+# 当前 HEAD 应与 origin/master 相同；不同则先处理已有差异。
 git rev-parse HEAD
-git rev-parse github/master
-git switch -c codex/my-change github/master
+git rev-parse origin/master
+git switch -c codex/my-change origin/master
 ```
 
 ### 2. 验证并推送功能分支
@@ -51,7 +51,7 @@ git diff
 git add -- path/to/changed-file
 git diff --cached
 git commit -m "描述本次变更"
-git push -u github codex/my-change
+git push -u origin codex/my-change
 ```
 
 不要使用 `git add .` 打包无关工作或个人配置，不直接推送 `master`。
@@ -74,15 +74,15 @@ GitHub 落后于本地/Gitee 时，先把缺失的**已提交历史**放到独�
 仅在目标 PR 已完成审查并合入 GitHub `master` 后执行。下面脚本获取两个远程的最新状态，验证 Gitee 是 GitHub 主分支的祖先，再进行普通快进推送；不移动当前本地分支，也不推送标签。
 
 ```powershell
-git fetch github
-if ($LASTEXITCODE -ne 0) { throw '获取 GitHub 失败，停止同步。' }
 git fetch origin
+if ($LASTEXITCODE -ne 0) { throw '获取 GitHub 失败，停止同步。' }
+git fetch gitee
 if ($LASTEXITCODE -ne 0) { throw '获取 Gitee 失败，停止同步。' }
-git merge-base --is-ancestor origin/master github/master
+git merge-base --is-ancestor gitee/master origin/master
 if ($LASTEXITCODE -ne 0) { throw 'Gitee 无法快进到 GitHub master，请先检查历史差异。' }
-git log --oneline origin/master..github/master
+git log --oneline gitee/master..origin/master
 # 核对上方提交均来自已审查并合并的 GitHub PR，再执行：
-git push origin refs/remotes/github/master:refs/heads/master
+git push gitee refs/remotes/origin/master:refs/heads/master
 ```
 
 若推送被拒绝，重新获取并检查差异；禁止使用 `--force` 或 `--force-with-lease` 覆盖 Gitee 主分支。不要用双远程自动推送代替上述审查与同步步骤。

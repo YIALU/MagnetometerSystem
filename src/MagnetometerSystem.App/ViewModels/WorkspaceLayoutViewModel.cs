@@ -3,49 +3,35 @@ using CommunityToolkit.Mvvm.Input;
 
 namespace MagnetometerSystem.App.ViewModels;
 
-/// <summary>辅助面板的布局状态；折叠仅影响显示，不停止采集或重置内容。</summary>
+/// <summary>工作台辅助区域的布局；折叠和专注只影响显示，不停止采集、保存或重置内容。</summary>
 public partial class WorkspaceLayoutViewModel : ObservableObject
 {
-    [ObservableProperty] private bool _connectionExpanded;
-    [ObservableProperty] private bool _storageExpanded;
-    [ObservableProperty] private bool _channelsExpanded;
-    [ObservableProperty] private bool _analysisExpanded;
-    [ObservableProperty] private bool _terminalExpanded;
+    public const int DockTraffic = 0, DockRawFrames = 1, DockEvents = 2;
+    public const int SideChannels = 0, SideStatistics = 1, SideInterval = 2, SideFilter = 3, SideCorrection = 4;
+
+    [ObservableProperty] private bool _sidePanelOpen = true;
+    [ObservableProperty] private bool _dockOpen = true;
+    [ObservableProperty] private int _sideTab;
+    [ObservableProperty] private int _dockTab;
     [ObservableProperty] private bool _isFocused;
 
     private Dictionary<string, bool>? _beforeFocus;
     private bool _restoring;
 
-    // A compact window scrolls the expanded controls instead of squeezing the plot away.
-    public double MinimumWorkspaceHeight => 640
-        + (ConnectionExpanded ? 110 : 0) + (StorageExpanded ? 70 : 0)
-        + (ChannelsExpanded ? 150 : 0) + (AnalysisExpanded ? 200 : 0)
-        + (TerminalExpanded ? 160 : 0);
+    partial void OnSidePanelOpenChanged(bool value) => OnPanelChanged(value);
+    partial void OnDockOpenChanged(bool value) => OnPanelChanged(value);
 
-    partial void OnConnectionExpandedChanged(bool value) => OnPanelChanged();
-    partial void OnStorageExpandedChanged(bool value) => OnPanelChanged();
-    partial void OnChannelsExpandedChanged(bool value) => OnPanelChanged();
-    partial void OnAnalysisExpandedChanged(bool value) => OnPanelChanged();
-    partial void OnTerminalExpandedChanged(bool value) => OnPanelChanged();
-
-    private void OnPanelChanged()
+    private void OnPanelChanged(bool opened)
     {
-        OnPropertyChanged(nameof(MinimumWorkspaceHeight));
-        if (_restoring || !IsFocused) return;
+        // 专注模式下手动打开任一区域即退出专注，但不连带打开其他区域。
+        if (_restoring || !IsFocused || !opened) return;
         IsFocused = false;
         _beforeFocus = null;
     }
 
     public Dictionary<string, bool> GetPersistedPanels() => _beforeFocus is not null
         ? new(_beforeFocus)
-        : new()
-        {
-            ["connection"] = ConnectionExpanded,
-            ["storage"] = StorageExpanded,
-            ["channels"] = ChannelsExpanded,
-            ["analysis"] = AnalysisExpanded,
-            ["terminal"] = TerminalExpanded,
-        };
+        : new() { ["sidePanel"] = SidePanelOpen, ["dock"] = DockOpen };
 
     public void Restore(IReadOnlyDictionary<string, bool>? panels)
     {
@@ -53,13 +39,18 @@ public partial class WorkspaceLayoutViewModel : ObservableObject
         _restoring = true;
         try
         {
-            ConnectionExpanded = panels.GetValueOrDefault("connection");
-            StorageExpanded = panels.GetValueOrDefault("storage");
-            ChannelsExpanded = panels.GetValueOrDefault("channels");
-            AnalysisExpanded = panels.GetValueOrDefault("analysis");
-            TerminalExpanded = panels.GetValueOrDefault("terminal");
+            // 旧版本保存的是逐个折叠面板，键不同时保持新布局默认展开。
+            SidePanelOpen = panels.TryGetValue("sidePanel", out var side) ? side : true;
+            DockOpen = panels.TryGetValue("dock", out var dock) ? dock : true;
         }
         finally { _restoring = false; }
+    }
+
+    /// <summary>打开底部停靠区的指定页（例如从链路条的“异常”跳到原始报文）。</summary>
+    public void ShowDock(int tab)
+    {
+        DockTab = tab;
+        DockOpen = true;
     }
 
     [RelayCommand]
@@ -67,15 +58,29 @@ public partial class WorkspaceLayoutViewModel : ObservableObject
     {
         if (IsFocused)
         {
-            Restore(_beforeFocus);
+            _restoring = true;
+            try
+            {
+                SidePanelOpen = _beforeFocus?.GetValueOrDefault("sidePanel", true) ?? true;
+                DockOpen = _beforeFocus?.GetValueOrDefault("dock", true) ?? true;
+            }
+            finally { _restoring = false; }
             _beforeFocus = null;
             IsFocused = false;
         }
         else
         {
             _beforeFocus = GetPersistedPanels();
-            Restore(new Dictionary<string, bool>());
+            _restoring = true;
+            try { SidePanelOpen = false; DockOpen = false; }
+            finally { _restoring = false; }
             IsFocused = true;
         }
     }
+
+    [RelayCommand]
+    private void ToggleDock() => DockOpen = !DockOpen;
+
+    [RelayCommand]
+    private void ToggleSidePanel() => SidePanelOpen = !SidePanelOpen;
 }

@@ -230,11 +230,22 @@ public class ProtocolFlowTests
             await peer.GetStream().WriteAsync("ck\n"u8.ToArray());
             await send.WaitAsync(TimeSpan.FromSeconds(3));
             await WaitForAsync(() => vm.ResponseStatus.Contains("收到设备 ACK"));
+            // 收发记录：发送行只声称“已写出”；分两段到达的 ACK 在第二段判定为 ACK。
+            await WaitForAsync(() => vm.TrafficEntries.Count(e => e.Kind == TrafficKind.Rx) == 2);
+            var tx = Assert.Single(vm.TrafficEntries, e => e.Kind == TrafficKind.Tx);
+            Assert.Equal($"已写出 {expected.Length} 字节", tx.Result);
+            Assert.Equal(command.Name, tx.Command);
+            var rx = vm.TrafficEntries.Where(e => e.Kind == TrafficKind.Rx).ToArray();
+            Assert.Equal("尚未匹配应答", rx[0].Result);
+            Assert.StartsWith("设备返回 ACK", rx[1].Result);
+            Assert.Equal("ok", rx[1].Level);
+            Assert.True(vm.TrafficEntries.IndexOf(tx) < vm.TrafficEntries.IndexOf(rx[0]));
             await connection.DisconnectAsync();
             await WpfTestHost.PumpAsync();
             Assert.False(vm.IsConnected);
             await vm.SendSelectedCommandCommand.ExecuteAsync(null);
             Assert.Contains("写出失败", vm.WriteStatus);
+            await WaitForAsync(() => vm.TrafficEntries.Any(e => e.Kind == TrafficKind.Note && e.Level == "err"));
         }
         finally { bus.PublishConnectionChanged(null); listener.Stop(); }
     });
@@ -361,6 +372,9 @@ public class ProtocolFlowTests
                 Assert.DoesNotContain("已收到实时帧", vm.ResponseStatus);
             }
             await send.WaitAsync(TimeSpan.FromSeconds(3));
+            // 实时帧以 \nack\n 结尾但不是独立的 $ack\n：收发记录不能把它记成本次命令的 ACK。
+            await WaitForAsync(() => vm.TrafficEntries.Where(e => e.Kind == TrafficKind.Rx).Sum(e => e.ByteCount) == Volatile.Read(ref receivedBytes));
+            Assert.DoesNotContain(vm.TrafficEntries, e => e.Kind == TrafficKind.Rx && e.Result.StartsWith("设备返回 ACK"));
         }
         finally { bus.PublishConnectionChanged(null); listener.Stop(); }
     });
@@ -388,6 +402,14 @@ public class ProtocolFlowTests
             await WaitForAsync(() => vm.ResponseStatus.Contains("超时"));
             await send.WaitAsync(TimeSpan.FromSeconds(3));
             Assert.Contains("执行结果未知", vm.ResponseStatus);
+            // 无关遥测不能被记成应答；超时说明区分“收到了数据但未配置预期应答”。
+            await WaitForAsync(() => vm.TrafficEntries.Any(e => e.Kind == TrafficKind.Note));
+            Assert.Equal("未配置预期应答", vm.TrafficEntries.First(e => e.Kind == TrafficKind.Rx).Result);
+            var note = vm.TrafficEntries.First(e => e.Kind == TrafficKind.Note);
+            Assert.StartsWith("未配置预期应答", note.Result);
+            Assert.Equal("warn", note.Level);
+            Assert.Equal("自由发送", note.Command);
+            Assert.DoesNotContain(vm.TrafficEntries, e => e.Level == "ok");
             vm.FreeIsHexMode = true;
             Assert.Equal("None", vm.FreeLineEnding);
             vm.FreeCommandText = "01 02";
@@ -407,6 +429,46 @@ public class ProtocolFlowTests
         while (!ready() && DateTime.UtcNow < until) await Task.Delay(10);
         Assert.True(ready(), "等待界面状态更新超时");
     }
+
+    [Fact]
+    public Task TrafficLog_LargeFlushesUseOneResetAndKeepTheNewestEntries() => WpfTestHost.RunAsync(() =>
+    {
+        using var vm = new DeviceCommandViewModel(new DataBus(), new EmptyCommandConfig());
+        var enqueue = typeof(DeviceCommandViewModel).GetMethod("EnqueueEntry", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+        var flush = typeof(DeviceCommandViewModel).GetMethod("FlushLogBuffer", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+        var start = DateTime.Now;
+        void Receive(int from, int count)
+        {
+            for (int i = from; i < from + count; i++)
+                enqueue.Invoke(vm, [new TrafficEntry(start.AddMilliseconds(i), TrafficKind.Rx, 1, $"#{i}", "", "", null)]);
+        }
+        var actions = new List<System.Collections.Specialized.NotifyCollectionChangedAction>();
+        vm.TrafficEntries.CollectionChanged += (_, e) => actions.Add(e.Action);
+
+        // 少量条目逐条追加。
+        Receive(0, 3);
+        flush.Invoke(vm, null);
+        Assert.Equal(3, actions.Count);
+        Assert.All(actions, a => Assert.Equal(System.Collections.Specialized.NotifyCollectionChangedAction.Add, a));
+
+        // 高速设备一次刷新 700 个接收块：只发一个 Reset，保留最新的 500 条。
+        actions.Clear();
+        Receive(3, 700);
+        flush.Invoke(vm, null);
+        Assert.Equal([System.Collections.Specialized.NotifyCollectionChangedAction.Reset], actions);
+        Assert.Equal(500, vm.TrafficEntries.Count);
+        Assert.Equal("#203", vm.TrafficEntries[0].Content);
+        Assert.Equal("#702", vm.TrafficEntries[^1].Content);
+
+        // 已满时少量新条目仍逐条追加并挤掉最旧的。
+        actions.Clear();
+        Receive(703, 2);
+        flush.Invoke(vm, null);
+        Assert.Equal(4, actions.Count); // 2 次追加 + 2 次移除
+        Assert.Equal(500, vm.TrafficEntries.Count);
+        Assert.Equal("#704", vm.TrafficEntries[^1].Content);
+        return Task.CompletedTask;
+    });
 
     private sealed class EmptyCommandConfig : IAppConfigService
     {

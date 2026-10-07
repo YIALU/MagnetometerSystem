@@ -19,6 +19,9 @@ public static class WpfTestHost
                 {
                     Source = new Uri("/MagnetometerSystem.App;component/Themes/Workspace.xaml", UriKind.Relative),
                 });
+                // 未附加调试器时 WPF 默认不输出绑定错误；打开后各测试的“无绑定错误”断言才有效。
+                System.Diagnostics.PresentationTraceSources.Refresh();
+                System.Diagnostics.PresentationTraceSources.DataBindingSource.Switch.Level = System.Diagnostics.SourceLevels.Warning;
                 SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
                 ready.SetResult(Dispatcher.CurrentDispatcher);
                 Dispatcher.Run();

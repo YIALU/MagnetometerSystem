@@ -4,551 +4,137 @@
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:scottplot="clr-namespace:ScottPlot.WPF;assembly=ScottPlot.WPF"
-             xmlns:sys="clr-namespace:System;assembly=System.Runtime"
              xmlns:i="http://schemas.microsoft.com/xaml/behaviors"
              xmlns:behaviors="clr-namespace:MagnetometerSystem.App.Behaviors"
+             xmlns:converters="clr-namespace:MagnetometerSystem.App.Converters"
              mc:Ignorable="d"
              d:DesignHeight="600" d:DesignWidth="1100"
              Loaded="OnLoaded">
     <UserControl.Resources>
-        <!-- 预设颜色列表 -->
-        <x:Array x:Key="PresetColors" Type="{x:Type sys:String}">
-            <sys:String>#FF0000FF</sys:String>
-            <sys:String>#FFFF0000</sys:String>
-            <sys:String>#FF008000</sys:String>
-            <sys:String>#FFFF8C00</sys:String>
-            <sys:String>#FF800080</sys:String>
-            <sys:String>#FF00FFFF</sys:String>
-            <sys:String>#FFFF00FF</sys:String>
-            <sys:String>#FFB8860B</sys:String>
-            <sys:String>#FF000000</sys:String>
-            <sys:String>#FF808080</sys:String>
-        </x:Array>
+        <converters:SecondsLabelConverter x:Key="SecondsLabel"/>
     </UserControl.Resources>
-    <Grid Margin="0">
-        <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-
-        <!-- 左侧主区域 -->
-        <Grid Grid.Row="0">
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="*"/>
-                <RowDefinition Height="Auto"/>
-            </Grid.RowDefinitions>
-
-            <!-- 工具栏 -->
-            <WrapPanel Grid.Row="0" Margin="8,8,8,4">
-                <TextBlock Text="实时曲线" FontSize="16" FontWeight="SemiBold" Margin="0,0,18,6" VerticalAlignment="Center"/>
-                <CheckBox Content="填满绘图区" IsChecked="{Binding IsChartHeightAutomatic}" VerticalAlignment="Center" Margin="0,0,12,6"/>
-                <Button Padding="10,5" Margin="0,0,8,6" Command="{Binding TogglePauseCommand}">
-                    <Button.Style>
-                        <Style TargetType="Button">
-                            <Setter Property="Content" Value="暂停"/>
-                            <Style.Triggers>
-                                <DataTrigger Binding="{Binding IsPaused}" Value="True">
-                                    <Setter Property="Content" Value="继续"/>
-                                </DataTrigger>
-                            </Style.Triggers>
-                        </Style>
-                    </Button.Style>
-                </Button>
-
-                <Button Content="清空" Padding="10,5" Margin="0,0,15,6"
-                        Command="{Binding ClearChartCommand}"/>
-
-                <Separator Style="{StaticResource {x:Static ToolBar.SeparatorStyleKey}}" Margin="0,2,15,2"/>
-
-                <TextBlock Text="时间窗口:" VerticalAlignment="Center" Margin="0,0,5,0"/>
-                <ComboBox Width="80" ItemsSource="{Binding TimeWindowOptions}"
-                          SelectedItem="{Binding TimeWindowSeconds}" IsEditable="True"/>
-                <TextBlock Text="s" VerticalAlignment="Center" Margin="3,0,15,6"/>
-
-                <CheckBox Content="主Y轴自适应" VerticalAlignment="Center" Margin="0,0,10,6"
-                          ToolTip="手动范围控制每个图的左侧主轴；单图中的其他单位轴始终按各自数据自适应。"
-                          IsChecked="{Binding AutoScaleY}"/>
-
-                <StackPanel Orientation="Horizontal" Margin="0,0,15,6">
-                    <StackPanel.Style>
-                        <Style TargetType="StackPanel">
-                            <Setter Property="Visibility" Value="Visible"/>
-                            <Style.Triggers>
-                                <DataTrigger Binding="{Binding AutoScaleY}" Value="True">
-                                    <Setter Property="Visibility" Value="Collapsed"/>
-                                </DataTrigger>
-                            </Style.Triggers>
-                        </Style>
-                    </StackPanel.Style>
-                    <TextBlock Text="主Y轴:" VerticalAlignment="Center" Margin="0,0,3,0"/>
-                    <TextBox Width="70" Text="{Binding YMin, UpdateSourceTrigger=LostFocus}" VerticalAlignment="Center"/>
-                    <TextBlock Text="~" VerticalAlignment="Center" Margin="3,0,3,0"/>
-                    <TextBox Width="70" Text="{Binding YMax, UpdateSourceTrigger=LostFocus}" VerticalAlignment="Center"/>
-                </StackPanel>
-
-                <Separator Style="{StaticResource {x:Static ToolBar.SeparatorStyleKey}}" Margin="0,2,15,2"/>
-
-                <CheckBox Content="自动滚动" VerticalAlignment="Center" Margin="0,0,10,6"
-                          IsChecked="{Binding AutoScroll}"/>
-                <CheckBox Content="网格" VerticalAlignment="Center" Margin="0,0,10,6"
-                          IsChecked="{Binding ShowGrid}"/>
-
-                <Separator Style="{StaticResource {x:Static ToolBar.SeparatorStyleKey}}" Margin="0,2,15,2"/>
-
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,0,6">
-                    <StackPanel.Style>
-                        <Style TargetType="StackPanel">
-                            <Setter Property="Visibility" Value="Visible"/>
-                            <Style.Triggers>
-                                <DataTrigger Binding="{Binding IsMultiPlotMode}" Value="True">
-                                    <Setter Property="Visibility" Value="Collapsed"/>
-                                </DataTrigger>
-                            </Style.Triggers>
-                        </Style>
-                    </StackPanel.Style>
-                    <TextBlock Text="高度:" VerticalAlignment="Center" Margin="0,0,5,0"/>
-                    <Slider Width="100" Minimum="200" Maximum="800" Value="{Binding SinglePlotHeight}"
-                            VerticalAlignment="Center" TickFrequency="50" IsSnapToTickEnabled="True"/>
-                    <TextBlock Text="{Binding SinglePlotHeight, StringFormat={}{0:F0}}"
-                               VerticalAlignment="Center" Margin="5,0,0,0" Width="30"/>
-                </StackPanel>
-
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,0,6">
-                    <StackPanel.Style>
-                        <Style TargetType="StackPanel">
-                            <Setter Property="Visibility" Value="Collapsed"/>
-                            <Style.Triggers>
-                                <DataTrigger Binding="{Binding IsMultiPlotMode}" Value="True">
-                                    <Setter Property="Visibility" Value="Visible"/>
-                                </DataTrigger>
-                            </Style.Triggers>
-                        </Style>
-                    </StackPanel.Style>
-                    <TextBlock Text="高度:" VerticalAlignment="Center" Margin="0,0,5,0"/>
-                    <Slider Width="100" Minimum="120" Maximum="400" Value="{Binding MultiPlotHeight}"
-                            VerticalAlignment="Center" TickFrequency="20" IsSnapToTickEnabled="True"/>
-                    <TextBlock Text="{Binding MultiPlotHeight, StringFormat={}{0:F0}}"
-                               VerticalAlignment="Center" Margin="5,0,0,0" Width="30"/>
-                </StackPanel>
-
-                <Separator Style="{StaticResource {x:Static ToolBar.SeparatorStyleKey}}" Margin="0,2,15,2"/>
-
-                <Button Padding="10,5" Margin="0,0,8,6" Command="{Binding ToggleMultiPlotModeCommand}">
-                    <Button.Style>
-                        <Style TargetType="Button">
-                            <Setter Property="Content" Value="多图表"/>
-                            <Style.Triggers>
-                                <DataTrigger Binding="{Binding IsMultiPlotMode}" Value="True">
-                                    <Setter Property="Content" Value="单图表"/>
-                                </DataTrigger>
-                            </Style.Triggers>
-                        </Style>
-                    </Button.Style>
-                </Button>
-
-                <Button Padding="10,5" Margin="0,0,8,6" Command="{Binding ToggleColumnCountCommand}">
-                    <Button.Style>
-                        <Style TargetType="Button">
-                            <Setter Property="Content" Value="双列"/>
-                            <Setter Property="IsEnabled" Value="False"/>
-                            <Style.Triggers>
-                                <DataTrigger Binding="{Binding IsMultiPlotMode}" Value="True">
-                                    <Setter Property="IsEnabled" Value="True"/>
-                                </DataTrigger>
-                                <DataTrigger Binding="{Binding MultiPlotColumnCount}" Value="2">
-                                    <Setter Property="Content" Value="单列"/>
-                                </DataTrigger>
-                            </Style.Triggers>
-                        </Style>
-                    </Button.Style>
-                </Button>
-
-            </WrapPanel>
-
-            <!-- ScottPlot 图表区 -->
-            <Grid Grid.Row="1" x:Name="PlotArea" SizeChanged="OnPlotAreaSizeChanged">
-                <Border BorderBrush="#CCC" BorderThickness="1" x:Name="SinglePlotBorder" MinHeight="140">
-                    <Border.Style>
-                        <Style TargetType="Border">
-                            <Setter Property="Visibility" Value="Visible"/>
-                            <Setter Property="Height" Value="{Binding SinglePlotHeight}"/>
-                            <Style.Triggers>
-                                <DataTrigger Binding="{Binding IsChartHeightAutomatic}" Value="True"><Setter Property="Height" Value="Auto"/></DataTrigger>
-                                <DataTrigger Binding="{Binding WorkspaceLayout.IsFocused}" Value="True"><Setter Property="Height" Value="Auto"/></DataTrigger>
-                                <DataTrigger Binding="{Binding IsMultiPlotMode}" Value="True">
-                                    <Setter Property="Visibility" Value="Collapsed"/>
-                                </DataTrigger>
-                            </Style.Triggers>
-                        </Style>
-                    </Border.Style>
-                    <scottplot:WpfPlot x:Name="WpfPlot1" MouseWheel="OnPlotMouseWheel"/>
-                </Border>
-
-                <Border BorderBrush="#CCC" BorderThickness="1" x:Name="MultiPlotBorder">
-                    <Border.Style>
-                        <Style TargetType="Border">
-                            <Setter Property="Visibility" Value="Collapsed"/>
-                            <Style.Triggers>
-                                <DataTrigger Binding="{Binding IsMultiPlotMode}" Value="True">
-                                    <Setter Property="Visibility" Value="Visible"/>
-                                </DataTrigger>
-                            </Style.Triggers>
-                        </Style>
-                    </Border.Style>
-                    <ScrollViewer VerticalScrollBarVisibility="Auto">
-                        <StackPanel x:Name="MultiPlotPanel" AllowDrop="True">
-                            <i:Interaction.Behaviors>
-                                <behaviors:DragDropBehavior/>
-                            </i:Interaction.Behaviors>
-                        </StackPanel>
-                    </ScrollViewer>
-                </Border>
-            </Grid>
-
-        </Grid>
-
-        <!-- 右侧配置面板 -->
-                    <Expander Grid.Row="1" Header="实时通道与显示" IsExpanded="{Binding WorkspaceLayout.ChannelsExpanded}" Margin="0,0,0,6">
-                        <ScrollViewer MaxHeight="125" VerticalScrollBarVisibility="Auto"><StackPanel Margin="8">
-                            <ItemsControl ItemsSource="{Binding ChannelConfigs}">
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate>
-                                        <Border BorderBrush="#E0E0E0" BorderThickness="0,0,0,1" Padding="2,3" Margin="0,0,0,1">
-                                            <Grid>
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="Auto"/>
-                                                    <ColumnDefinition Width="*"/>
-                                                </Grid.ColumnDefinitions>
-                                                <Grid.RowDefinitions>
-                                                    <RowDefinition Height="Auto"/>
-                                                    <RowDefinition Height="Auto"/>
-                                                </Grid.RowDefinitions>
-
-                                                <CheckBox Grid.Column="0" Grid.Row="0"
-                                                          IsChecked="{Binding Visible}" VerticalAlignment="Center" Margin="0,0,4,0"/>
-                                                <StackPanel Grid.Column="1" Grid.Row="0" Orientation="Horizontal">
-                                                    <TextBlock Text="{Binding Name}" VerticalAlignment="Center"
-                                                               FontWeight="SemiBold" MinWidth="70"/>
-                                                    <TextBlock Text="{Binding LatestValue}" Margin="12,0" VerticalAlignment="Center" MinWidth="100"/>
-                                                    <ComboBox Width="50" Height="20" Margin="4,0,0,0"
-                                                              ItemsSource="{StaticResource PresetColors}"
-                                                              SelectedItem="{Binding ColorHex}"
-                                                              VerticalAlignment="Center">
-                                                        <ComboBox.ItemTemplate>
-                                                            <DataTemplate>
-                                                                <Border Width="30" Height="12" CornerRadius="2">
-                                                                    <Border.Background>
-                                                                        <SolidColorBrush Color="{Binding}"/>
-                                                                    </Border.Background>
-                                                                </Border>
-                                                            </DataTemplate>
-                                                        </ComboBox.ItemTemplate>
-                                                    </ComboBox>
-                                                </StackPanel>
-
-                                                <StackPanel Grid.Column="0" Grid.ColumnSpan="2" Grid.Row="1"
-                                                            Orientation="Horizontal" Margin="20,2,0,0">
-                                                    <TextBlock Text="偏移:" VerticalAlignment="Center" FontSize="11" Margin="0,0,3,0"/>
-                                                    <TextBox Width="65" FontSize="11" VerticalAlignment="Center"
-                                                             Text="{Binding DisplayOffset, UpdateSourceTrigger=LostFocus}"/>
-                                                    <TextBlock Text="{Binding Unit}" VerticalAlignment="Center" FontSize="11" Margin="3,0,3,0" Foreground="Gray"/>
-                                                    <Button Content="自动" FontSize="10" Padding="4,1" VerticalAlignment="Center"
-                                                            ToolTip="根据通道平均值自动设置偏移，使数据趋近于 0"
-                                                            Command="{Binding DataContext.AutoOffsetChannelCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-                                                            CommandParameter="{Binding ChannelIndex}"/>
-                                                </StackPanel>
-                                            </Grid>
-                                        </Border>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                        </StackPanel>
-                        </ScrollViewer>
-                    </Expander>
-        <Expander Grid.Row="2" Header="统计与分析 · 计算通道 / 滤波 / 区间 / 改正" IsExpanded="{Binding WorkspaceLayout.AnalysisExpanded}" Margin="0,6,0,0">
-            <ScrollViewer MaxHeight="180" VerticalScrollBarVisibility="Auto">
-                <StackPanel Margin="8">            <!-- 底部统计栏 -->
-            <Border Margin="0,5,0,0" Padding="8,4" Background="#F8F8F8" CornerRadius="3">
-                <DockPanel>
-                    <TextBlock DockPanel.Dock="Right" VerticalAlignment="Center" Margin="10,0,0,0">
-                        <Run Text="数据点: "/>
-                        <Run Text="{Binding DataPointCount, Mode=OneWay}"/>
+    <!-- 图表：工具栏只放高频操作，其余收进“更多”；通道与分析在工作台侧栏 -->
+    <DockPanel>
+        <Border DockPanel.Dock="Top" Style="{StaticResource PanelHeader}" Padding="10,0">
+            <DockPanel VerticalAlignment="Center">
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Style="{StaticResource Hint}" VerticalAlignment="Center" Margin="0,0,12,0"
+                               ToolTip="绘图刷新率只决定曲线多久重绘一次，与设备输出频率、标称采样率无关。">
+                        <Run Text="绘图刷新 "/><Run Text="{Binding RefreshRate, Mode=OneWay}"/><Run Text=" Hz"/>
                     </TextBlock>
-                    <TextBlock Text="{Binding StatisticsText}" VerticalAlignment="Center"
-                               FontFamily="Consolas" FontSize="11.5" TextTrimming="CharacterEllipsis"/>
-                </DockPanel>
-            </Border>
-
-                    <!-- ======== 通道设置 ======== -->
-
-
-                    <!-- ======== 计算通道 ======== -->
-                    <Expander Header="计算通道" IsExpanded="False" Margin="0,0,0,6">
-                        <StackPanel Margin="0,4,0,0">
-                            <!-- 已有计算通道列表 -->
-                            <ItemsControl ItemsSource="{Binding ComputedChannels}">
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate>
-                                        <Border BorderBrush="#E0E0E0" BorderThickness="0,0,0,1" Padding="2,3" Margin="0,0,0,2">
-                                            <StackPanel>
-                                                <StackPanel Orientation="Horizontal">
-                                                    <CheckBox IsChecked="{Binding Enabled}" VerticalAlignment="Center" Margin="0,0,4,0"/>
-                                                    <TextBox Width="50" FontSize="11" Text="{Binding Name, UpdateSourceTrigger=LostFocus}"
-                                                             VerticalAlignment="Center"/>
-                                                    <ComboBox Width="40" Height="20" Margin="4,0,0,0"
-                                                              ItemsSource="{StaticResource PresetColors}"
-                                                              SelectedItem="{Binding ColorHex}"
-                                                              VerticalAlignment="Center">
-                                                        <ComboBox.ItemTemplate>
-                                                            <DataTemplate>
-                                                                <Border Width="24" Height="12" CornerRadius="2">
-                                                                    <Border.Background>
-                                                                        <SolidColorBrush Color="{Binding}"/>
-                                                                    </Border.Background>
-                                                                </Border>
-                                                            </DataTemplate>
-                                                        </ComboBox.ItemTemplate>
-                                                    </ComboBox>
-                                                    <Button Content="×" FontSize="11" Padding="4,0" Margin="4,0,0,0"
-                                                            VerticalAlignment="Center"
-                                                            Command="{Binding DataContext.RemoveComputedChannelCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-                                                            CommandParameter="{Binding}"/>
-                                                </StackPanel>
-                                                <TextBox FontSize="11" Margin="20,2,0,0"
-                                                         Text="{Binding Formula, UpdateSourceTrigger=LostFocus}"
-                                                         ToolTip="公式: CH0、CH1…, +,-,*,/, sqrt(), abs(), pow()"/>
-                                                <!-- 偏移 + 自动偏移 -->
-                                                <StackPanel Orientation="Horizontal" Margin="20,2,0,0">
-                                                    <TextBlock Text="偏移:" VerticalAlignment="Center" FontSize="11" Margin="0,0,3,0"/>
-                                                    <TextBox Width="65" FontSize="11" VerticalAlignment="Center"
-                                                             Text="{Binding DisplayOffset, UpdateSourceTrigger=LostFocus}"/>
-                                                    <TextBlock Text="单位:" VerticalAlignment="Center" FontSize="11" Margin="8,0,3,0"/>
-                                                    <TextBox Width="65" FontSize="11" Text="{Binding Unit, UpdateSourceTrigger=LostFocus}" ToolTip="按公式含义填写单位；修改标签不会换算数值，用于分配纵轴"/>
-                                                    <Button Content="自动" FontSize="10" Padding="4,1" VerticalAlignment="Center"
-                                                            ToolTip="根据计算通道平均值自动设置偏移，使数据趋近于 0"
-                                                            Command="{Binding DataContext.AutoOffsetComputedChannelCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-                                                            CommandParameter="{Binding}"/>
-                                                </StackPanel>
-                                            </StackPanel>
-                                        </Border>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-
-                            <TextBlock Text="{Binding ComputationError}" Foreground="Firebrick" TextWrapping="Wrap" Margin="0,4,0,0"/>
-                            <!-- 添加按钮行 -->
-                            <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
-                                <Button Content="+ 总场" FontSize="11" Padding="6,2" Margin="0,0,4,0"
-                                        HorizontalAlignment="Left"
-                                        ToolTip="选择三个通道计算总场 sqrt(a²+b²+c²)"
-                                        Command="{Binding StartAddTotalFieldCommand}"/>
-                                <Button Content="+ 梯度" FontSize="11" Padding="6,2" Margin="0,0,4,0"
-                                        HorizontalAlignment="Left"
-                                        ToolTip="选择两个源做差值 a - b"
-                                        Command="{Binding StartAddGradientCommand}"/>
-                                <Button Content="+ 自定义" FontSize="11" Padding="6,2"
-                                        HorizontalAlignment="Left"
-                                        ToolTip="自由输入公式"
-                                        Command="{Binding AddComputedChannelCommand}"/>
-                            </StackPanel>
-
-                            <!-- ======== 总场向导面板 ======== -->
-                            <Border Margin="0,4,0,0" Padding="6" Background="#F0F0F0" CornerRadius="3"
-                                    BorderBrush="#CCC" BorderThickness="1">
-                                <Border.Style>
-                                    <Style TargetType="Border">
-                                        <Setter Property="Visibility" Value="Collapsed"/>
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding IsAddingTotalField}" Value="True">
-                                                <Setter Property="Visibility" Value="Visible"/>
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </Border.Style>
-                                <StackPanel>
-                                    <TextBlock Text="选择三个通道:" FontSize="11" FontWeight="SemiBold" Margin="0,0,0,4"/>
-                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
-                                        <TextBlock Text="A:" FontSize="11" VerticalAlignment="Center" Width="16"/>
-                                        <ComboBox Width="120" FontSize="11"
-                                                  ItemsSource="{Binding WizardRawSources}"
-                                                  SelectedIndex="{Binding WizardSourceA}"
-                                                  DisplayMemberPath="Label"/>
-                                    </StackPanel>
-                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
-                                        <TextBlock Text="B:" FontSize="11" VerticalAlignment="Center" Width="16"/>
-                                        <ComboBox Width="120" FontSize="11"
-                                                  ItemsSource="{Binding WizardRawSources}"
-                                                  SelectedIndex="{Binding WizardSourceB}"
-                                                  DisplayMemberPath="Label"/>
-                                    </StackPanel>
-                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
-                                        <TextBlock Text="C:" FontSize="11" VerticalAlignment="Center" Width="16"/>
-                                        <ComboBox Width="120" FontSize="11"
-                                                  ItemsSource="{Binding WizardRawSources}"
-                                                  SelectedIndex="{Binding WizardSourceC}"
-                                                  DisplayMemberPath="Label"/>
-                                    </StackPanel>
-                                    <TextBlock Text="公式: sqrt(A²+B²+C²)" FontSize="10" Foreground="Gray" Margin="0,0,0,4"/>
-                                    <StackPanel Orientation="Horizontal">
-                                        <Button Content="确认" FontSize="11" Padding="8,2" Margin="0,0,6,0"
-                                                Command="{Binding ConfirmAddTotalFieldCommand}"/>
-                                        <Button Content="取消" FontSize="11" Padding="8,2"
-                                                Command="{Binding CancelAddWizardCommand}"/>
-                                    </StackPanel>
+                    <Button Command="{Binding TogglePauseCommand}" Margin="0,0,6,0">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                <Setter Property="Content" Value="暂停显示"/>
+                                <Setter Property="ToolTip" Value="只冻结曲线；采集与保存继续进行"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsPaused}" Value="True">
+                                        <Setter Property="Content" Value="继续显示"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+                    <ToggleButton x:Name="MoreToggle" Content="更多" Margin="0,0,6,0" Padding="12,0" MinHeight="30"
+                                  Background="{DynamicResource PanelBrush}" BorderBrush="{DynamicResource LineBrush}" Cursor="Hand"/>
+                    <Popup IsOpen="{Binding IsChecked, ElementName=MoreToggle}" PlacementTarget="{Binding ElementName=MoreToggle}"
+                           Placement="Bottom" StaysOpen="False" AllowsTransparency="True" HorizontalOffset="-120">
+                        <Border Style="{StaticResource Panel}" Padding="12" Margin="0,4,8,8" MinWidth="200">
+                            <Border.Effect><DropShadowEffect BlurRadius="14" ShadowDepth="3" Opacity="0.18"/></Border.Effect>
+                            <StackPanel>
+                                <CheckBox Content="显示网格" IsChecked="{Binding ShowGrid}" Margin="0,0,0,8"/>
+                                <CheckBox Content="自动滚动到最新" IsChecked="{Binding AutoScroll}" Margin="0,0,0,8"/>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                    <TextBlock Text="显示点数上限" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                    <TextBox Width="70" Text="{Binding DownsampleTargetCount, UpdateSourceTrigger=LostFocus}"
+                                             ToolTip="每条曲线最多绘制的点数（LTTB 降采样，0 表示不降采样）；只影响显示"/>
                                 </StackPanel>
-                            </Border>
+                                <Button Content="清空曲线" Style="{StaticResource DangerButton}" Command="{Binding ClearChartCommand}" HorizontalAlignment="Left"
+                                        ToolTip="只清空显示缓冲，不影响已保存的数据"/>
+                                <TextBlock Style="{StaticResource Hint}" Margin="0,10,0,0" Text="滚轮缩放时间轴；Ctrl + 滚轮缩放 Y 轴（手动范围时）。"/>
+                            </StackPanel>
+                        </Border>
+                    </Popup>
+                    <Button Command="{Binding WorkspaceLayout.ToggleFocusCommand}">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                <Setter Property="Content" Value="专注曲线"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding WorkspaceLayout.IsFocused}" Value="True">
+                                        <Setter Property="Content" Value="退出专注"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+                </StackPanel>
 
-                            <!-- ======== 梯度向导面板 ======== -->
-                            <Border Margin="0,4,0,0" Padding="6" Background="#F0F0F0" CornerRadius="3"
-                                    BorderBrush="#CCC" BorderThickness="1">
-                                <Border.Style>
-                                    <Style TargetType="Border">
-                                        <Setter Property="Visibility" Value="Collapsed"/>
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding IsAddingGradient}" Value="True">
-                                                <Setter Property="Visibility" Value="Visible"/>
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </Border.Style>
-                                <StackPanel>
-                                    <TextBlock Text="选择两个源 (A - B):" FontSize="11" FontWeight="SemiBold" Margin="0,0,0,4"/>
-                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
-                                        <TextBlock Text="A:" FontSize="11" VerticalAlignment="Center" Width="16"/>
-                                        <ComboBox Width="140" FontSize="11"
-                                                  ItemsSource="{Binding WizardGradientSources}"
-                                                  SelectedIndex="{Binding WizardSourceA}"
-                                                  DisplayMemberPath="Label"/>
-                                    </StackPanel>
-                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
-                                        <TextBlock Text="B:" FontSize="11" VerticalAlignment="Center" Width="16"/>
-                                        <ComboBox Width="140" FontSize="11"
-                                                  ItemsSource="{Binding WizardGradientSources}"
-                                                  SelectedIndex="{Binding WizardSourceB}"
-                                                  DisplayMemberPath="Label"/>
-                                    </StackPanel>
-                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
-                                        <TextBlock Text="基线距离 (m):" FontSize="11" VerticalAlignment="Center" Margin="0,0,5,0"/>
-                                        <TextBox Text="{Binding GradientBaselineDistance, UpdateSourceTrigger=PropertyChanged}"
-                                                 Width="80" FontSize="11"/>
-                                    </StackPanel>
-                                    <TextBlock Text="公式: (A - B) / 距离" FontSize="10" Foreground="Gray" Margin="0,0,0,4"/>
-                                    <StackPanel Orientation="Horizontal">
-                                        <Button Content="确认" FontSize="11" Padding="8,2" Margin="0,0,6,0"
-                                                Command="{Binding ConfirmAddGradientCommand}"/>
-                                        <Button Content="取消" FontSize="11" Padding="8,2"
-                                                Command="{Binding CancelAddWizardCommand}"/>
-                                    </StackPanel>
-                                </StackPanel>
-                            </Border>
-
-                            <TextBlock Text="变量: CH0、CH1…（按当前协议通道）" FontSize="10" Foreground="Gray" Margin="0,6,0,0"/>
-                            <TextBlock Text="运算: + - * / sqrt abs pow" FontSize="10" Foreground="Gray"/>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <Border Style="{StaticResource SegmentGroup}">
+                        <StackPanel Orientation="Horizontal">
+                            <RadioButton Style="{StaticResource SegmentItem}" Content="单图"
+                                         IsChecked="{Binding CurrentViewMode, Converter={StaticResource EnumToBool}, ConverterParameter=Single}"
+                                         ToolTip="所有选中通道共用一个绘图区；不同单位使用独立纵轴"/>
+                            <RadioButton Style="{StaticResource SegmentItem}" Content="多图"
+                                         IsChecked="{Binding CurrentViewMode, Converter={StaticResource EnumToBool}, ConverterParameter=Multi}"
+                                         ToolTip="每个通道单独一个图"/>
                         </StackPanel>
-                    </Expander>
-
-                    <!-- ======== 统计配置 ======== -->
-                    <Expander Header="统计设置" IsExpanded="False" Margin="0,0,0,6">
-                        <StackPanel Margin="0,4,0,0">
-                            <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
-                                <TextBlock Text="窗口:" VerticalAlignment="Center" FontSize="11" Margin="0,0,3,0"/>
-                                <TextBox Width="50" FontSize="11"
-                                         Text="{Binding StatisticsConfig.WindowSeconds, UpdateSourceTrigger=LostFocus}"/>
-                                <TextBlock Text="s" VerticalAlignment="Center" FontSize="11" Margin="3,0,0,0" Foreground="Gray"/>
-                            </StackPanel>
-                            <CheckBox Content="均值 (Avg)" FontSize="11" Margin="0,1"
-                                      IsChecked="{Binding StatisticsConfig.ShowMean}"/>
-                            <CheckBox Content="标准差 (Std)" FontSize="11" Margin="0,1"
-                                      IsChecked="{Binding StatisticsConfig.ShowStdDev}"/>
-                            <CheckBox Content="峰峰值 (PP)" FontSize="11" Margin="0,1"
-                                      IsChecked="{Binding StatisticsConfig.ShowPeakToPeak}"/>
-                            <CheckBox Content="均方根 (RMS)" FontSize="11" Margin="0,1"
-                                      IsChecked="{Binding StatisticsConfig.ShowRms}"/>
-                            <CheckBox Content="最小值 (Min)" FontSize="11" Margin="0,1"
-                                      IsChecked="{Binding StatisticsConfig.ShowMin}"/>
-                            <CheckBox Content="最大值 (Max)" FontSize="11" Margin="0,1"
-                                      IsChecked="{Binding StatisticsConfig.ShowMax}"/>
+                    </Border>
+                    <Border Style="{StaticResource SegmentGroup}" Margin="6,0,0,0"
+                            Visibility="{Binding IsMultiPlotMode, Converter={StaticResource BoolToVis}}">
+                        <StackPanel Orientation="Horizontal">
+                            <RadioButton Style="{StaticResource SegmentItem}" Content="1 列" Padding="8,0"
+                                         IsChecked="{Binding MultiPlotColumnCount, Converter={StaticResource ValueEquals}, ConverterParameter=1}"/>
+                            <RadioButton Style="{StaticResource SegmentItem}" Content="2 列" Padding="8,0"
+                                         IsChecked="{Binding MultiPlotColumnCount, Converter={StaticResource ValueEquals}, ConverterParameter=2}"/>
                         </StackPanel>
-                    </Expander>
-
-                    <!-- ======== 滤波设置 ======== -->
-                    <Expander Header="滤波设置" IsExpanded="False" Margin="0,0,0,6">
-                        <StackPanel Margin="0,4,0,0">
-                            <CheckBox Content="启用滤波" FontSize="11" Margin="0,2"
-                                      IsChecked="{Binding IsFilterEnabled}"/>
-                            <StackPanel Orientation="Horizontal" Margin="0,4,0,0"
-                                        IsEnabled="{Binding IsFilterEnabled}">
-                                <TextBlock Text="类型:" VerticalAlignment="Center" FontSize="11" Margin="0,0,5,0"/>
-                                <ComboBox Width="110" FontSize="11"
-                                          ItemsSource="{Binding FilterTypes}"
-                                          SelectedItem="{Binding SelectedFilterType}"/>
-                            </StackPanel>
-                            <StackPanel Orientation="Horizontal" Margin="0,4,0,0"
-                                        IsEnabled="{Binding IsFilterEnabled}">
-                                <TextBlock Text="窗口大小:" VerticalAlignment="Center" FontSize="11" Margin="0,0,5,0"/>
-                                <TextBox Text="{Binding FilterWindowSize, UpdateSourceTrigger=PropertyChanged}"
-                                         Width="50" FontSize="11"/>
-                            </StackPanel>
+                    </Border>
+                    <Rectangle Width="1" Height="20" Fill="{DynamicResource Line2Brush}" Margin="12,0"/>
+                    <TextBlock Text="时间窗口" VerticalAlignment="Center" Margin="0,0,6,0" Foreground="{DynamicResource Ink2Brush}"/>
+                    <ComboBox Width="84" ItemsSource="{Binding TimeWindowOptions}" SelectedItem="{Binding TimeWindowSeconds}">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate><TextBlock Text="{Binding Converter={StaticResource SecondsLabel}}"/></DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
+                    <TextBlock Text="主 Y 轴" VerticalAlignment="Center" Margin="12,0,6,0" Foreground="{DynamicResource Ink2Brush}"
+                               ToolTip="手动范围只控制每个图的左侧主轴；单图中的其他单位轴（如温度）始终按各自数据自适应。"/>
+                    <Border Style="{StaticResource SegmentGroup}">
+                        <StackPanel Orientation="Horizontal">
+                            <RadioButton Style="{StaticResource SegmentItem}" Content="自动" Padding="8,0" IsChecked="{Binding AutoScaleY}"/>
+                            <RadioButton Style="{StaticResource SegmentItem}" Content="手动" Padding="8,0" IsChecked="{Binding AutoScaleY, Converter={StaticResource InverseBool}}"/>
                         </StackPanel>
-                    </Expander>
+                    </Border>
+                    <StackPanel Orientation="Horizontal" Margin="6,0,0,0"
+                                Visibility="{Binding AutoScaleY, Converter={StaticResource InverseBoolToVis}}">
+                        <TextBox Width="76" Style="{StaticResource MonoTextBox}" Text="{Binding YMin, UpdateSourceTrigger=LostFocus}" ToolTip="主纵轴下限"/>
+                        <TextBlock Text="~" VerticalAlignment="Center" Margin="4,0"/>
+                        <TextBox Width="76" Style="{StaticResource MonoTextBox}" Text="{Binding YMax, UpdateSourceTrigger=LostFocus}" ToolTip="主纵轴上限"/>
+                    </StackPanel>
+                </StackPanel>
+            </DockPanel>
+        </Border>
 
-                    <!-- ======== 区间分析 ======== -->
-                    <Expander Header="区间分析" IsExpanded="False" Margin="0,0,0,6">
-                        <StackPanel Margin="0,4,0,0">
-                            <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
-                                <TextBlock Text="起始(秒):" VerticalAlignment="Center" FontSize="11" Margin="0,0,5,0"/>
-                                <TextBox Text="{Binding IntervalStartInput, UpdateSourceTrigger=PropertyChanged}"
-                                         Width="55" FontSize="11" Margin="0,0,8,0"/>
-                                <TextBlock Text="结束(秒):" VerticalAlignment="Center" FontSize="11" Margin="0,0,5,0"/>
-                                <TextBox Text="{Binding IntervalEndInput, UpdateSourceTrigger=PropertyChanged}"
-                                         Width="55" FontSize="11"/>
-                            </StackPanel>
-                            <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
-                                <Button Content="分析" FontSize="11" Padding="8,2" Margin="0,0,4,0"
-                                        Command="{Binding ApplyIntervalSelectionCommand}"/>
-                                <Button Content="清除" FontSize="11" Padding="8,2" Margin="0,0,4,0"
-                                        Command="{Binding ClearIntervalSelectionCommand}"/>
-                                <Button Content="导出区间" FontSize="11" Padding="8,2"
-                                        Command="{Binding ExportIntervalCommand}"/>
-                            </StackPanel>
-                            <TextBlock Text="{Binding IntervalStatisticsText}" FontFamily="Consolas" FontSize="10"
-                                       Foreground="DarkBlue" TextWrapping="Wrap"/>
-                        </StackPanel>
-                    </Expander>
+        <!-- 绘图区 -->
+        <Grid x:Name="PlotArea" SizeChanged="OnPlotAreaSizeChanged" Margin="4">
+            <scottplot:WpfPlot x:Name="WpfPlot1" MouseWheel="OnPlotMouseWheel" MinHeight="140"
+                               Visibility="{Binding IsMultiPlotMode, Converter={StaticResource InverseBoolToVis}}"/>
 
-                    <!-- ======== 正交度校正 ======== -->
-                    <Expander Header="正交度校正" IsExpanded="False" Margin="0,0,0,6">
-                        <StackPanel Margin="0,4,0,0">
-                            <CheckBox Content="启用正交度校正" FontSize="11" Margin="0,2"
-                                      IsChecked="{Binding DataContext.ConnectionVM.IsOrthogonalityCorrectionEnabled,
-                                      RelativeSource={RelativeSource AncestorType=Window}}"/>
-
-                            <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
-                                <TextBlock Text="配置:" VerticalAlignment="Center" FontSize="11" Margin="0,0,5,0"/>
-                                <ComboBox Width="140" FontSize="11"
-                                          ItemsSource="{Binding DataContext.ConnectionVM.AvailableOrthogonalityProfiles,
-                                          RelativeSource={RelativeSource AncestorType=Window}}"
-                                          SelectedItem="{Binding DataContext.ConnectionVM.ActiveOrthogonalityProfile,
-                                          RelativeSource={RelativeSource AncestorType=Window}}"
-                                          DisplayMemberPath="Name"/>
-                            </StackPanel>
-
-                            <TextBlock Text="第一组三轴索引（例：0,1,2）" Margin="0,6,0,2"/>
-                            <TextBox Width="180" HorizontalAlignment="Left" Text="{Binding DataContext.ConnectionVM.FirstOrthogonalityChannelsText, RelativeSource={RelativeSource AncestorType=Window}, UpdateSourceTrigger=LostFocus}"/>
-                            <TextBlock Text="第二组配置及索引（可选）" Margin="0,6,0,2"/>
-                            <ComboBox Width="180" HorizontalAlignment="Left" ItemsSource="{Binding DataContext.ConnectionVM.AvailableOrthogonalityProfiles, RelativeSource={RelativeSource AncestorType=Window}}" SelectedItem="{Binding DataContext.ConnectionVM.SecondOrthogonalityProfile, RelativeSource={RelativeSource AncestorType=Window}}" DisplayMemberPath="Name"/>
-                            <TextBox Width="180" HorizontalAlignment="Left" Margin="0,4,0,0" Text="{Binding DataContext.ConnectionVM.SecondOrthogonalityChannelsText, RelativeSource={RelativeSource AncestorType=Window}, UpdateSourceTrigger=LostFocus}"/>
-                            <Button Content="刷新配置" FontSize="11" Padding="6,2" Margin="0,4,0,0"
-                                    HorizontalAlignment="Left"
-                                    Command="{Binding DataContext.ConnectionVM.LoadOrthogonalityProfilesCommand,
-                                    RelativeSource={RelativeSource AncestorType=Window}}"/>
-
-                            <TextBlock Text="仅生成改正预览；原始保存及统计不受影响。索引从 0 开始。" FontSize="10" Foreground="Gray" Margin="0,4,0,0"/>
-                        </StackPanel>
-                    </Expander>
-
-                    <TextBlock Text="滚轮: 缩放时间轴" FontSize="10" Foreground="Gray" Margin="0,4,0,0"/>
-                    <TextBlock Text="Ctrl+滚轮: 缩放Y轴" FontSize="10" Foreground="Gray" Margin="0,2,0,0"/>
+            <ScrollViewer VerticalScrollBarVisibility="Auto" Visibility="{Binding IsMultiPlotMode, Converter={StaticResource BoolToVis}}">
+                <StackPanel x:Name="MultiPlotPanel" AllowDrop="True">
+                    <i:Interaction.Behaviors>
+                        <behaviors:DragDropBehavior/>
+                    </i:Interaction.Behaviors>
                 </StackPanel>
             </ScrollViewer>
-        </Expander>
-    </Grid>
+
+            <!-- 暂停显示提示：明确说明采集与保存继续 -->
+            <Border HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,8,0,0" Style="{StaticResource WarnCallout}" Padding="12,6"
+                    Visibility="{Binding IsPaused, Converter={StaticResource BoolToVis}}">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="显示已暂停，采集与保存继续进行。" VerticalAlignment="Center"/>
+                    <Button Content="继续显示" Style="{StaticResource SmallGhostButton}" Command="{Binding TogglePauseCommand}" Margin="8,0,0,0"/>
+                </StackPanel>
+            </Border>
+        </Grid>
+    </DockPanel>
 </UserControl>

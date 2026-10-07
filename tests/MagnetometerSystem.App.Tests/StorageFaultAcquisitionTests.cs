@@ -363,6 +363,7 @@ public class StorageFaultAcquisitionTests
         public Task RetryPendingWritesAsync() => inner.RetryPendingWritesAsync();
         public Task<IReadOnlyList<SessionInfo>> GetSessionsAsync() => inner.GetSessionsAsync();
         public Task<IReadOnlyList<MagnetometerReading>> GetReadingsAsync(string id, DateTime? startTime = null, DateTime? endTime = null) => inner.GetReadingsAsync(id, startTime, endTime);
+        public Task<ReadingPage> GetReadingsPageAsync(string id, DateTime startTime, DateTime endTime, ReadingPageCursor? after, int limit) => inner.GetReadingsPageAsync(id, startTime, endTime, after, limit);
         public Task DeleteSessionAsync(string id) => inner.DeleteSessionAsync(id);
         public Task UpdateSessionAsync(string id, string name, string? notes) => inner.UpdateSessionAsync(id, name, notes);
         public Task SaveCorrectedReadingsAsync(IEnumerable<CorrectedReading> readings) => inner.SaveCorrectedReadingsAsync(readings);
@@ -394,6 +395,7 @@ public class StorageFaultAcquisitionTests
         public Task RetryPendingWritesAsync() => inner.RetryPendingWritesAsync();
         public Task<IReadOnlyList<SessionInfo>> GetSessionsAsync() => inner.GetSessionsAsync();
         public Task<IReadOnlyList<MagnetometerReading>> GetReadingsAsync(string id, DateTime? startTime = null, DateTime? endTime = null) => inner.GetReadingsAsync(id, startTime, endTime);
+        public Task<ReadingPage> GetReadingsPageAsync(string id, DateTime startTime, DateTime endTime, ReadingPageCursor? after, int limit) => inner.GetReadingsPageAsync(id, startTime, endTime, after, limit);
         public Task DeleteSessionAsync(string id) => inner.DeleteSessionAsync(id);
         public Task UpdateSessionAsync(string id, string name, string? notes) => inner.UpdateSessionAsync(id, name, notes);
         public Task SaveCorrectedReadingsAsync(IEnumerable<CorrectedReading> readings) => inner.SaveCorrectedReadingsAsync(readings);

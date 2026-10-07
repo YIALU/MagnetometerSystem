@@ -147,6 +147,7 @@ public class CorrectionVersionSelectionTests
         public Task RetryPendingWritesAsync() => throw new NotSupportedException();
         public Task<IReadOnlyList<SessionInfo>> GetSessionsAsync() => throw new NotSupportedException();
         public Task<IReadOnlyList<MagnetometerReading>> GetReadingsAsync(string id, DateTime? startTime = null, DateTime? endTime = null) => throw new NotSupportedException();
+        public Task<ReadingPage> GetReadingsPageAsync(string id, DateTime startTime, DateTime endTime, ReadingPageCursor? after, int limit) => throw new NotSupportedException();
         public Task DeleteSessionAsync(string id) => throw new NotSupportedException();
         public Task UpdateSessionAsync(string id, string name, string? notes) => throw new NotSupportedException();
         public Task SaveCorrectedReadingsAsync(IEnumerable<CorrectedReading> readings) => throw new NotSupportedException();

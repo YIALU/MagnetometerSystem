@@ -14,6 +14,7 @@ public partial class RealtimeChartView : UserControl
     public RealtimeChartView()
     {
         InitializeComponent();
+        AttachInteraction(WpfPlot1);
         Unloaded += OnUnloaded;
     }
 
@@ -60,6 +61,8 @@ public partial class RealtimeChartView : UserControl
         _subscribedComputed.Clear();
         if (ReferenceEquals(vm.PlotControl, WpfPlot1))
         { vm.PlotControl = null; vm.MultiPlotControls.Clear(); }
+        // 卸载后这些图不再显示：丢掉叠加层记录，旧图及其数据不再被视图模型留住。
+        vm.ForgetDetachedPlots();
         _boundViewModel = null;
     }
 
@@ -88,7 +91,8 @@ public partial class RealtimeChartView : UserControl
 
     private void OnPlotAreaSizeChanged(object sender, System.Windows.SizeChangedEventArgs e)
     {
-        if (_boundViewModel is { IsMultiPlotMode: true } vm && (vm.IsChartHeightAutomatic || vm.WorkspaceLayout.IsFocused))
+        // 多图行高随绘图区填满；高度只在明显变化时重建，避免拖动分隔条时反复重建控件。
+        if (_boundViewModel is { IsMultiPlotMode: true } && Math.Abs(e.NewSize.Height - e.PreviousSize.Height) > 4)
             RebuildMultiPlotControls();
     }
 
@@ -137,6 +141,7 @@ public partial class RealtimeChartView : UserControl
 
         MultiPlotPanel.Children.Clear();
         vm.MultiPlotControls.Clear();
+        vm.ForgetDetachedPlots();
 
         if (!vm.IsMultiPlotMode) { vm.RefreshPlot(); return; }
 
@@ -151,8 +156,8 @@ public partial class RealtimeChartView : UserControl
         int columnCount = Math.Max(1, vm.MultiPlotColumnCount);
         int rowCount = (int)Math.Ceiling((double)totalPlotCount / columnCount);
         double plotHeight = vm.MultiPlotHeight;
-        if ((vm.IsChartHeightAutomatic || vm.WorkspaceLayout.IsFocused) && PlotArea.ActualHeight > 0)
-            plotHeight = Math.Max(150, (PlotArea.ActualHeight - 8) / rowCount);
+        if (PlotArea.ActualHeight > 0)
+            plotHeight = Math.Max(150, (PlotArea.ActualHeight - 4) / rowCount);
 
         // 创建网格布局
         var grid = new System.Windows.Controls.Grid();
@@ -188,6 +193,7 @@ public partial class RealtimeChartView : UserControl
                 Margin = new System.Windows.Thickness(2),
             };
             wpfPlot.MouseWheel += OnPlotMouseWheel;
+            AttachInteraction(wpfPlot);
             ChartFontHelper.Apply(wpfPlot.Plot);
 
             System.Windows.Controls.Grid.SetRow(wpfPlot, row);
@@ -212,6 +218,7 @@ public partial class RealtimeChartView : UserControl
                 Margin = new System.Windows.Thickness(2),
             };
             wpfPlot.MouseWheel += OnPlotMouseWheel;
+            AttachInteraction(wpfPlot);
             ChartFontHelper.Apply(wpfPlot.Plot);
 
             System.Windows.Controls.Grid.SetRow(wpfPlot, row);
@@ -225,6 +232,62 @@ public partial class RealtimeChartView : UserControl
 
         MultiPlotPanel.Children.Add(grid);
         vm.RefreshPlot();
+    }
+
+    // ---- 曲线交互：左键拖动选区间，悬停显示十字准线 ----
+    // 时间轴每次刷新都由时间窗口决定，ScottPlot 默认的左键平移没有持久效果，这里改作区间选择。
+
+    private System.Windows.Point? _dragOrigin;
+
+    private void AttachInteraction(ScottPlot.WPF.WpfPlot plot)
+    {
+        plot.PreviewMouseLeftButtonDown += OnPlotMouseDown;
+        plot.PreviewMouseMove += OnPlotMouseMove;
+        plot.PreviewMouseLeftButtonUp += OnPlotMouseUp;
+        plot.MouseLeave += OnPlotMouseLeave;
+    }
+
+    private static double PlotSeconds(ScottPlot.WPF.WpfPlot plot, MouseEventArgs e) =>
+        plot.Plot.GetCoordinates(plot.GetPlotPixelPosition(e)).X;
+
+    private void OnPlotMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not ScottPlot.WPF.WpfPlot plot || DataContext is not RealtimeChartViewModel { DataPointCount: > 0 } vm) return;
+        _dragOrigin = e.GetPosition(plot);
+        vm.BeginPlotSelection(PlotSeconds(plot, e));
+        plot.CaptureMouse();
+        e.Handled = true;
+    }
+
+    private void OnPlotMouseMove(object sender, MouseEventArgs e)
+    {
+        if (sender is not ScottPlot.WPF.WpfPlot plot || DataContext is not RealtimeChartViewModel vm) return;
+        var seconds = PlotSeconds(plot, e);
+        if (_dragOrigin is not null) vm.UpdatePlotSelection(seconds);
+        vm.SetHoverTime(seconds);
+    }
+
+    private void OnPlotMouseUp(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not ScottPlot.WPF.WpfPlot plot || _dragOrigin is not { } origin || DataContext is not RealtimeChartViewModel vm) return;
+        _dragOrigin = null;
+        plot.ReleaseMouseCapture();
+        e.Handled = true;
+        if (Math.Abs(e.GetPosition(plot).X - origin.X) < 4) { vm.CancelPlotSelection(); return; }
+        if (!vm.EndPlotSelection(PlotSeconds(plot, e))) return;
+        // 在采集页：打开右侧“区间”页显示统计。
+        for (System.Windows.DependencyObject? p = this; p != null; p = System.Windows.Media.VisualTreeHelper.GetParent(p))
+            if (p is AcquisitionWorkspaceView)
+            {
+                vm.WorkspaceLayout.SideTab = WorkspaceLayoutViewModel.SideInterval;
+                vm.WorkspaceLayout.SidePanelOpen = true;
+                break;
+            }
+    }
+
+    private void OnPlotMouseLeave(object sender, MouseEventArgs e)
+    {
+        if (_dragOrigin is null && DataContext is RealtimeChartViewModel vm) vm.SetHoverTime(null);
     }
 
     private void OnPlotMouseWheel(object sender, MouseWheelEventArgs e)

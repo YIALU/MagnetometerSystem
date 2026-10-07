@@ -21,14 +21,14 @@
                     每组配置包含 <Run FontFamily="Consolas">Offset</Run>（3 维偏移向量）和 3×3 <Run FontFamily="Consolas">CompensationMatrix</Run>（行优先存储为 9 个元素）。校正公式：
                 </TextBlock>
 
-                <Border Background="#F4F6F8" Padding="10" CornerRadius="3" Margin="0,0,0,12">
+                <Border Background="{DynamicResource Panel2Brush}" Padding="10" CornerRadius="3" Margin="0,0,0,12">
                     <TextBlock FontFamily="Consolas" FontSize="13">
                         <Run Text="B_corrected = M × (B_raw − Offset)" FontWeight="Bold"/>
                     </TextBlock>
                 </Border>
 
                 <TextBlock Text="符号定义" FontWeight="SemiBold" Margin="0,0,0,4"/>
-                <Border Background="#F4F6F8" Padding="10" CornerRadius="3" Margin="0,0,0,12">
+                <Border Background="{DynamicResource Panel2Brush}" Padding="10" CornerRadius="3" Margin="0,0,0,12">
                     <TextBlock FontFamily="Consolas" FontSize="12">
                         B_raw   = [Bx, By, Bz]ᵀ          原始测量向量<LineBreak/>
                         Offset  = [Ox, Oy, Oz]ᵀ          偏移向量<LineBreak/>
@@ -39,7 +39,7 @@
                 </Border>
 
                 <TextBlock Text="按分量展开" FontWeight="SemiBold" Margin="0,0,0,4"/>
-                <Border Background="#F4F6F8" Padding="10" CornerRadius="3" Margin="0,0,0,12">
+                <Border Background="{DynamicResource Panel2Brush}" Padding="10" CornerRadius="3" Margin="0,0,0,12">
                     <TextBlock FontFamily="Consolas" FontSize="12">
                         Bx' = m00·(Bx−Ox) + m01·(By−Oy) + m02·(Bz−Oz)<LineBreak/>
                         By' = m10·(Bx−Ox) + m11·(By−Oy) + m12·(Bz−Oz)<LineBreak/>
@@ -54,27 +54,27 @@
                 </TextBlock>
 
                 <TextBlock Text="Python 示例（NumPy）" FontWeight="SemiBold" Margin="0,0,0,4"/>
-                <Border Background="#1E1E1E" Padding="10" CornerRadius="3" Margin="0,0,0,12">
-                    <TextBlock FontFamily="Consolas" FontSize="12" Foreground="#D4D4D4">
-                        <Run Foreground="#569CD6">import</Run><Run Text=" numpy "/><Run Foreground="#569CD6">as</Run><Run Text=" np"/><LineBreak/>
+                <Border Background="{DynamicResource Panel2Brush}" BorderBrush="{DynamicResource Line2Brush}" BorderThickness="1" Padding="10" CornerRadius="3" Margin="0,0,0,12">
+                    <TextBlock FontFamily="{DynamicResource MonoFont}" FontSize="12" Foreground="{DynamicResource InkBrush}">
+                        <Run Foreground="{DynamicResource AccentBrush}">import</Run><Run Text=" numpy "/><Run Foreground="{DynamicResource AccentBrush}">as</Run><Run Text=" np"/><LineBreak/>
                         <LineBreak/>
-                        <Run Foreground="#608B4E"># 来自导出的 JSON / CSV</Run><LineBreak/>
+                        <Run Foreground="{DynamicResource MutedBrush}"># 来自导出的 JSON / CSV</Run><LineBreak/>
                         offset = np.array([Ox, Oy, Oz])<LineBreak/>
                         M = np.array([[m00, m01, m02],<LineBreak/>
                         <Run Text="              "/>[m10, m11, m12],<LineBreak/>
                         <Run Text="              "/>[m20, m21, m22]])<LineBreak/>
                         <LineBreak/>
-                        <Run Foreground="#608B4E"># 单条原始读数</Run><LineBreak/>
+                        <Run Foreground="{DynamicResource MutedBrush}"># 单条原始读数</Run><LineBreak/>
                         B_raw = np.array([Bx, By, Bz])<LineBreak/>
                         B_corr = M @ (B_raw - offset)<LineBreak/>
                         <LineBreak/>
-                        <Run Foreground="#608B4E"># 批量（N×3 矩阵）</Run><LineBreak/>
-                        readings = np.loadtxt(<Run Foreground="#CE9178">"data.csv"</Run>, delimiter=<Run Foreground="#CE9178">","</Run>, skiprows=1, usecols=(1,2,3))<LineBreak/>
+                        <Run Foreground="{DynamicResource MutedBrush}"># 批量（N×3 矩阵）</Run><LineBreak/>
+                        readings = np.loadtxt(<Run Foreground="{DynamicResource OkBrush}">"data.csv"</Run>, delimiter=<Run Foreground="{DynamicResource OkBrush}">","</Run>, skiprows=1, usecols=(1,2,3))<LineBreak/>
                         corrected = (readings - offset) @ M.T
                     </TextBlock>
                 </Border>
 
-                <Border Background="#FFF8E1" BorderBrush="#FFD54F" BorderThickness="1"
+                <Border Style="{StaticResource WarnCallout}"
                         Padding="10" CornerRadius="3">
                     <TextBlock TextWrapping="Wrap">
                         <Run FontWeight="SemiBold">注意：</Run><LineBreak/>

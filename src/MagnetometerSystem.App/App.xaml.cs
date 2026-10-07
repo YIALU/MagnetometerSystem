@@ -54,6 +54,7 @@ public partial class App : Application
             services.AddTransient<SessionListViewModel>();
 
             services.AddTransient<HistoryPlaybackViewModel>();
+            services.AddTransient<AnalysisViewModel>();
 
             services.AddSingleton<OrthogonalityCorrector>();
             services.AddSingleton<IOrthogonalityService, OrthogonalityCalculator>();
@@ -121,7 +122,7 @@ public partial class App : Application
                 {
                     mainVm.WorkspaceLayout.Restore(loadedSettings.WorkbenchPanels);
                     if (loadedSettings.ChartRefreshRate > 0)
-                        mainVm.RealtimeChartVM.RefreshRate = loadedSettings.ChartRefreshRate;
+                        mainVm.RealtimeChartVM.RefreshRate = mainVm.SettingsVM.ChartRefreshRate = loadedSettings.ChartRefreshRate;
                     if (!string.IsNullOrEmpty(loadedSettings.DefaultPortName))
                         mainVm.ConnectionVM.SelectedPort = loadedSettings.DefaultPortName;
                     if (loadedSettings.DefaultBaudRate > 0)

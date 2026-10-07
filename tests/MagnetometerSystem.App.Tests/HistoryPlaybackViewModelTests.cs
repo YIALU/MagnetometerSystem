@@ -24,7 +24,11 @@ public class HistoryPlaybackViewModelTests
             using var fixture = await PlaybackFixture.CreateAsync();
             using var vm = fixture.CreateViewModel();
             using var chart = new RealtimeChartViewModel(fixture.Bus);
-            var view = new HistoryPlaybackView { DataContext = vm };
+            var sessions = new SessionListViewModel(fixture.Storage, new CsvExporter(fixture.Storage), fixture.Bus,
+                new OrthogonalityCorrector(), new SqliteCalibrationRepository(fixture.Database));
+            var page = new DataPageViewModel(sessions, vm, fixture.Bus);
+            // 回放在“数据”页内打开，与正式界面相同。
+            var view = new DataPageView { DataContext = page };
             var window = new Window
             {
                 Content = view, DataContext = new { RealtimeChartVM = chart }, Width = 1280, Height = 900,
@@ -37,7 +41,8 @@ public class HistoryPlaybackViewModelTests
             {
                 window.Show();
                 await WpfTestHost.PumpAsync();
-                await vm.LoadSessionByIdAsync(fixture.SessionId);
+                await page.OpenPlaybackAsync(fixture.SessionId);
+                Assert.True(page.IsPlaybackOpen);
                 vm.SeekTo(0);
                 await WpfTestHost.PumpAsync();
                 chart.RefreshPlot();

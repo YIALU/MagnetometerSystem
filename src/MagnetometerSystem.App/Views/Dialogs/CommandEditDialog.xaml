@@ -102,8 +102,8 @@
                     </Grid.ColumnDefinitions>
                     <TextBlock Text="校验:" VerticalAlignment="Center"/>
                     <ComboBox Grid.Column="1" x:Name="ChecksumBox"
-                              ItemsSource="{Binding ChecksumKinds}" Padding="4"/>
-                    <TextBlock Grid.Column="2" Foreground="Gray" VerticalAlignment="Center" Margin="8,0,0,0"
+                              ItemsSource="{Binding ChecksumKinds}" ItemTemplate="{StaticResource EnumItemTemplate}" Padding="4"/>
+                    <TextBlock Grid.Column="2" Foreground="{DynamicResource MutedBrush}" VerticalAlignment="Center" Margin="8,0,0,0"
                                Text="校验范围：仅数据帧（不含帧头帧尾）"/>
                 </Grid>
             </StackPanel>
@@ -128,12 +128,14 @@
                                                 Width="90">
                             <DataGridComboBoxColumn.ElementStyle>
                                 <Style TargetType="ComboBox">
+                                    <Setter Property="ItemTemplate" Value="{StaticResource EnumItemTemplate}"/>
                                     <Setter Property="ItemsSource"
                                             Value="{Binding DataContext.ParameterTypes, RelativeSource={RelativeSource AncestorType=Window}}"/>
                                 </Style>
                             </DataGridComboBoxColumn.ElementStyle>
                             <DataGridComboBoxColumn.EditingElementStyle>
                                 <Style TargetType="ComboBox">
+                                    <Setter Property="ItemTemplate" Value="{StaticResource EnumItemTemplate}"/>
                                     <Setter Property="ItemsSource"
                                             Value="{Binding DataContext.ParameterTypes, RelativeSource={RelativeSource AncestorType=Window}}"/>
                                 </Style>
@@ -144,12 +146,14 @@
                                                 Width="80">
                             <DataGridComboBoxColumn.ElementStyle>
                                 <Style TargetType="ComboBox">
+                                    <Setter Property="ItemTemplate" Value="{StaticResource EnumItemTemplate}"/>
                                     <Setter Property="ItemsSource"
                                             Value="{Binding DataContext.Endians, RelativeSource={RelativeSource AncestorType=Window}}"/>
                                 </Style>
                             </DataGridComboBoxColumn.ElementStyle>
                             <DataGridComboBoxColumn.EditingElementStyle>
                                 <Style TargetType="ComboBox">
+                                    <Setter Property="ItemTemplate" Value="{StaticResource EnumItemTemplate}"/>
                                     <Setter Property="ItemsSource"
                                             Value="{Binding DataContext.Endians, RelativeSource={RelativeSource AncestorType=Window}}"/>
                                 </Style>
@@ -164,7 +168,7 @@
                         <DataGridTemplateColumn Header="" Width="40">
                             <DataGridTemplateColumn.CellTemplate>
                                 <DataTemplate>
-                                    <Button Content="✕" Padding="4,0" Foreground="Red"
+                                    <Button Content="✕" Padding="4,0" Foreground="{DynamicResource ErrBrush}"
                                             Click="RemoveParameter_Click"/>
                                 </DataTemplate>
                             </DataGridTemplateColumn.CellTemplate>

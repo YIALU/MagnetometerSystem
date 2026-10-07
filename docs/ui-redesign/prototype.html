@@ -1,0 +1,1685 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>磁力仪上位机 界面重设计原型 v1</title>
+<style>
+:root{
+  --enclosure:#E8ECEA; --panel:#FBFCFB; --panel-2:#F3F6F4; --panel-3:#EAEFEC;
+  --ink:#1C2422; --ink-2:#4B5753; --muted:#77837F; --line:#D2D9D5; --line-2:#E4E9E6;
+  --graphite:#1E2927; --graphite-2:#28342F; --graphite-3:#34433E; --g-ink:#E3EAE6; --g-muted:#91A39C;
+  --accent:#2456C2; --accent-h:#1D4AA8; --accent-soft:#E4ECFA; --accent-on-dark:#8FB0F5;
+  --ok:#1D8048; --ok-soft:#E1F2E7; --warn:#946100; --warn-soft:#FAF0D8; --err:#BF3A2F; --err-soft:#FBE7E4; --rec:#E5483D;
+  --font:"Segoe UI Variable Text","Segoe UI","Microsoft YaHei UI","Microsoft YaHei",sans-serif;
+  --mono:"Cascadia Mono","Cascadia Code",Consolas,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{font:13px/1.45 var(--font);color:var(--ink);background:#C9D1CD;min-width:1320px;min-height:800px;display:flex;flex-direction:column}
+button,input,select,textarea{font:inherit;color:inherit}
+h1,h2,h3,h4,p{margin:0}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.muted{color:var(--muted)} .ink2{color:var(--ink-2)}
+.spacer{flex:1}
+[hidden]{display:none!important}
+
+/* ---------- review tooling (not part of the app) ---------- */
+.review{height:46px;flex:none;display:flex;align-items:center;gap:14px;padding:0 18px;background:#F6F7F3;border-bottom:1px dashed #8E9A95;font-size:12.5px;color:#3B4643}
+.review-tag{background:#3B4643;color:#fff;border-radius:3px;padding:1px 7px;font-size:11.5px}
+.review strong{font-size:13px}
+.review .div{width:1px;height:18px;background:#C4CCC8}
+.review label{display:flex;align-items:center;gap:6px;cursor:pointer}
+.review-hint{margin-left:auto;color:#6B7672}
+.pin{display:none;position:absolute;top:-9px;right:-9px;z-index:30;width:20px;height:20px;border-radius:50%;background:#C2185B;color:#fff;font:600 11px/20px var(--font);text-align:center;cursor:help;box-shadow:0 0 0 2px #fff}
+body.pins .pin{display:block}
+.notes{position:fixed;top:46px;right:0;bottom:0;width:420px;background:#fff;border-left:1px solid #B9C3BE;box-shadow:-12px 0 30px rgba(28,36,34,.16);z-index:100;display:flex;flex-direction:column;transform:translateX(105%);transition:transform .18s ease-out}
+.notes.on{transform:none}
+.notes-h{display:flex;align-items:center;gap:8px;padding:14px 18px;border-bottom:1px solid var(--line-2)}
+.notes-h h2{font-size:15px}
+.notes-b{overflow:auto;padding:6px 18px 24px}
+.notes-b h3{font-size:12.5px;color:var(--muted);font-weight:500;margin:16px 0 6px}
+.note{display:grid;grid-template-columns:22px 1fr;gap:10px;padding:9px 0;border-bottom:1px solid var(--line-2);line-height:1.55}
+.note b.n{width:20px;height:20px;border-radius:50%;background:#C2185B;color:#fff;font-size:11px;display:grid;place-items:center;margin-top:1px}
+.note.flash{background:#FCEFF4}
+.note em{font-style:normal;color:#C2185B;font-size:12px;margin-left:4px}
+
+/* ---------- window chrome ---------- */
+.window{flex:1;margin:12px 16px 16px;display:flex;flex-direction:column;border:1px solid #93A09B;border-radius:8px;overflow:hidden;box-shadow:0 12px 32px rgba(30,41,39,.2);background:var(--enclosure);min-height:0;position:relative}
+.titlebar{height:32px;flex:none;display:flex;align-items:center;gap:8px;background:#F4F6F5;border-bottom:1px solid #D7DDDA;font-size:12px;color:#3D4845;padding-left:12px}
+.titlebar svg{width:16px;height:16px}
+.titlebar .wb{width:46px;height:32px;display:grid;place-items:center;color:#56625E;font-size:13px}
+.app{flex:1;display:grid;grid-template-columns:72px minmax(0,1fr);grid-template-rows:auto auto minmax(0,1fr);min-height:0}
+
+/* nav rail */
+.rail{grid-row:1/-1;grid-column:1;background:var(--graphite);display:flex;flex-direction:column;padding:8px 0;gap:2px}
+.rail-item{position:relative;height:60px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;color:var(--g-muted);font-size:12px;cursor:pointer;border:0;background:none;width:100%}
+.rail-item svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.rail-item:hover{color:var(--g-ink);background:var(--graphite-2)}
+.rail-item.on{color:#fff;background:var(--graphite-3)}
+.rail-item.on::before{content:"";position:absolute;left:0;top:12px;bottom:12px;width:3px;border-radius:0 2px 2px 0;background:var(--accent-on-dark)}
+.rail-item:focus-visible{outline:2px solid var(--accent-on-dark);outline-offset:-3px}
+.rail-sep{margin:12px 12px 2px;border-top:1px solid #3A4844;font-size:11px;color:#6F807A;padding-top:6px;text-align:center}
+.rail-foot{margin-top:auto;display:flex;flex-direction:column;gap:2px}
+.rail-ver{font-size:11px;color:#6F807A;text-align:center;padding:6px 0 4px;border:0;background:none;cursor:pointer}
+.rail-ver:hover{color:var(--g-ink)}
+.rail-ver i{display:inline-block;width:6px;height:6px;border-radius:50%;background:#F2B53A;margin-left:4px;vertical-align:1px}
+
+/* link strip: the signal chain, visible on every page */
+.strip{grid-row:1;grid-column:2;background:var(--graphite);color:var(--g-ink);display:flex;align-items:stretch;min-height:70px;padding-right:16px;border-bottom:1px solid #121A18;position:relative}
+.link-state{width:250px;flex:none;padding:10px 16px;border-right:1px solid #34423E;display:flex;flex-direction:column;justify-content:center;gap:3px;position:relative}
+.ls-top{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600}
+.ls-top .mono{font-weight:400;color:var(--g-ink);font-size:13px}
+.ls-sub{font-size:12px;color:var(--g-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ls-sub span+span{margin-left:10px}
+.dot{width:9px;height:9px;border-radius:50%;background:#6F807A;flex:none}
+.dot.rec{background:var(--rec);box-shadow:0 0 0 3px rgba(229,72,61,.28);animation:pulse 1.6s ease-in-out infinite}
+@keyframes pulse{50%{box-shadow:0 0 0 5px rgba(229,72,61,.08)}}
+.stages{display:flex;align-items:center;flex:1;min-width:0;padding-left:6px}
+.stage{padding:8px 14px;min-width:150px;position:relative}
+.st-label{font-size:12px;color:var(--g-muted);display:flex;align-items:center;gap:8px;height:19px}
+.st-main{font-size:19px;line-height:1.25;color:#fff;white-space:nowrap}
+.st-main small{font-family:var(--font);font-size:12px;color:var(--g-muted);margin-left:5px}
+.st-sub{font-size:12px;color:var(--g-muted);white-space:nowrap}
+.st-sub b{color:var(--g-ink);font-weight:500}
+.st-sub .gap{margin-left:10px}
+.conn{width:40px;height:2px;background:#3D4C48;position:relative;flex:none;border-radius:1px}
+.conn::after{content:"";position:absolute;right:-1px;top:-3px;width:6px;height:6px;border-top:2px solid #3D4C48;border-right:2px solid #3D4C48;transform:rotate(45deg)}
+.conn i{position:absolute;top:-2px;left:0;width:6px;height:6px;border-radius:50%;background:var(--accent-on-dark);opacity:0}
+.app:not([data-link="idle"]) .conn i{opacity:1;animation:flow 1.1s linear infinite}
+@keyframes flow{from{left:0}to{left:32px}}
+.st-badge{font-size:11.5px;border-radius:9px;padding:0 7px;line-height:18px;border:0;white-space:nowrap}
+.st-badge.ok{background:rgba(29,128,72,.28);color:#9BE0B6}
+.st-badge.warn{background:rgba(237,161,0,.22);color:#F4C766;cursor:pointer}
+.st-badge.warn:hover{background:rgba(237,161,0,.34)}
+.st-badge.err{background:rgba(229,72,61,.3);color:#FFB0A8}
+.app[data-link="idle"] .stage{opacity:.55}
+.app[data-link="err"] #stSave .st-main{color:#FFB0A8}
+.strip-actions{display:flex;align-items:center;gap:8px;margin-left:12px}
+.btn.on-dark{background:transparent;border-color:#5A6A64;color:var(--g-ink)}
+.btn.on-dark:hover{background:var(--graphite-2);border-color:#71827B}
+.strip .btn{height:34px;padding:0 16px}
+
+.banner{grid-row:2;grid-column:2;display:none;background:var(--err-soft);border-bottom:1px solid #EBC3BD;padding:9px 16px;align-items:center;gap:12px;color:#6E2018;position:relative}
+.app[data-link="err"] .banner{display:flex}
+.banner svg{width:18px;height:18px;flex:none;stroke:var(--err);fill:none;stroke-width:1.8}
+.banner p{flex:1;line-height:1.5}
+
+.content{grid-row:3;grid-column:2;position:relative;min-height:0;min-width:0}
+.page{position:absolute;inset:0;display:none;padding:12px;gap:12px;min-height:0;min-width:0}
+.page.on{display:grid}
+
+/* ---------- base components ---------- */
+.card{background:var(--panel);border:1px solid var(--line);border-radius:6px;min-height:0;min-width:0;display:flex;flex-direction:column;position:relative}
+.card-h{display:flex;align-items:center;gap:8px;padding:0 12px;min-height:44px;border-bottom:1px solid var(--line-2);flex:none}
+.card-h h3{font-size:14px;font-weight:600}
+.card-h .sub{font-size:12px;color:var(--muted)}
+.card-b{padding:12px;min-height:0}
+.scroll{overflow:auto;min-height:0}
+.btn{height:30px;padding:0 12px;border:1px solid var(--line);background:#fff;border-radius:4px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:6px;white-space:nowrap;color:var(--ink);flex:none}
+.btn:hover{background:var(--panel-2);border-color:#BAC4BF}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+.btn.primary:hover{background:var(--accent-h);border-color:var(--accent-h)}
+.btn.sm{height:26px;padding:0 9px;font-size:12px}
+.btn.ghost{border-color:transparent;background:transparent}
+.btn.ghost:hover{background:var(--panel-3)}
+.btn.danger{color:var(--err)}
+.btn.icon{width:30px;padding:0}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn:focus-visible,.seg button:focus-visible,.tab:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:4px;background:#fff;padding:2px;gap:2px;flex:none}
+.seg button{border:0;background:transparent;height:24px;padding:0 10px;border-radius:3px;cursor:pointer;color:var(--ink-2);white-space:nowrap}
+.seg button:hover{background:var(--panel-2)}
+.seg button.on{background:var(--accent-soft);color:var(--accent);font-weight:600}
+.seg.dark{background:#E8ECEA}
+input[type=text],input:not([type]),input[type=number],select,textarea{height:30px;border:1px solid var(--line);border-radius:4px;background:#fff;padding:0 8px;min-width:0}
+select{padding-right:4px}
+textarea{height:auto;padding:8px;resize:none;line-height:1.5}
+input:focus,select:focus,textarea:focus{outline:2px solid rgba(36,86,194,.3);border-color:var(--accent)}
+input.num{font-family:var(--mono);text-align:right}
+input:disabled,select:disabled{background:var(--panel-2);color:var(--muted)}
+input[type=checkbox],input[type=radio]{accent-color:var(--accent);width:15px;height:15px;margin:0;flex:none}
+.switch{appearance:none;width:32px!important;height:18px!important;border-radius:9px;background:#C5CEC9;position:relative;cursor:pointer;transition:background .12s}
+.switch::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:#fff;transition:left .12s}
+.switch:checked{background:var(--accent)}
+.switch:checked::after{left:16px}
+.tabs{display:flex;gap:2px;padding:0 6px;border-bottom:1px solid var(--line-2);min-height:42px;align-items:stretch;flex:none}
+.tab{border:0;background:none;padding:0 10px;cursor:pointer;color:var(--ink-2);position:relative;display:flex;align-items:center;gap:6px;white-space:nowrap}
+.tab:hover{color:var(--ink)}
+.tab.on{color:var(--ink);font-weight:600}
+.tab.on::after{content:"";position:absolute;left:8px;right:8px;bottom:-1px;height:2px;background:var(--accent);border-radius:2px}
+.count{font-size:11px;background:var(--panel-3);border-radius:8px;padding:0 6px;line-height:16px;color:var(--ink-2);font-weight:500}
+.count.warn{background:var(--warn-soft);color:var(--warn)}
+.tag{display:inline-flex;align-items:center;gap:5px;font-size:12px;border-radius:10px;padding:0 8px;height:20px;background:var(--panel-3);color:var(--ink-2);white-space:nowrap;font-weight:500;flex:none}
+.tag.ok{background:var(--ok-soft);color:var(--ok)}
+.tag.warn{background:var(--warn-soft);color:var(--warn)}
+.tag.err{background:var(--err-soft);color:var(--err)}
+.tag.accent{background:var(--accent-soft);color:var(--accent)}
+.tag.new{background:#FCEFF4;color:#A3154D}
+.tag.rec::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--rec)}
+.ico{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.hint{font-size:12px;color:var(--muted);line-height:1.55}
+.hint.box{background:var(--panel-2);border-radius:4px;padding:8px 10px;color:var(--ink-2)}
+.tbl{width:100%;border-collapse:collapse}
+.tbl th{font-weight:500;font-size:12px;color:var(--muted);text-align:left;padding:0 10px;height:32px;border-bottom:1px solid var(--line);background:var(--panel-2);position:sticky;top:0;z-index:1;white-space:nowrap}
+.tbl td{padding:0 10px;height:36px;border-bottom:1px solid var(--line-2);white-space:nowrap}
+.tbl .num{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums}
+.tbl tbody tr{cursor:default}
+.tbl tbody tr:hover td{background:#F0F3F1}
+.tbl tr.sel td,.tbl tr.sel:hover td{background:var(--accent-soft)}
+.tbl.compact td{height:30px}
+.tbl.compact th{height:28px}
+.tbl td input,.tbl td select{height:26px;font-size:12.5px}
+.sw{width:10px;height:10px;border-radius:2px;flex:none;display:inline-block}
+.field{display:flex;flex-direction:column;gap:5px}
+.field>label,.flabel{font-size:12px;color:var(--ink-2)}
+.row{display:flex;align-items:center;gap:8px}
+.form{display:flex;flex-direction:column;gap:14px}
+.unit{color:var(--muted);font-size:12px}
+.kv{display:grid;grid-template-columns:96px 1fr;row-gap:8px;column-gap:12px;font-size:13px}
+.kv dt{color:var(--muted)} .kv dd{margin:0}
+.menu-wrap{position:relative}
+.menu{position:absolute;top:calc(100% + 4px);right:0;background:#fff;border:1px solid var(--line);border-radius:6px;box-shadow:0 10px 26px rgba(28,36,34,.16);padding:6px;min-width:230px;z-index:40;display:none}
+.menu.on{display:block}
+.menu-item{display:flex;align-items:center;gap:8px;width:100%;border:0;background:none;text-align:left;padding:0 8px;height:32px;border-radius:4px;cursor:pointer}
+.menu-item:hover{background:var(--panel-2)}
+.menu-item.danger{color:var(--err)}
+.menu-sep{height:1px;background:var(--line-2);margin:4px 0}
+.menu-note{font-size:11.5px;color:var(--muted);padding:2px 8px 6px}
+
+/* ---------- workspace ---------- */
+.page.ws{grid-template-columns:minmax(0,1fr) 340px;grid-template-rows:minmax(0,1fr) auto}
+.ws .chart-card{grid-column:1;grid-row:1}
+.ws .side{grid-column:2;grid-row:1/3}
+.ws .dock{grid-column:1;grid-row:2;height:250px}
+.ws .dock.collapsed{height:44px}
+.ws .dock.collapsed .dock-body{display:none}
+.page.ws.focus{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr)}
+.ws.focus .side,.ws.focus .dock{display:none}
+.toolbar{display:flex;align-items:center;gap:10px;padding:0 10px;min-height:48px;border-bottom:1px solid var(--line-2);flex:none;position:relative}
+.tb-field{display:flex;align-items:center;gap:6px;color:var(--ink-2);font-size:12.5px;white-space:nowrap}
+.tb-field select{height:28px}
+.tb-meta{font-size:12px;color:var(--muted);white-space:nowrap}
+.vsep{width:1px;height:20px;background:var(--line);flex:none}
+.chart-body{position:relative;flex:1;min-height:0;display:flex;flex-direction:column}
+.legend{display:flex;flex-wrap:wrap;gap:4px 14px;padding:8px 14px 0 66px;font-size:12px;color:var(--ink-2);min-height:28px;flex:none}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.legend .lnote{color:var(--muted)}
+.plot-wrap{position:relative;flex:1;min-height:0}
+.plot-wrap>svg{position:absolute;inset:0;width:100%;height:100%;display:block}
+svg text{font-family:var(--font)}
+.g-grid{stroke:#E7ECE9;stroke-width:1}
+.g-axis{stroke:#C6CEC9;stroke-width:1}
+.g-tick{fill:#7C8783;font-size:11px;font-family:var(--mono)}
+.g-title{fill:#56625E;font-size:11.5px}
+.g-band{fill:rgba(36,86,194,.08);stroke:rgba(36,86,194,.35);stroke-dasharray:3 3}
+.g-cross{stroke:#56625E;stroke-width:1;stroke-dasharray:2 3}
+.multi{position:absolute;inset:0;overflow:auto;display:none;grid-template-columns:1fr;gap:0 12px;padding:4px 10px 8px;align-content:start}
+.multi.on{display:grid}
+.multi.cols2{grid-template-columns:1fr 1fr}
+.mplot{height:var(--mh,160px);border-bottom:1px solid var(--line-2);position:relative}
+.mplot svg{position:absolute;inset:0;width:100%;height:100%}
+.mplot-h{position:absolute;left:66px;top:6px;display:flex;align-items:center;gap:7px;font-size:12px;z-index:1;background:rgba(251,252,251,.85);padding-right:6px}
+.mplot-h b{font-weight:600}
+.paused-chip{position:absolute;top:44px;left:50%;transform:translateX(-50%);background:var(--graphite);color:#fff;border-radius:18px;padding:5px 6px 5px 14px;display:none;align-items:center;gap:10px;font-size:12.5px;z-index:6;white-space:nowrap}
+.paused-chip .btn{height:24px;border-radius:12px;background:#fff;color:var(--ink);border:0;font-size:12px}
+.ws.paused .paused-chip{display:flex}
+.tip{position:absolute;pointer-events:none;background:#fff;border:1px solid var(--line);border-radius:6px;box-shadow:0 6px 18px rgba(28,36,34,.15);padding:8px 10px;font-size:12px;display:none;min-width:200px;z-index:8}
+.tip .t-h{color:var(--muted);margin-bottom:4px;font-family:var(--mono)}
+.tip .t-r{display:flex;align-items:center;gap:8px;height:20px}
+.tip .t-r .v{margin-left:auto;font-family:var(--mono);padding-left:12px}
+.tip .t-f{margin-top:5px;padding-top:5px;border-top:1px solid var(--line-2);color:var(--muted)}
+.empty{position:absolute;inset:0;display:none;flex-direction:column;align-items:center;justify-content:center;gap:12px;text-align:center;color:var(--ink-2);background:var(--panel);z-index:7;border-radius:0 0 6px 6px}
+.empty h3{font-size:16px;color:var(--ink)}
+.empty p{max-width:430px;line-height:1.6}
+.app[data-link="idle"] .ws .empty{display:flex}
+
+.side .side-pane{display:none;flex:1;min-height:0;overflow:auto;flex-direction:column}
+.side .side-pane.on{display:flex}
+.sec-h{display:flex;align-items:center;gap:8px;padding:12px 12px 6px;font-size:12px;color:var(--muted);flex:none}
+.sec-h b{color:var(--ink);font-weight:600;font-size:12.5px}
+.ch-row{display:grid;grid-template-columns:10px 16px 10px minmax(0,1fr) auto 28px 14px;align-items:center;gap:8px;height:40px;padding:0 10px 0 6px;border-bottom:1px solid var(--line-2);cursor:pointer}
+.ch-row:hover{background:#F2F5F3}
+.ch-row.open{background:var(--panel-2)}
+.grip{color:#B3BDB8;cursor:grab;font-size:10px;letter-spacing:-1px;line-height:1}
+.ch-name{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ch-name small{font-weight:400;color:var(--muted);margin-left:6px;font-size:11.5px}
+.ch-val{font-family:var(--mono);text-align:right;font-variant-numeric:tabular-nums}
+.ch-unit{color:var(--muted);font-size:12px}
+.chev{color:var(--muted);font-size:10px;transition:transform .12s}
+.ch-row.open .chev{transform:rotate(180deg)}
+.ch-detail{padding:4px 12px 12px 40px;background:var(--panel-2);border-bottom:1px solid var(--line-2);display:flex;flex-direction:column;gap:10px}
+.colors{display:flex;gap:6px}
+.colors i{width:18px;height:18px;border-radius:4px;cursor:pointer;box-shadow:inset 0 0 0 2px #fff,0 0 0 1px var(--line)}
+.colors i.on{box-shadow:inset 0 0 0 2px #fff,0 0 0 2px var(--ink)}
+.add-row{display:flex;gap:6px;padding:8px 12px}
+.formula{font-family:var(--mono);font-size:11.5px;color:var(--muted)}
+.pane-pad{padding:10px 12px;display:flex;flex-direction:column;gap:12px}
+.toggles{display:flex;flex-wrap:wrap;gap:6px}
+.toggles button{height:26px;border:1px solid var(--line);background:#fff;border-radius:13px;padding:0 10px;font-size:12px;cursor:pointer;color:var(--ink-2)}
+.toggles button.on{background:var(--accent-soft);border-color:#B9CBEF;color:var(--accent);font-weight:600}
+.switch-row{display:flex;align-items:center;gap:10px;justify-content:space-between;font-weight:600}
+.ext{font-size:12px;color:var(--ink-2);background:var(--panel-2);border-radius:4px;padding:8px 10px;display:flex;gap:8px;align-items:flex-start;line-height:1.5}
+
+.dock .dock-tools{margin-left:auto;display:flex;align-items:center;gap:6px;padding-right:4px}
+.dock-body{flex:1;min-height:0;display:flex;flex-direction:column}
+.dock-pane{display:none;flex:1;min-height:0;flex-direction:column}
+.dock-pane.on{display:flex}
+.log{flex:1;overflow:auto;font-size:12.5px;min-height:0}
+.log-row{display:grid;grid-template-columns:96px 44px minmax(0,1fr) auto;gap:12px;align-items:center;padding:0 12px;min-height:27px;border-bottom:1px solid #EDF1EE}
+.log-row .tm{font-family:var(--mono);color:var(--muted);font-size:12px}
+.log-row.raw{grid-template-columns:96px 40px minmax(0,1fr) auto}
+.log-row.ev{grid-template-columns:96px minmax(0,1fr)}
+.le{padding:6px 12px;border-bottom:1px solid #EDF1EE}
+.le .tm{font-family:var(--mono);color:var(--muted);font-size:12px}
+.le-top{display:grid;grid-template-columns:92px 40px minmax(0,1fr);gap:10px;align-items:center}
+.le-sub{padding-left:142px;font-size:12px;color:var(--ink-2);display:flex;gap:8px;margin-top:2px}
+.log-row .st{font-size:12px;color:var(--ink-2);white-space:nowrap;display:flex;align-items:center;gap:6px}
+.dir{font-size:11.5px;border-radius:3px;padding:0 6px;line-height:18px;text-align:center;font-weight:500}
+.dir.tx{background:var(--accent-soft);color:var(--accent)}
+.dir.rx{background:#E3EEEA;color:#2B5C4F}
+.hex{font-family:var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12px}
+.hex .hd{color:var(--accent);font-weight:600}
+.hex .bad{background:var(--err-soft);color:var(--err);border-radius:2px}
+.hex .drop{color:#A9B3AF;text-decoration:line-through}
+.res-ok{color:var(--ok)} .res-err{color:var(--err)} .res-warn{color:var(--warn)}
+.send-row{display:flex;gap:8px;align-items:center;padding:8px 12px;border-top:1px solid var(--line-2);flex:none}
+.send-row input[type=text]{flex:1;font-family:var(--mono)}
+.send-note{font-size:11.5px;color:var(--muted);padding:0 12px 8px;flex:none}
+
+/* ---------- connection & protocol ---------- */
+.page.connp{grid-template-columns:340px minmax(0,1fr);grid-template-rows:minmax(0,1fr)}
+.conn-left{display:flex;flex-direction:column;gap:12px;min-height:0;overflow:auto}
+.conn-right{display:grid;grid-template-rows:minmax(0,1fr) 250px;gap:12px;min-height:0}
+.ser3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+.ser3 .field select{width:100%}
+.dirty{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--warn)}
+.dirty::before{content:"";width:7px;height:7px;border-radius:50%;background:#E0A21B}
+.proto-meta{display:flex;align-items:flex-end;gap:16px;padding:12px 12px 0;flex:none}
+.bytemap{display:flex;height:54px;border-radius:4px;overflow:hidden;border:1px solid var(--line);margin:12px 12px 2px;flex:none}
+.bm-seg{display:flex;flex-direction:column;justify-content:center;padding:0 7px;border-right:1px solid #fff;min-width:38px;cursor:pointer;font-size:11px;overflow:hidden;white-space:nowrap;color:var(--ink-2);position:relative}
+.bm-seg:last-child{border-right:0}
+.bm-seg b{font-weight:600;font-size:12px;color:var(--ink);overflow:hidden;text-overflow:ellipsis}
+.bm-seg.fixed{background:#D9E0DC}
+.bm-seg.len{background:#E6EBE8}
+.bm-seg.sum{background:repeating-linear-gradient(135deg,#E2E7E4 0 5px,#D3DAD6 5px 7px)}
+.bm-seg.data{border-top:4px solid var(--c)}
+.bm-seg.sel{box-shadow:inset 0 0 0 2px var(--accent)}
+.bm-ruler{display:flex;margin:0 12px 6px;font-family:var(--mono);font-size:10.5px;color:var(--muted);flex:none}
+.bm-ruler span{min-width:38px;padding-left:1px;overflow:hidden}
+.seg-tbl{flex:1;min-height:0;overflow:auto;border-top:1px solid var(--line-2)}
+.seg-tbl td.na{color:#A9B3AF}
+.seg-tbl .t-type{display:inline-flex;align-items:center;gap:6px}
+.parse-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.1fr);gap:12px;padding:12px;min-height:0;flex:1}
+.parse-grid textarea{width:100%;height:100%;font-family:var(--mono);font-size:12px}
+.parse-res{display:flex;flex-direction:column;gap:8px;min-height:0}
+.parse-res .scroll{flex:1;border:1px solid var(--line-2);border-radius:4px}
+
+/* ---------- commands ---------- */
+.page.cmd{grid-template-columns:260px minmax(0,1fr) 430px;grid-template-rows:minmax(0,1fr)}
+.cmd-list{flex:1;overflow:auto}
+.cmd-item{padding:9px 12px;border-bottom:1px solid var(--line-2);cursor:pointer;border-left:3px solid transparent}
+.cmd-item:hover{background:#F2F5F3}
+.cmd-item.sel{background:var(--accent-soft);border-left-color:var(--accent)}
+.cmd-item b{display:block;font-weight:600}
+.cmd-item span{font-size:12px;color:var(--muted)}
+.frame{display:flex;flex-wrap:wrap;gap:6px;align-items:flex-end}
+.fb{display:flex;flex-direction:column;align-items:center;gap:4px}
+.fb .bytes{display:flex;gap:2px}
+.fb .bytes i{font-style:normal;font-family:var(--mono);font-size:14px;width:32px;height:32px;display:grid;place-items:center;border-radius:4px;background:#fff;border:1px solid var(--line)}
+.fb.hdr .bytes i{background:#D9E0DC;border-color:#D9E0DC}
+.fb.par .bytes i{background:var(--accent-soft);border-color:#BED0F2;color:var(--accent);font-weight:600}
+.fb.sum .bytes i{background:repeating-linear-gradient(135deg,#EEF2EF 0 5px,#E0E6E3 5px 7px)}
+.fb small{font-size:11px;color:var(--muted)}
+.ladder{display:flex;flex-direction:column;gap:0;border:1px solid var(--line);border-radius:6px;overflow:hidden}
+.step{display:grid;grid-template-columns:28px 92px minmax(0,1fr);gap:10px;align-items:start;padding:10px 12px;border-bottom:1px solid var(--line-2);background:#fff}
+.step:last-child{border-bottom:0}
+.step .mk{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:700}
+.step.ok .mk{background:var(--ok-soft);color:var(--ok)}
+.step.todo .mk{background:var(--warn-soft);color:var(--warn)}
+.step.wait .mk{background:var(--panel-3);color:var(--muted)}
+.step b{font-weight:600}
+.step p{color:var(--ink-2);line-height:1.55}
+.step .tm{font-family:var(--mono);font-size:12px;color:var(--muted)}
+.param-row{display:grid;grid-template-columns:110px 140px 40px 1fr;gap:10px;align-items:center}
+
+/* ---------- data ---------- */
+.page.data{grid-template-columns:minmax(0,1fr) 390px;grid-template-rows:minmax(0,1fr)}
+.page.data.playing{grid-template-columns:minmax(0,1fr) 300px;grid-template-rows:auto minmax(0,1fr) auto}
+.data .list-card,.data .detail-card{grid-row:1}
+.data .pb{display:none}
+.data.playing .list-card,.data.playing .detail-card{display:none}
+.data.playing .pb{display:flex}
+.pb-head{grid-column:1/-1;grid-row:1;display:none;align-items:center;gap:12px;flex-direction:row}
+.data.playing .pb-head{display:flex}
+.pb-head h2{font-size:16px}
+.pb-chart{grid-column:1;grid-row:2}
+.pb-side{grid-column:2;grid-row:2}
+.pb-transport{grid-column:1/-1;grid-row:3;flex-direction:row!important;align-items:center;gap:12px;padding:10px 14px}
+.scrub{flex:1;height:30px;position:relative;cursor:pointer}
+.scrub .track{position:absolute;left:0;right:0;top:13px;height:4px;border-radius:2px;background:var(--panel-3)}
+.scrub .fill{position:absolute;left:0;top:13px;height:4px;border-radius:2px;background:var(--accent)}
+.scrub .knob{position:absolute;top:7px;width:16px;height:16px;border-radius:50%;background:#fff;border:2px solid var(--accent);margin-left:-8px}
+.sess-name{display:flex;align-items:center;gap:8px}
+.legacy td{color:var(--muted)}
+.disabled-reason{font-size:12px;color:var(--ink-2);background:var(--panel-2);border-radius:4px;padding:8px 10px;line-height:1.5;display:flex;gap:8px}
+
+/* ---------- calibration ---------- */
+.page.cal{grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,1fr)}
+.cal-top{display:flex;align-items:center;gap:16px}
+.cal-top .tabs{border:0;padding:0;min-height:36px}
+.stepper{display:flex;align-items:center;gap:0;padding:12px 14px;border-bottom:1px solid var(--line-2);flex:none}
+.stp{display:flex;align-items:center;gap:8px;border:0;background:none;cursor:pointer;color:var(--muted);padding:4px 6px;border-radius:4px}
+.stp:hover{background:var(--panel-2)}
+.stp i{font-style:normal;width:22px;height:22px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:700;background:var(--panel-3);color:var(--ink-2)}
+.stp.done i{background:var(--ok-soft);color:var(--ok)}
+.stp.on{color:var(--ink);font-weight:600}
+.stp.on i{background:var(--accent);color:#fff}
+.stp-line{flex:0 0 48px;height:1px;background:var(--line);margin:0 6px}
+.cal-body{flex:1;min-height:0;overflow:auto}
+.cal-step{display:none;padding:14px;gap:14px}
+.cal-step.on{display:grid}
+.cal-foot{display:flex;align-items:center;gap:10px;padding:10px 14px;border-top:1px solid var(--line-2);flex:none}
+.pts48{display:grid;grid-template-columns:repeat(12,1fr);gap:4px}
+.pts48 i{height:16px;border-radius:3px;background:var(--panel-3)}
+.pts48 i.on{background:var(--accent)}
+.pts48 i.next{box-shadow:inset 0 0 0 2px var(--accent);background:#fff}
+.proj{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.proj figure{margin:0;border:1px solid var(--line-2);border-radius:4px;background:#fff;padding:6px}
+.proj figcaption{font-size:12px;color:var(--ink-2);padding:0 2px 4px}
+.proj svg{width:100%;aspect-ratio:1;display:block}
+.bar{height:8px;border-radius:4px;background:var(--panel-3);overflow:hidden}
+.bar i{display:block;height:100%;background:var(--accent);border-radius:4px}
+.matrix{display:grid;grid-template-columns:repeat(3,auto);gap:4px 18px;font-family:var(--mono);font-size:13px;justify-content:start;padding:10px 14px;background:var(--panel-2);border-radius:4px;border-left:2px solid var(--line);border-right:2px solid var(--line)}
+.stat4{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+.stat4 div{background:var(--panel-2);border-radius:4px;padding:8px 10px}
+.stat4 small{display:block;font-size:12px;color:var(--muted)}
+.stat4 b{font-family:var(--mono);font-weight:500;font-size:15px}
+.viz5{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.viz5 figure{margin:0;border:1px solid var(--line-2);border-radius:4px;background:#fff;padding:6px 8px 8px}
+.viz5 figcaption{font-size:12px;color:var(--ink-2);display:flex;gap:10px;align-items:center}
+.viz5 svg{width:100%;height:190px;display:block}
+.viz5 .wide{grid-column:span 2}
+.lg{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;color:var(--muted)}
+.lg i{width:10px;height:3px;border-radius:2px;display:inline-block}
+
+/* ---------- settings ---------- */
+.page.set{grid-template-columns:200px minmax(0,1fr);grid-template-rows:minmax(0,1fr)}
+.set-nav{display:flex;flex-direction:column;padding:8px}
+.set-nav button{border:0;background:none;text-align:left;height:34px;padding:0 12px;border-radius:4px;cursor:pointer;color:var(--ink-2)}
+.set-nav button.on{background:var(--accent-soft);color:var(--accent);font-weight:600}
+.set-body{overflow:auto}
+.set-sec{padding:18px 24px;border-bottom:1px solid var(--line-2);max-width:760px}
+.set-sec h3{font-size:15px;margin-bottom:12px}
+.set-item{display:grid;grid-template-columns:180px minmax(0,1fr);gap:16px;align-items:start;padding:10px 0}
+.set-item>label{color:var(--ink-2);padding-top:5px}
+.saved{font-size:12px;color:var(--ok);display:inline-flex;align-items:center;gap:4px}
+
+/* ---------- modal ---------- */
+.modal{position:absolute;inset:32px 0 0 0;background:rgba(28,36,34,.32);display:none;align-items:center;justify-content:center;z-index:50}
+.modal.on{display:flex}
+.dialog{width:600px;background:var(--panel);border-radius:8px;box-shadow:0 18px 48px rgba(20,28,26,.3);display:flex;flex-direction:column;max-height:90%}
+.dialog-h{display:flex;align-items:center;padding:14px 18px;border-bottom:1px solid var(--line-2)}
+.dialog-h h2{font-size:15px}
+.dialog-b{padding:16px 18px;display:flex;flex-direction:column;gap:16px;overflow:auto}
+.dialog-f{display:flex;align-items:center;gap:8px;padding:12px 18px;border-top:1px solid var(--line-2)}
+.chk-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+.chk-grid label{display:flex;align-items:center;gap:6px;height:28px;padding:0 8px;border:1px solid var(--line-2);border-radius:4px;background:#fff;cursor:pointer}
+
+@media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+
+<div class="review" role="toolbar" aria-label="原型评审工具">
+  <span class="review-tag">原型</span>
+  <strong>界面重设计 评审稿 v1</strong>
+  <span class="div"></span>
+  <span>模拟链路状态</span>
+  <div class="seg dark" id="linkSeg">
+    <button data-link="idle">未连接</button><button data-link="run" class="on">采集中</button><button data-link="err">保存失败</button>
+  </div>
+  <span class="div"></span>
+  <label><input type="checkbox" id="pinToggle"> 显示改动标注</label>
+  <button class="btn sm" id="notesBtn">本页改动说明</button>
+  <span class="review-hint">数据为模拟值。灰色虚线以上是评审工具，不属于软件界面。</span>
+</div>
+
+<div class="window">
+  <div class="titlebar">
+    <svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.5" fill="none" stroke="#56625E" stroke-width="1.2"/><path d="M8 2.5 10 8H6z" fill="#C23A30"/><path d="M8 13.5 6 8h4z" fill="#2456C2"/></svg>
+    <span>磁力仪数据采集与分析系统</span>
+    <span class="spacer"></span>
+    <span class="wb">─</span><span class="wb">☐</span><span class="wb">✕</span>
+  </div>
+
+  <div class="app" id="app" data-link="run">
+    <nav class="rail" aria-label="主导航">
+      <button class="rail-item on" data-go="ws"><svg viewBox="0 0 24 24"><path d="M3 12h3l2.5-6 4 13 3-9 1.5 2H21"/></svg>采集</button>
+      <button class="rail-item" data-go="conn"><svg viewBox="0 0 24 24"><path d="M9 3v4M15 3v4M7 7h10v4a5 5 0 0 1-10 0zM12 16v5"/></svg>连接</button>
+      <button class="rail-item" data-go="cmd"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M12 15h5"/></svg>命令</button>
+      <button class="rail-item" data-go="data"><svg viewBox="0 0 24 24"><ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6M5 12c0 1.7 3.1 3 7 3s7-1.3 7-3"/></svg>数据</button>
+      <div class="rail-sep">扩展</div>
+      <button class="rail-item" data-go="cal"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M15.5 8.5 13.4 13.4 8.5 15.5 10.6 10.6z"/></svg>校正</button>
+      <div class="rail-foot">
+        <button class="rail-item" data-go="set"><svg viewBox="0 0 24 24"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg>设置</button>
+        <button class="rail-ver" data-go="set" data-sec="about" title="有新版本 v0.5.3，点击查看">v0.5.2<i></i></button>
+      </div>
+    </nav>
+
+    <header class="strip" id="strip">
+      <div class="link-state">
+        <div class="ls-top"><span class="dot rec" id="lsDot"></span><span id="lsLabel">采集中</span><span class="mono" id="lsTimer">00:12:41</span></div>
+        <div class="ls-sub"><span>COM3</span><span>115200 8N1</span></div>
+        <div class="ls-sub" title="双三轴 Binary (AA55, Double, XOR)">双三轴 Binary (AA55, Double, XOR)</div>
+        <b class="pin" data-pin="ws-1" style="right:6px;top:6px"></b>
+      </div>
+      <div class="stages">
+        <div class="stage" id="stRecv">
+          <div class="st-label">接收</div>
+          <div class="st-main mono"><span id="vBytes">2.08</span><small id="vBytesU">MB</small></div>
+          <div class="st-sub"><b class="mono" id="vByteRate">2.7</b> kB/s</div>
+        </div>
+        <div class="conn"><i></i></div>
+        <div class="stage" id="stParse">
+          <div class="st-label">解析 <button class="st-badge warn" id="vErrBadge" title="打开原始报文中的异常帧">异常 3</button></div>
+          <div class="st-main mono"><span id="vFrames">37,897</span><small>帧</small></div>
+          <div class="st-sub">实测 <b class="mono" id="vRate">49.8</b> Hz<span class="gap">标称 50 Hz</span></div>
+          <b class="pin" data-pin="ws-2" style="right:0;top:2px"></b>
+        </div>
+        <div class="conn"><i></i></div>
+        <div class="stage" id="stSave">
+          <div class="st-label">保存 <span class="st-badge ok" id="vSaveBadge">正常</span></div>
+          <div class="st-main mono"><span id="vSaved">37,862</span><small id="vSavedU">已提交</small></div>
+          <div class="st-sub">待写 <b class="mono" id="vPending">35</b><span class="gap" id="vSession">会话 #129</span></div>
+        </div>
+      </div>
+      <div class="strip-actions">
+        <button class="btn on-dark" id="connBtn">停止并断开</button>
+      </div>
+    </header>
+
+    <div class="banner" role="alert">
+      <svg viewBox="0 0 24 24"><path d="M12 3 2 20h20zM12 10v4M12 17h.01"/></svg>
+      <p><b>写入数据库失败：database is locked</b>（%LOCALAPPDATA%\MagnetometerSystem\magnetometer.db）。采集与曲线继续，<b class="mono" id="bPending">1,245</b> 条待写读数暂存在内存中，修复后点击重试。断电或强制结束程序会丢失这些未提交的数据。</p>
+      <button class="btn sm primary" id="retryBtn">重试写入</button>
+      <button class="btn sm">打开日志目录</button>
+    </div>
+
+    <main class="content">
+
+      <!-- ============ 采集 ============ -->
+      <section class="page ws on" data-page="ws" id="wsPage">
+        <div class="card chart-card">
+          <div class="toolbar">
+            <div class="seg" id="plotModeSeg"><button data-mode="single" class="on">单图</button><button data-mode="multi">多图</button></div>
+            <div class="seg" id="colSeg" hidden><button data-cols="1" class="on">1 列</button><button data-cols="2">2 列</button></div>
+            <span class="vsep"></span>
+            <label class="tb-field">时间窗口 <select id="winSel"><option value="10">10 s</option><option value="30">30 s</option><option value="60" selected>60 s</option><option value="300">5 min</option></select></label>
+            <label class="tb-field">Y 轴 <select id="ySel"><option>自动</option><option>手动范围…</option></select></label>
+            <span class="spacer"></span>
+            <span class="tb-meta" title="曲线重绘频率，在设置中修改；与设备输出频率无关">绘图刷新 20 Hz</span>
+            <button class="btn" id="pauseBtn">暂停显示</button>
+            <div class="menu-wrap">
+              <button class="btn" id="moreBtn">更多</button>
+              <div class="menu" id="moreMenu">
+                <label class="menu-item"><input type="checkbox" id="optGrid" checked> 显示网格</label>
+                <label class="menu-item"><input type="checkbox" checked> 自动滚动到最新</label>
+                <div class="menu-item" style="cursor:default">多图行高 <span class="spacer"></span>
+                  <div class="seg" id="rowHSeg"><button data-h="120">紧凑</button><button data-h="160" class="on">标准</button><button data-h="220">宽松</button></div></div>
+                <div class="menu-sep"></div>
+                <button class="menu-item" id="clearBtn">清空曲线显示</button>
+                <div class="menu-note">只清空曲线缓存，不影响已保存的读数。</div>
+              </div>
+            </div>
+            <button class="btn" id="focusBtn">专注曲线</button>
+            <b class="pin" data-pin="ws-3" style="left:4px;top:-8px;right:auto"></b>
+          </div>
+          <div class="chart-body" id="chartBody">
+            <div class="legend" id="legend"></div>
+            <div class="plot-wrap" id="plotWrap">
+              <svg id="mainPlot" aria-label="实时曲线"></svg>
+              <div class="tip" id="tip"></div>
+            </div>
+            <div class="multi" id="multiGrid"></div>
+            <div class="paused-chip">显示已暂停，采集与保存继续<button class="btn" id="resumeBtn">继续显示</button></div>
+            <b class="pin" data-pin="ws-6" style="left:50%;top:44px;right:auto"></b>
+            <div class="empty">
+              <h3>还没有连接设备</h3>
+              <p>当前端口 COM3，协议「双三轴 Binary」。点击顶部「连接并开始保存」后会先创建新会话，再开始接收；解析出的读数自动保存并在这里绘制。</p>
+              <div class="row"><button class="btn primary" data-act="connect">连接并开始保存</button><button class="btn" data-go="conn">检查连接参数</button></div>
+            </div>
+          </div>
+        </div>
+
+        <aside class="card side">
+          <div class="tabs" id="sideTabs">
+            <button class="tab on" data-pane="ch">通道</button>
+            <button class="tab" data-pane="stat">统计</button>
+            <button class="tab" data-pane="iv">区间</button>
+            <button class="tab" data-pane="flt">滤波</button>
+            <button class="tab" data-pane="cor">校正</button>
+            <b class="pin" data-pin="ws-4" style="right:8px;top:10px"></b>
+          </div>
+          <div class="side-pane on" data-pane="ch">
+            <div class="sec-h"><b>协议通道</b><span class="count">7</span><span class="spacer"></span><button class="btn sm ghost" id="allVisBtn">全部显示</button></div>
+            <div id="chList"></div>
+            <div class="sec-h" style="padding-top:16px"><b>计算通道</b><span class="count">1</span></div>
+            <div id="compList"></div>
+            <div class="add-row"><button class="btn sm">+ 总场</button><button class="btn sm">+ 梯度</button><button class="btn sm">+ 公式</button></div>
+            <p class="hint" style="padding:4px 12px 14px">拖动左侧手柄调整顺序。显示偏移只移动曲线位置，保存与统计使用原始读数。</p>
+          </div>
+          <div class="side-pane" data-pane="stat">
+            <div class="pane-pad">
+              <div class="row"><span class="flabel">滚动窗口</span><input class="num" style="width:64px" value="10"><span class="unit">s</span></div>
+              <div class="toggles" id="statToggles">
+                <button data-k="mean" class="on">均值</button><button data-k="std" class="on">标准差</button><button data-k="pp" class="on">峰峰值</button><button data-k="rms">RMS</button><button data-k="min">最小</button><button data-k="max">最大</button>
+              </div>
+            </div>
+            <div style="overflow:auto"><table class="tbl compact" id="statTbl"></table></div>
+            <p class="hint" style="padding:10px 12px">基于曲线缓存计算（每通道最近 100,000 点），不读取数据库。</p>
+          </div>
+          <div class="side-pane" data-pane="iv">
+            <div class="pane-pad">
+              <div class="row"><div class="field" style="flex:1"><label>起点</label><input class="mono" id="ivA" value="14:14:21.0"></div><div class="field" style="flex:1"><label>终点</label><input class="mono" id="ivB" value="14:14:31.0"></div></div>
+              <div class="row"><button class="btn sm">在曲线上框选</button><span class="spacer"></span><button class="btn sm">清除</button><button class="btn sm primary">分析</button></div>
+            </div>
+            <div style="overflow:auto"><table class="tbl compact" id="ivTbl"></table></div>
+            <div class="pane-pad"><p class="hint">区间在曲线上以蓝色虚线框标出。结果来自曲线缓存。</p><button class="btn sm" style="align-self:flex-start">导出区间 CSV…</button></div>
+          </div>
+          <div class="side-pane" data-pane="flt">
+            <div class="pane-pad">
+              <label class="switch-row"><span>显示滤波</span><input type="checkbox" class="switch" id="fltOn"></label>
+              <div class="row"><div class="field" style="flex:1"><label>类型</label><select id="fltType"><option>滑动平均</option><option>中值</option></select></div><div class="field" style="width:96px"><label>窗口（点）</label><input class="num" id="fltN" value="9"></div></div>
+              <p class="hint box">只改变曲线显示。保存到会话的始终是协议解析后的原始读数。</p>
+            </div>
+          </div>
+          <div class="side-pane" data-pane="cor">
+            <div class="pane-pad">
+              <div class="ext"><svg class="ico" viewBox="0 0 24 24" style="margin-top:2px"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01M11 12h1v5h1"/></svg><span>扩展功能，默认关闭，不影响普通采集。</span></div>
+              <label class="switch-row"><span>正交度改正预览</span><input type="checkbox" class="switch"></label>
+              <div class="field"><label>第一组配置</label><select><option>探头 A 2026-09-28（单三轴）</option><option>探头 B 2026-09-30（单三轴）</option></select></div>
+              <div class="row"><span class="flabel" style="width:36px">通道</span><select style="flex:1"><option>X1</option></select><select style="flex:1"><option>Y1</option></select><select style="flex:1"><option>Z1</option></select></div>
+              <div class="field"><label>第二组配置（可选）</label><select><option>不使用</option><option>探头 B 2026-09-30（单三轴）</option></select></div>
+              <div class="row"><span class="flabel" style="width:36px">通道</span><select style="flex:1" disabled><option>X2</option></select><select style="flex:1" disabled><option>Y2</option></select><select style="flex:1" disabled><option>Z2</option></select></div>
+              <p class="hint">开启后曲线显示改正后的值，图例标注「改正」；原始读数照常保存。</p>
+              <button class="btn sm" data-go="cal" style="align-self:flex-start">管理校正配置</button>
+            </div>
+          </div>
+        </aside>
+
+        <div class="card dock" id="dock">
+          <div class="tabs" id="dockTabs">
+            <button class="tab on" data-pane="io">收发</button>
+            <button class="tab" data-pane="raw">原始报文 <span class="count warn">3 异常</span></button>
+            <button class="tab" data-pane="ev">事件</button>
+            <div class="dock-tools">
+              <label class="tb-field" id="rawFilter" hidden><input type="checkbox"> 只看异常</label>
+              <label class="tb-field"><input type="checkbox"> 暂停滚动</label>
+              <button class="btn sm ghost">清空</button>
+              <button class="btn sm ghost" id="dockToggle" title="收起">收起</button>
+            </div>
+            <b class="pin" data-pin="ws-5" style="left:300px;top:10px;right:auto"></b>
+          </div>
+          <div class="dock-body">
+            <div class="dock-pane on" data-pane="io">
+              <div class="log" id="ioLog"></div>
+              <div class="send-row">
+                <select style="width:150px"><option>常用命令…</option><option>开始输出</option><option>停止输出</option><option>查询版本</option></select>
+                <input type="text" placeholder="输入 ASCII 文本，或空格分隔的 HEX 字节" value="VER?">
+                <select style="width:84px" title="行尾"><option>CRLF</option><option>LF</option><option>CR</option><option>无行尾</option></select>
+                <label class="tb-field"><input type="checkbox"> HEX</label>
+                <button class="btn primary send-btn">发送</button>
+              </div>
+              <div class="send-note">「已写出」只表示本机发送完成；设备是否执行，看应答或数据变化。</div>
+            </div>
+            <div class="dock-pane" data-pane="raw"><div class="log" id="rawLog"></div></div>
+            <div class="dock-pane" data-pane="ev"><div class="log" id="evLog"></div></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ 连接 ============ -->
+      <section class="page connp" data-page="conn">
+        <div class="conn-left">
+          <div class="card">
+            <div class="card-h"><h3>连接</h3><b class="pin" data-pin="conn-1" style="right:8px;top:12px"></b></div>
+            <div class="card-b form">
+              <div class="field"><label>方式</label><div class="seg" id="connTypeSeg" style="align-self:flex-start"><button class="on" data-t="ser">串口</button><button data-t="tcp">TCP</button></div></div>
+              <div id="serFields" class="form">
+                <div class="field"><label>端口</label><div class="row"><select style="flex:1"><option>COM3　USB-SERIAL CH340</option><option>COM5　Silicon Labs CP210x</option></select><button class="btn">刷新</button></div></div>
+                <div class="field"><label>波特率</label><select><option>9600</option><option>38400</option><option>57600</option><option selected>115200</option><option>230400</option><option>460800</option><option>921600</option></select></div>
+                <div class="ser3">
+                  <div class="field"><label>数据位</label><select><option>8</option><option>7</option></select></div>
+                  <div class="field"><label>校验位</label><select><option>无</option><option>奇</option><option>偶</option></select></div>
+                  <div class="field"><label>停止位</label><select><option>1</option><option>1.5</option><option>2</option></select></div>
+                </div>
+              </div>
+              <div id="tcpFields" class="form" hidden>
+                <div class="field"><label>地址</label><input value="192.168.1.20"></div>
+                <div class="field"><label>端口</label><input class="num" value="5000" style="width:100px"></div>
+                <p class="hint">连接中断时自动重连；重连期间不能回放历史数据。</p>
+              </div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-h"><h3>采集信息</h3></div>
+            <div class="card-b form">
+              <div class="field"><label>标称采样率</label><div class="row"><input class="num" value="50" style="width:100px"><span class="unit">Hz</span></div></div>
+              <p class="hint">写入会话记录，并在顶部作为「实测」频率的对照。不会发送给设备；要改变设备输出频率，请在「命令」中发送设备支持的命令。</p>
+            </div>
+          </div>
+          <div class="hint box" style="line-height:1.6">修改后点击顶部「连接并开始保存」。连接前会先准备好新会话，第一帧数据也会被保存。参数会自动记住，下次启动沿用。</div>
+        </div>
+
+        <div class="conn-right">
+          <div class="card">
+            <div class="card-h">
+              <h3>协议</h3>
+              <select style="width:290px" id="protoSel"><option>双三轴 Binary (AA55, Double, XOR)</option><option>ZDZ_C08（内置）</option><option>CTMBS-3X2000（专用解析器）</option><option>通用 ASCII 逗号分隔</option></select>
+              <span class="dirty">有未保存的修改</span>
+              <span class="spacer"></span>
+              <button class="btn sm primary">保存</button><button class="btn sm">另存为…</button><button class="btn sm">导入…</button><button class="btn sm">导出…</button>
+            </div>
+            <div class="proto-meta">
+              <div class="field" style="width:290px"><label>名称</label><input value="双三轴 Binary (AA55, Double, XOR)"></div>
+              <div class="field"><label>格式</label><div class="seg" id="protoFmtSeg"><button class="on" data-f="bin">二进制帧</button><button data-f="ascii">ASCII 文本</button></div></div>
+              <span class="spacer"></span>
+              <div class="field" style="text-align:right"><label>帧长</label><b class="mono" style="font-size:15px;line-height:30px">55 字节</b></div>
+            </div>
+            <div id="binEditor" style="display:flex;flex-direction:column;min-height:0;flex:1;position:relative">
+              <div class="bytemap" id="bytemap"></div>
+              <div class="bm-ruler" id="bmRuler"></div>
+              <b class="pin" data-pin="conn-2" style="right:4px;top:2px"></b>
+              <div class="row" style="padding:6px 12px 10px">
+                <span class="hint">点击帧结构中的一段可定位到表格行。通道颜色与曲线一致。</span><span class="spacer"></span>
+                <div class="menu-wrap"><button class="btn sm" id="addSegBtn">+ 添加帧段</button>
+                  <div class="menu" id="addSegMenu"><button class="menu-item">帧头</button><button class="menu-item">长度</button><button class="menu-item">数据字段</button><button class="menu-item">校验</button><button class="menu-item">帧尾</button><button class="menu-item">填充 / 固定值</button></div></div>
+              </div>
+              <div class="seg-tbl"><table class="tbl" id="segTbl"></table></div>
+              <b class="pin" data-pin="conn-3" style="left:40%;top:96px;right:auto"></b>
+            </div>
+            <div id="asciiEditor" style="display:none;flex-direction:column;min-height:0;flex:1">
+              <div class="row" style="padding:12px;gap:16px;align-items:flex-end">
+                <div class="field"><label>分隔符</label><input value="," class="mono" style="width:70px"></div>
+                <div class="field"><label>行尾</label><select><option>\r\n</option><option>\n</option></select></div>
+                <label class="row" style="height:30px"><input type="checkbox"> 首行为表头</label>
+              </div>
+              <div class="seg-tbl"><table class="tbl">
+                <thead><tr><th>列</th><th>名称</th><th>单位</th><th>通道</th><th class="num">缩放</th><th class="num">偏移</th><th></th></tr></thead>
+                <tbody>
+                  <tr><td class="mono">0</td><td><input value="X" style="width:90px"></td><td><input value="nT" style="width:60px"></td><td>CH0</td><td><input class="num" value="1" style="width:70px"></td><td><input class="num" value="0" style="width:70px"></td><td><button class="btn sm ghost">删除</button></td></tr>
+                  <tr><td class="mono">1</td><td><input value="Y" style="width:90px"></td><td><input value="nT" style="width:60px"></td><td>CH1</td><td><input class="num" value="1" style="width:70px"></td><td><input class="num" value="0" style="width:70px"></td><td><button class="btn sm ghost">删除</button></td></tr>
+                  <tr><td class="mono">2</td><td><input value="Z" style="width:90px"></td><td><input value="nT" style="width:60px"></td><td>CH2</td><td><input class="num" value="1" style="width:70px"></td><td><input class="num" value="0" style="width:70px"></td><td><button class="btn sm ghost">删除</button></td></tr>
+                </tbody></table>
+                <div style="padding:8px 12px"><button class="btn sm">+ 添加字段</button></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-h"><h3>解析测试</h3><span class="tag new">新增</span><span class="sub">用当前协议试解析一段数据，不需要连接设备</span><span class="spacer"></span><button class="btn sm">取最近接收的数据</button><button class="btn sm primary">解析</button>
+              <b class="pin" data-pin="conn-4" style="right:8px;top:-9px"></b></div>
+            <div class="parse-grid">
+              <textarea spellcheck="false" aria-label="HEX 数据">3F 0D AA 55 34 9A 99 99 99 59 A6 DB 40 66 66 66 66 66 BA A0 C0 33 33 33 33 9A 52 E4 40 33 33 33 33 B3 A5 DB 40 CD CC CC CC CC D9 A0 C0 66 66 66 66 66 51 E4 40 9E 09 3C 0D AA 55 34 66 66 66 66 66 A6 DB 40 9A 99 99 99 99 BA A0 C0 CD CC CC CC 9C 52 E4 40 9A 99 99 99 B3 A5 DB 40 33 33 33 33 33 DA A0 C0 00 00 00 00 66 51 E4 40 9F 09 1A 0D</textarea>
+              <div class="parse-res">
+                <div class="row"><span class="tag ok">找到 2 帧</span><span class="tag ok">校验通过 1</span><span class="tag err">校验失败 1</span><span class="tag warn">跳过 2 字节</span></div>
+                <div class="scroll"><table class="tbl compact">
+                  <thead><tr><th>通道</th><th>名称</th><th class="num">第 1 帧</th><th class="num">第 2 帧</th><th>单位</th></tr></thead>
+                  <tbody id="parseBody"></tbody></table></div>
+                <p class="hint">第 2 帧 XOR 期望 3C，收到 1A。开头的 3F 0D 是上一帧残尾，已跳过并重新同步。</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ 命令 ============ -->
+      <section class="page cmd" data-page="cmd">
+        <div class="card">
+          <div class="card-h">
+            <select style="flex:1;min-width:0"><option>双三轴 Binary 命令</option><option>ZDZ_C08（内置，只读）</option></select>
+            <div class="menu-wrap"><button class="btn icon" id="grpMenuBtn" title="命令组操作">⋯</button>
+              <div class="menu" id="grpMenu"><button class="menu-item">新建命令组</button><button class="menu-item">重命名命令组</button><button class="menu-item">复制为自定义命令组</button><div class="menu-sep"></div><button class="menu-item">导入命令集…</button><button class="menu-item">导出命令集…</button><div class="menu-sep"></div><button class="menu-item danger">删除命令组</button></div></div>
+            <b class="pin" data-pin="cmd-4" style="right:8px;top:-9px"></b>
+          </div>
+          <div style="padding:8px 10px;border-bottom:1px solid var(--line-2)"><input placeholder="搜索命令" style="width:100%"></div>
+          <div class="cmd-list" id="cmdList"></div>
+          <div style="padding:10px;border-top:1px solid var(--line-2)"><button class="btn sm" style="width:100%">+ 新建命令</button></div>
+        </div>
+
+        <div class="card">
+          <div class="card-h"><h3 id="cmdTitle">设置输出频率</h3><span class="tag">二进制帧</span><span class="spacer"></span><button class="btn sm">编辑命令</button></div>
+          <div class="card-b scroll" style="display:flex;flex-direction:column;gap:18px">
+            <p class="ink2">设置设备的数据输出频率。设备确认后，顶部「实测」频率应随之变化；标称采样率不会自动修改。</p>
+            <div class="form" style="gap:10px">
+              <h4 style="font-size:13px">参数</h4>
+              <div class="param-row"><label class="flabel">输出频率</label><input class="num" value="100"><span class="unit">Hz</span><span class="hint">范围 1 ~ 200</span></div>
+            </div>
+            <div class="form" style="gap:10px;position:relative">
+              <h4 style="font-size:13px">发送帧预览 <span class="muted" style="font-weight:400;margin-left:8px">7 字节，校验自动计算</span></h4>
+              <div class="frame">
+                <div class="fb hdr"><div class="bytes"><i>AA</i><i>55</i></div><small>帧头</small></div>
+                <div class="fb"><div class="bytes"><i>03</i></div><small>命令字</small></div>
+                <div class="fb"><div class="bytes"><i>02</i></div><small>长度</small></div>
+                <div class="fb par"><div class="bytes"><i>00</i><i>64</i></div><small>输出频率 = 100</small></div>
+                <div class="fb sum"><div class="bytes"><i>65</i></div><small>XOR</small></div>
+              </div>
+              <b class="pin" data-pin="cmd-2" style="right:auto;left:330px;top:-6px"></b>
+            </div>
+            <div class="row" style="gap:20px">
+              <div class="field"><label>预期应答</label><input class="mono" value="AA 55 83 ..." style="width:200px"></div>
+              <div class="field"><label>等待应答</label><div class="row"><input class="num" value="3000" style="width:80px"><span class="unit">ms</span></div></div>
+              <span class="spacer"></span>
+              <div class="field" style="align-items:flex-end"><label id="sendTarget">写到 COM3</label><button class="btn primary send-btn" style="width:120px">发送</button></div>
+            </div>
+            <div class="form" style="gap:10px;position:relative">
+              <h4 style="font-size:13px">上次发送结果 <span class="muted" style="font-weight:400;margin-left:8px">14:09:30</span></h4>
+              <div class="ladder">
+                <div class="step ok"><span class="mk">✓</span><b>本地写出</b><div><p>已写出 7 字节到 COM3。</p><span class="tm">14:09:30.118</span></div></div>
+                <div class="step ok"><span class="mk">✓</span><b>设备应答</b><div><p>收到 <span class="mono">AA 55 83 02 00 D4</span>，与预期应答匹配，耗时 22 ms。</p><span class="tm">14:09:30.140</span></div></div>
+                <div class="step todo"><span class="mk">?</span><b>执行结果</b><div><p>软件无法直接确认设备已执行。请观察顶部「实测」频率是否变为约 100 Hz。</p></div></div>
+              </div>
+              <b class="pin" data-pin="cmd-3" style="right:-6px;top:-6px"></b>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-h"><h3>通信日志</h3><div class="seg" style="margin-left:6px"><button class="on">全部</button><button>发送</button><button>接收</button></div><span class="spacer"></span><label class="tb-field"><input type="checkbox"> 暂停滚动</label><button class="btn sm ghost">清空</button>
+            <b class="pin" data-pin="cmd-1" style="right:8px;top:-9px"></b></div>
+          <div class="log" id="cmdLog"></div>
+          <div class="send-row" style="flex-wrap:wrap">
+            <input type="text" placeholder="自由发送：ASCII 文本或 HEX 字节" style="flex:1 1 100%">
+            <select style="width:90px"><option>CRLF</option><option>LF</option><option>CR</option><option>无行尾</option></select>
+            <label class="tb-field"><input type="checkbox"> HEX</label><span class="spacer"></span>
+            <button class="btn primary send-btn">发送</button>
+            <b class="pin" data-pin="cmd-5" style="right:8px;top:-9px"></b>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ 数据 ============ -->
+      <section class="page data" data-page="data" id="dataPage">
+        <div class="card list-card">
+          <div class="card-h">
+            <h3>会话</h3><span class="count">7</span>
+            <input placeholder="搜索名称或备注" style="width:220px;margin-left:12px">
+            <select><option>最近 7 天</option><option>最近 30 天</option><option>全部</option><option>自定义…</option></select>
+            <span class="spacer"></span><button class="btn sm">刷新</button>
+          </div>
+          <div class="scroll" style="flex:1"><table class="tbl" id="sessTbl"></table></div>
+          <b class="pin" data-pin="data-3" style="left:150px;top:62px;right:auto"></b>
+        </div>
+        <div class="card detail-card" id="detail">
+          <div class="card-h"><h3>会话详情</h3><span class="spacer"></span>
+            <div class="menu-wrap"><button class="btn sm" id="sessMenuBtn">更多</button>
+              <div class="menu" id="sessMenu"><button class="menu-item">批量校正…</button><button class="menu-item">在文件夹中显示数据库</button><div class="menu-sep"></div><button class="menu-item danger">删除会话…</button></div></div>
+            <b class="pin" data-pin="data-2" style="right:8px;top:-9px"></b></div>
+          <div class="card-b scroll" style="display:flex;flex-direction:column;gap:16px;flex:1">
+            <div class="field"><label>名称</label><input id="dName" value="东侧场地 A 线" style="font-weight:600"></div>
+            <div class="field"><label>备注</label><textarea rows="2" id="dNote">晴，地表干燥</textarea></div>
+            <dl class="kv" id="dKv"></dl>
+            <div>
+              <div class="flabel" style="margin-bottom:6px">通道</div>
+              <table class="tbl compact" id="dCh"></table>
+            </div>
+          </div>
+          <div style="padding:12px;border-top:1px solid var(--line-2);display:flex;flex-direction:column;gap:10px;position:relative">
+            <div class="disabled-reason" id="pbReason" hidden><svg class="ico" viewBox="0 0 24 24" style="margin-top:2px"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01M11 12h1v5h1"/></svg><span>连接期间不能回放（包括 TCP 自动重连期间）。断开后即可回放；回放不会写入任何会话。</span></div>
+            <div class="row"><button class="btn primary" id="playBtn" style="flex:1">回放</button><button class="btn" id="exportBtn" style="flex:1">导出 CSV…</button></div>
+            <b class="pin" data-pin="data-1" style="right:8px;top:-9px"></b>
+          </div>
+        </div>
+
+        <div class="pb-head">
+          <button class="btn sm" id="pbBack">返回会话列表</button>
+          <h2>东侧场地 A 线</h2><span class="tag accent">回放</span><span class="muted">按记录时间戳播放，只用于查看，不写入任何会话</span>
+          <span class="spacer"></span><button class="btn sm" id="exportBtn2">导出 CSV…</button>
+          <b class="pin" data-pin="data-4" style="right:auto;left:260px;top:-6px"></b>
+        </div>
+        <div class="card pb pb-chart"><div class="chart-body"><div class="legend" id="pbLegend"></div><div class="plot-wrap"><svg id="pbPlot"></svg></div></div></div>
+        <div class="card pb pb-side">
+          <div class="card-h"><h3>通道</h3><span class="sub">来自会话记录</span></div>
+          <div id="pbCh" class="scroll" style="flex:1"></div>
+          <div class="pane-pad" style="border-top:1px solid var(--line-2)"><label class="switch-row" style="font-weight:400"><span>正交度改正（仅显示）</span><input type="checkbox" class="switch"></label></div>
+        </div>
+        <div class="card pb pb-transport">
+          <button class="btn primary" id="pbPlay" style="width:84px">播放</button>
+          <button class="btn" id="pbStop">停止</button>
+          <div class="seg" id="pbSpeed"><button>0.5×</button><button class="on">1×</button><button>2×</button><button>5×</button><button>10×</button></div>
+          <span class="mono" id="pbPos" style="width:150px;text-align:right">00:42:18 / 01:30:12</span>
+          <div class="scrub" id="pbScrub"><div class="track"></div><div class="fill" id="pbFill"></div><div class="knob" id="pbKnob"></div></div>
+          <span class="tag" id="pbState">已暂停</span>
+        </div>
+      </section>
+
+      <!-- ============ 校正 ============ -->
+      <section class="page cal" data-page="cal">
+        <div class="cal-top">
+          <div class="tabs" id="calTabs"><button class="tab on" data-ct="ortho">正交度校正</button><button class="tab" data-ct="og">偏移与增益</button><button class="tab" data-ct="lib">配置库 <span class="count">5</span></button></div>
+          <span class="spacer"></span><span class="hint">扩展功能，按需使用。采集与保存不依赖这里的任何配置。</span>
+          <b class="pin" data-pin="cal-1" style="position:relative;top:0;right:0"></b>
+        </div>
+        <div class="card" id="calOrtho">
+          <div class="stepper" id="stepper">
+            <button class="stp done" data-s="1"><i>1</i>选择传感器</button><span class="stp-line"></span>
+            <button class="stp on" data-s="2"><i>2</i>采集数据</button><span class="stp-line"></span>
+            <button class="stp" data-s="3"><i>3</i>计算与结果</button><span class="stp-line"></span>
+            <button class="stp" data-s="4"><i>4</i>保存配置</button>
+            <span class="spacer"></span><span class="muted">单三轴磁通门　探头 A</span>
+          </div>
+          <div class="cal-body">
+            <div class="cal-step" data-s="1" style="grid-template-columns:420px">
+              <div class="form">
+                <div class="field"><label>传感器类型</label><div class="seg" style="align-self:flex-start"><button class="on">单三轴磁通门</button><button>双三轴磁通门</button></div></div>
+                <div class="field"><label>传感器序列号（可选）</label><input value="FG-A-0217"></div>
+                <div class="field"><label>参考场强（可选）</label><div class="row"><input class="num" placeholder="自动估算" style="width:140px"><span class="unit">nT</span></div><p class="hint">留空时按样本估算，当地地磁场约 50,000 nT。</p></div>
+              </div>
+            </div>
+            <div class="cal-step on" data-s="2" style="grid-template-columns:380px minmax(0,1fr)">
+              <div class="form" style="position:relative">
+                <div class="field"><label>数据来源</label><div class="seg" style="align-self:flex-start"><button class="on">实时数据</button><button>导入文件</button><button>已保存会话</button></div></div>
+                <div class="field"><label>采集方式</label><div class="seg" style="align-self:flex-start"><button>连续采集</button><button class="on">手动 48 点</button></div></div>
+                <div class="card" style="padding:14px;gap:12px;display:flex;flex-direction:column">
+                  <div class="row"><b style="font-size:14px" id="ptsCount">已记录 17 / 48 点</b><span class="spacer"></span><span class="muted">每点取最近 10 条读数的均值</span></div>
+                  <div class="pts48" id="pts48"></div>
+                  <div class="row" style="font-family:var(--mono);font-size:12.5px;gap:14px" id="calLive"></div>
+                  <button class="btn primary" style="height:40px;font-size:14px" id="recPt">记录当前点</button>
+                  <div class="row"><button class="btn sm">撤销上一点</button><button class="btn sm">清空重来</button><span class="spacer"></span><span class="hint">原始数据照常保存到会话 #129</span></div>
+                </div>
+                <b class="pin" data-pin="cal-2" style="right:-8px;top:110px"></b>
+              </div>
+              <div class="form">
+                <div class="row"><b>姿态覆盖</b><span class="spacer"></span><span class="muted">球面覆盖度</span><b class="mono">58%</b></div>
+                <div class="bar"><i style="width:58%"></i></div>
+                <div class="proj" id="proj"></div>
+                <div class="stat4"><div><small>总场均值</small><b>50,231.6</b> <span class="unit">nT</span></div><div><small>总场标准差</small><b>18.4</b> <span class="unit">nT</span></div><div><small>变异系数</small><b>0.037%</b></div><div><small>突变点</small><b>0</b></div></div>
+                <p class="hint box">覆盖度越高，计算越稳定；不足时仍可计算，结果页会给出质量评级。</p>
+              </div>
+            </div>
+            <div class="cal-step" data-s="3" style="grid-template-columns:360px minmax(0,1fr)">
+              <div class="form" style="position:relative">
+                <div class="tabs" style="padding:0;min-height:36px"><button class="tab on">第一组</button><button class="tab" disabled style="opacity:.5">第二组</button></div>
+                <div class="row"><span class="flabel">质量评级</span><span class="tag ok" style="height:24px;font-size:13px">良好</span><span class="hint">残差标准差低于 5 nT</span></div>
+                <div class="field"><label>补偿矩阵 M</label><div class="matrix"><span>1.00213</span><span>−0.00418</span><span>0.00127</span><span>0.00395</span><span>0.99871</span><span>−0.00262</span><span>−0.00151</span><span>0.00244</span><span>1.00064</span></div></div>
+                <div class="field"><label>偏移 O（nT）</label><div class="matrix" style="grid-template-columns:repeat(3,auto)"><span>12.84</span><span>−7.31</span><span>21.05</span></div></div>
+                <div class="stat4" style="grid-template-columns:1fr 1fr"><div><small>残差均值</small><b>0.62</b> <span class="unit">nT</span></div><div><small>残差标准差</small><b>3.71</b> <span class="unit">nT</span></div><div><small>最大残差</small><b>11.9</b> <span class="unit">nT</span></div><div><small>样本数</small><b>48</b></div></div>
+                <p class="hint">校正公式：B改正 = M ×（B原始 − O）</p>
+                <b class="pin" data-pin="cal-3" style="right:-8px;top:-6px"></b>
+              </div>
+              <div class="viz5" id="viz5"></div>
+            </div>
+            <div class="cal-step" data-s="4" style="grid-template-columns:420px">
+              <div class="form">
+                <div class="field"><label>配置名称</label><input value="探头 A 2026-10-06"></div>
+                <div class="field"><label>备注（可选）</label><textarea rows="3">室外无干扰场地，48 点手动采集</textarea></div>
+                <label class="row"><input type="checkbox" checked> 设为该传感器的默认校正配置</label>
+                <div class="row"><button class="btn primary">保存配置</button><span class="hint">保存后可在「配置库」中查看、导出或删除。</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="cal-foot"><button class="btn" id="calPrev">上一步</button><span class="muted" id="calStepTxt">步骤 2 / 4</span><span class="spacer"></span><span class="hint" id="calGate">至少需要 3 个样本，已满足</span><button class="btn primary" id="calNext">下一步</button></div>
+        </div>
+        <div class="card" id="calOg" hidden style="flex-direction:row">
+          <div style="width:260px;border-right:1px solid var(--line-2);display:flex;flex-direction:column">
+            <div class="card-h"><h3>配置</h3><span class="spacer"></span><button class="btn sm">新建</button></div>
+            <div class="cmd-list"><div class="cmd-item sel"><b>探头 A 增益 2026-09</b><span>FG-A-0217</span></div><div class="cmd-item"><b>探头 B 增益 2026-09</b><span>FG-B-0108</span></div></div>
+          </div>
+          <div class="card-b form" style="flex:1;max-width:620px;position:relative">
+            <div class="row" style="gap:12px"><div class="field" style="flex:1"><label>配置名称</label><input value="探头 A 增益 2026-09"></div><div class="field" style="width:180px"><label>序列号</label><input value="FG-A-0217"></div></div>
+            <table class="tbl compact"><thead><tr><th>通道</th><th class="num">偏移</th><th class="num">增益</th><th>单位</th></tr></thead>
+              <tbody><tr><td>X1</td><td><input class="num" value="12.40" style="width:110px"></td><td><input class="num" value="1.00180" style="width:110px"></td><td class="unit">nT</td></tr><tr><td>Y1</td><td><input class="num" value="−6.95" style="width:110px"></td><td><input class="num" value="0.99920" style="width:110px"></td><td class="unit">nT</td></tr><tr><td>Z1</td><td><input class="num" value="20.71" style="width:110px"></td><td><input class="num" value="1.00041" style="width:110px"></td><td class="unit">nT</td></tr></tbody></table>
+            <div class="field"><label>备注</label><textarea rows="2"></textarea></div>
+            <div class="row"><button class="btn primary">保存</button><span class="spacer"></span><button class="btn danger">删除配置…</button></div>
+            <b class="pin" data-pin="cal-5" style="right:-8px;top:60px"></b>
+          </div>
+        </div>
+        <div class="card" id="calLib" hidden>
+          <div class="card-h"><h3>已保存的校正配置</h3><span class="spacer"></span><button class="btn sm">导出 JSON</button><button class="btn sm">导出 CSV</button><button class="btn sm">使用说明</button><button class="btn sm danger">删除</button>
+            <b class="pin" data-pin="cal-4" style="right:8px;top:-9px"></b></div>
+          <div class="scroll" style="flex:1"><table class="tbl">
+            <thead><tr><th>名称</th><th>类型</th><th>序列号</th><th>创建时间</th><th class="num">样本</th><th class="num">残差均值</th><th class="num">残差标准差</th><th>默认</th></tr></thead>
+            <tbody>
+              <tr class="sel"><td>探头 A 2026-09-28</td><td>正交度（单三轴）</td><td>FG-A-0217</td><td class="mono">2026-09-28 15:20</td><td class="num">48</td><td class="num">0.71 nT</td><td class="num">3.9 nT</td><td><span class="tag ok">默认</span></td></tr>
+              <tr><td>探头 B 2026-09-30</td><td>正交度（单三轴）</td><td>FG-B-0108</td><td class="mono">2026-09-30 10:05</td><td class="num">412</td><td class="num">0.52 nT</td><td class="num">2.8 nT</td><td></td></tr>
+              <tr><td>双探头整机 2026-08</td><td>正交度（双三轴）</td><td>DUAL-07</td><td class="mono">2026-08-14 09:40</td><td class="num">96</td><td class="num">1.10 nT</td><td class="num">5.6 nT</td><td></td></tr>
+              <tr><td>探头 A 增益 2026-09</td><td>偏移与增益</td><td>FG-A-0217</td><td class="mono">2026-09-12 14:02</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td></td></tr>
+              <tr><td>探头 B 增益 2026-09</td><td>偏移与增益</td><td>FG-B-0108</td><td class="mono">2026-09-12 14:30</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td></td></tr>
+            </tbody></table></div>
+        </div>
+      </section>
+
+      <!-- ============ 设置 ============ -->
+      <section class="page set" data-page="set">
+        <div class="card"><div class="set-nav" id="setNav"><button class="on" data-sec="store">存储与日志</button><button data-sec="chart">图表</button><button data-sec="update">更新</button><button data-sec="about">关于</button></div></div>
+        <div class="card set-body" id="setBody">
+          <div class="set-sec" id="sec-store" style="position:relative">
+            <h3>存储与日志</h3>
+            <div class="set-item"><label>数据库</label><div class="form" style="gap:6px"><div class="row"><input class="mono" value="%LOCALAPPDATA%\MagnetometerSystem\magnetometer.db" style="flex:1" readonly><button class="btn">更改位置…</button><button class="btn">打开文件夹</button></div><p class="hint">更改前请关闭采集并备份数据库。旧固定列数据会保留在 legacy 表中，不会被删除。</p></div></div>
+            <div class="set-item"><label>日志目录</label><div class="row"><input class="mono" value="D:\Tools\MagnetometerSystem\logs" style="flex:1" readonly><button class="btn">打开</button></div></div>
+            <b class="pin" data-pin="set-2" style="right:16px;top:14px"></b>
+          </div>
+          <div class="set-sec" id="sec-chart">
+            <h3>图表</h3>
+            <div class="set-item"><label>绘图刷新率</label><div class="form" style="gap:6px"><div class="row"><select style="width:120px"><option>10 Hz</option><option>15 Hz</option><option selected>20 Hz</option><option>30 Hz</option><option>60 Hz</option></select><span class="saved">✓ 已保存</span></div><p class="hint">只决定曲线多久重绘一次，与设备输出频率、标称采样率无关。</p></div></div>
+            <div class="set-item"><label>曲线缓存</label><p style="padding-top:5px">每通道最近 100,000 点，用于显示与区间分析。完整数据以数据库为准。</p></div>
+          </div>
+          <div class="set-sec" id="sec-update">
+            <h3>更新</h3>
+            <div class="set-item"><label>启动时检查更新</label><input type="checkbox" class="switch" checked style="margin-top:6px"></div>
+            <div class="set-item"><label>可用版本</label><div class="row"><span class="tag warn">v0.5.3 可用</span><button class="btn sm primary">查看更新</button><button class="btn sm">立即检查</button></div></div>
+          </div>
+          <div class="set-sec" id="sec-about" style="position:relative">
+            <h3>关于</h3>
+            <dl class="kv" style="grid-template-columns:120px 1fr"><dt>版本</dt><dd class="mono">0.5.2</dd><dt>提交</dt><dd class="mono">abc11f0</dd><dt>构建时间</dt><dd class="mono">2026-09-30 18:22</dd><dt>安装方式</dt><dd>便携版</dd><dt>运行时</dt><dd>.NET 8.0</dd></dl>
+            <div class="row" style="margin-top:12px"><button class="btn sm">复制版本信息</button><button class="btn sm">项目主页</button></div>
+            <b class="pin" data-pin="set-3" style="right:16px;top:14px"></b>
+          </div>
+          <div class="set-sec">
+            <p class="hint">修改后立即生效并保存。</p>
+            <b class="pin" data-pin="set-1" style="position:relative;display:inline-block;top:0;right:0;margin-top:6px"></b>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="modal" id="exportModal" role="dialog" aria-modal="true" aria-labelledby="exTitle">
+    <div class="dialog">
+      <div class="dialog-h"><h2 id="exTitle">导出会话「东侧场地 A 线」</h2><span class="spacer"></span><button class="btn sm ghost" data-close>关闭</button></div>
+      <div class="dialog-b">
+        <div class="field"><label>时间范围</label>
+          <div class="row"><label class="row"><input type="radio" name="rg" checked> 整个会话</label><label class="row" style="margin-left:16px"><input type="radio" name="rg"> 自定义</label></div>
+          <div class="row"><input class="mono" value="2026-10-06 10:15:03.118" disabled style="width:200px"><span class="muted">至</span><input class="mono" value="2026-10-06 11:45:15.902" disabled style="width:200px"></div></div>
+        <div class="field"><div class="row"><label class="flabel">通道</label><span class="spacer"></span><button class="btn sm ghost">全选</button><button class="btn sm ghost">全不选</button></div>
+          <div class="chk-grid" id="exCh"></div></div>
+        <div class="field"><label>数据</label><div class="seg" style="align-self:flex-start"><button class="on">原始读数</button><button>正交度改正后</button><button>原始与改正并列</button></div>
+          <p class="hint">选择改正数据时，在此处选择校正配置。原始读数不会被修改。</p></div>
+        <div class="row" style="gap:20px"><label class="row"><input type="checkbox" checked> 包含表头</label><label class="row"><input type="checkbox" checked> 表头带单位</label><div class="row"><span class="flabel">小数位</span><input class="num" value="6" style="width:56px"></div></div>
+        <p class="hint box">预计 270,600 行，8 列（含时间戳）。</p>
+      </div>
+      <div class="dialog-f"><span class="spacer"></span><button class="btn" data-close>取消</button><button class="btn primary">选择位置并导出</button></div>
+    </div>
+  </div>
+</div>
+
+<aside class="notes" id="notes" aria-label="改动说明">
+  <div class="notes-h"><h2 id="notesTitle">改动说明</h2><span class="spacer"></span><button class="btn sm ghost" id="notesClose">关闭</button></div>
+  <div class="notes-b" id="notesBody"></div>
+</aside>
+
+<script>
+const $ = (s, r=document) => r.querySelector(s);
+const $$ = (s, r=document) => [...r.querySelectorAll(s)];
+
+/* ------------------------------------------------------------------ */
+/* review notes                                                        */
+/* ------------------------------------------------------------------ */
+const NOTES = {
+  global: [
+    ['全局','导航改为带图标的窄栏，当前页有明确选中态；「数据管理」与「历史回放」合并为「数据」；正交度、偏移/增益合并为「校正」，放在「扩展」分隔线下。'],
+    ['全局','顶部「数据链路」在所有页面常驻，取代原先的底部状态栏、左侧「录制中」卡片和工作台里的多行状态文字。'],
+    ['全局','统一设计令牌：一套颜色、字号和状态色（正常 / 警告 / 错误 / 录制），替代各页硬编码的 5 种蓝、5 种红。状态色总是配文字或图标，不单靠颜色区分。'],
+    ['全局','枚举值全部显示中文（播放状态、导出来源、传感器类型等）。'],
+  ],
+  ws: [
+    ['ws-1','左侧显示当前端口与协议。链路条中的按钮是唯一的「连接并开始保存 / 停止并断开」入口，各页面位置一致。'],
+    ['ws-2','接收 → 解析 → 保存三段计数分开：字节数、解析帧数、已提交与待写分别显示，不混用。标称采样率与实测频率并列。「异常」可点击，直接打开底部原始报文中的异常帧。'],
+    ['ws-3','工具栏只保留高频操作：单图/多图、时间窗口、Y 轴、暂停显示、专注。网格、自动滚动、多图行高、清空显示收进「更多」；去掉「填满绘图区」和高度滑块，曲线始终填满。绘图刷新率作为只读信息显示，与设备频率区分。'],
+    ['ws-4','右侧面板按任务分为通道 / 统计 / 区间 / 滤波 / 校正。通道列表兼作图例，含实时值、单位、颜色和显示偏移；原来挤在 125 px 与 180 px 嵌套折叠面板中的内容获得完整高度。'],
+    ['ws-5','底部停靠区：收发、原始报文、事件。原始报文逐帧标出解析成功、校验失败、重新同步时丢弃的字节；事件记录会话创建、连接、首帧、批次提交和错误。可收起。'],
+    ['ws-6','暂停显示时在曲线上方明确提示「采集与保存继续」。专注模式隐藏侧栏和停靠区，按 Esc 或再次点击退出，并恢复原来的开合状态。'],
+    ['全局','连接参数不再在工作台重复一份，只在「连接」页编辑。'],
+  ],
+  conn: [
+    ['conn-1','左列只放连接参数与标称采样率，串口和 TCP 用分段按钮切换；不再与工作台、设置页各存一份。'],
+    ['conn-2','帧结构图按字节比例显示各帧段，数据段使用与曲线一致的通道颜色；点击某段定位到表格行，便于核对偏移和长度。'],
+    ['conn-3','帧段表列固定：类型、名称、单位、字节、数据格式、通道、缩放、偏移、固定值/说明；不适用的格子显示「—」，不再在同一列按类型切换不同控件。'],
+    ['conn-4','新增「解析测试」：粘贴 HEX 或取最近接收的数据，用当前协议试解析，显示找到的帧、校验结果、跳过的字节和各通道数值。属于新功能，需要评估工作量。'],
+    ['全局','原始数据滚动列表从本页移到工作台底部「原始报文」。协议有未保存修改时标题旁提示。'],
+  ],
+  cmd: [
+    ['cmd-1','三栏：命令列表、参数与帧预览、通信日志。日志常驻右侧，不再是固定 220 px 的底部框；改为浅色，与整体一致，发送/接收用文字标签区分。'],
+    ['cmd-2','帧预览按字节分组着色（帧头、命令字、长度、参数、校验）并标注总长度，参数修改后立即更新。'],
+    ['cmd-3','发送结果分三级：本地写出、设备应答、执行结果。第三级软件无法自动证明，界面直接说明需要观察什么，避免把「已写出」当成「已执行」。'],
+    ['cmd-4','改名、复制、导入/导出命令集、删除收进 ⋯ 菜单，文案统一中文（不再出现「Catalog」「删组」）。内置命令组只读，可复制为自定义组后修改。'],
+    ['cmd-5','自由发送固定在日志底部，不再藏在折叠面板里；与工作台底部的发送框共用同一份日志。'],
+  ],
+  data: [
+    ['data-1','列表 + 详情：选中会话后直接「回放」或「导出 CSV」，不需要到另一个页面重新选择、再点「加载数据」。采集中的会话或连接期间，回放按钮禁用并说明原因。'],
+    ['data-2','名称和备注直接在详情中编辑；批量校正、删除收进「更多」，删除需二次确认。右键菜单可保留，但不再是唯一入口。'],
+    ['data-3','采集中的会话使用与链路条一致的红色录制标记，不再红橙混用；旧格式会话显示「需迁移」，不会自动删除。'],
+    ['data-4','回放使用独立图表和传输栏，不再借用实时曲线；状态显示中文（就绪、加载中、播放中、已暂停、已结束）。'],
+    ['全局','导出改为对话框：时间范围用日期时间输入，通道按名称勾选（不再输入「0,1,2」），改正数据所需的校正配置在同一对话框内选择。'],
+  ],
+  cal: [
+    ['cal-1','正交度校正、偏移与增益、配置库归入一个「校正」入口，用标签切换；页面说明这些是按需使用的扩展。'],
+    ['cal-2','手动 48 点采集直接在向导第 2 步完成，「记录当前点」就在这里；不再要求切到采集页、使用左侧蓝色卡片。'],
+    ['cal-3','结果页占满宽度，可视化不再被压到 500 px 宽；双三轴用「第一组 / 第二组」标签切换，不再上下复制两遍；质量评级按等级着色并配文字。'],
+    ['cal-4','已保存配置的管理从第 4 步移到「配置库」标签，统一管理正交度和偏移/增益两类配置。'],
+    ['cal-5','偏移与增益按通道表格填写，不再用逗号分隔的文本框。'],
+  ],
+  set: [
+    ['set-1','修改即生效并在该项旁显示「已保存」，不再一部分立即生效、一部分需要点「保存设置」。'],
+    ['set-2','移除未生效的「主题」选项，以及与连接页重复的「连接默认值」（连接页自动记住上次参数）。「自动保存采集数据」开关待确认：产品要求连接后始终保存原始读数，原型中不再提供关闭入口。'],
+    ['set-3','「关于」并入设置；左下角版本号点击直接到这里，有新版本时显示提示点。'],
+  ],
+};
+const PAGE_NAMES = {ws:'采集', conn:'连接', cmd:'命令', data:'数据', cal:'校正', set:'设置'};
+
+function pinNumber(page, key){
+  const list = NOTES[page] || [];
+  let n = 0;
+  for (const [k] of list){ if (k !== '全局') n++; if (k === key) return n; }
+  return 0;
+}
+function initPins(){
+  $$('.pin').forEach(p => {
+    const key = p.dataset.pin, page = key.split('-')[0];
+    const n = pinNumber(page, key);
+    const note = (NOTES[page]||[]).find(x => x[0] === key);
+    p.textContent = n;
+    if (note) p.title = note[1];
+    p.addEventListener('click', e => { e.stopPropagation(); openNotes(key); });
+  });
+}
+function renderNotes(flashKey){
+  const page = state.page;
+  $('#notesTitle').textContent = '改动说明：' + PAGE_NAMES[page];
+  let n = 0, html = '<h3>本页</h3>';
+  (NOTES[page]||[]).forEach(([k, t]) => {
+    const num = k === '全局' ? '·' : ++n;
+    html += `<div class="note${k===flashKey?' flash':''}" data-k="${k}"><b class="n">${num}</b><div>${t}</div></div>`;
+  });
+  html += '<h3>全局</h3>';
+  NOTES.global.forEach(([, t]) => { html += `<div class="note"><b class="n">·</b><div>${t}</div></div>`; });
+  $('#notesBody').innerHTML = html;
+}
+function openNotes(flashKey){ renderNotes(flashKey); $('#notes').classList.add('on'); }
+$('#notesBtn').onclick = () => $('#notes').classList.contains('on') ? $('#notes').classList.remove('on') : openNotes();
+$('#notesClose').onclick = () => $('#notes').classList.remove('on');
+$('#pinToggle').onchange = e => document.body.classList.toggle('pins', e.target.checked);
+
+/* ------------------------------------------------------------------ */
+/* simulated signal                                                     */
+/* ------------------------------------------------------------------ */
+const START = new Date(2026, 9, 6, 14, 2, 11, 0).getTime();
+const PAL = ['#2a78d6','#eb6834','#1baf7a','#eda100','#e87ba4','#008300','#4a3aa7','#e34948'];
+const CH = [
+  {id:'X1', unit:'nT', base:28312.4, a1:4.2,p1:41,f1:0,  a2:1.3,p2:13,f2:1,  drift:.006,  noise:.35, k:18},
+  {id:'Y1', unit:'nT', base:-2141.3, a1:3.1,p1:29,f1:1,  a2:.8, p2:9, f2:2,  drift:-.002, noise:.35, k:-9},
+  {id:'Z1', unit:'nT', base:41620.8, a1:5.5,p1:53,f1:2,  a2:1.1,p2:17,f2:.5, drift:.004,  noise:.4,  k:22},
+  {id:'X2', unit:'nT', base:28298.7, a1:4.0,p1:41,f1:.3, a2:1.0,p2:11,f2:1.4,drift:.005,  noise:.38, k:15},
+  {id:'Y2', unit:'nT', base:-2156.9, a1:2.9,p1:29,f1:1.2,a2:.9, p2:7, f2:.2, drift:-.003, noise:.36, k:-7},
+  {id:'Z2', unit:'nT', base:41611.2, a1:5.1,p1:53,f1:2.3,a2:1.2,p2:19,f2:.9, drift:.004,  noise:.42, k:19},
+  {id:'T', name:'温度', unit:'°C', temp:true, axis:'right'},
+  {id:'F1', name:'总场1', unit:'nT', computed:true, formula:'sqrt(X1² + Y1² + Z1²)'},
+];
+CH.forEach((c, i) => {
+  c.color = PAL[i]; c.seed = i * 3.7 + 1; c.visible = true; c.name = c.name || c.id;
+  c.dec = c.temp ? 2 : 1;
+});
+function rnd(i, s){ const x = Math.sin(i * 12.9898 + s * 78.233) * 43758.5453; return x - Math.floor(x); }
+function gauss(i, s){ return (rnd(i, s) + rnd(i + .5, s + 3.1) + rnd(i + .25, s + 7.7) + rnd(i + .75, s + 11.3) - 2) * 1.7; }
+function dist(t){
+  let v = 0; const k0 = Math.floor(t / 37);
+  for (let k = k0 - 1; k <= k0 + 1; k++){ const te = 23 + 37 * k + 9 * Math.sin(k); const A = .6 + .4 * Math.sin(k * 1.7); v += A * Math.exp(-Math.pow((t - te) / 2.2, 2)); }
+  return v;
+}
+function raw(c, t){
+  const i = Math.round(t * 50);
+  if (c.temp) return 24.62 + .08 * Math.sin(2 * Math.PI * t / 300) + .05 * Math.sin(2 * Math.PI * t / 1700) + .0004 * gauss(i, 99);
+  if (c.computed){ const x = raw(CH[0], t), y = raw(CH[1], t), z = raw(CH[2], t); return Math.sqrt(x*x + y*y + z*z); }
+  return c.base + c.a1 * Math.sin(2*Math.PI*t/c.p1 + c.f1) + c.a2 * Math.sin(2*Math.PI*t/c.p2 + c.f2) + c.drift * (t - 700) + c.noise * gauss(i, c.seed) + c.k * dist(t);
+}
+CH.forEach(c => { c.offset = c.temp ? 0 : -Math.round((c.computed ? raw(c, 700) : c.base) * 10) / 10; });
+
+const fmt = (v, d=1) => (v < 0 ? '−' : '') + Math.abs(v).toLocaleString('en-US', {minimumFractionDigits:d, maximumFractionDigits:d});
+const intf = v => Math.round(v).toLocaleString('en-US');
+const p2 = n => String(n).padStart(2, '0');
+function clock(t, tenth){ const d = new Date(START + t * 1000); return p2(d.getHours()) + ':' + p2(d.getMinutes()) + ':' + p2(d.getSeconds()) + (tenth ? '.' + Math.floor(d.getMilliseconds() / 100) : ''); }
+const dur = s => p2(Math.floor(s / 3600)) + ':' + p2(Math.floor(s % 3600 / 60)) + ':' + p2(Math.floor(s % 60));
+
+/* ------------------------------------------------------------------ */
+/* state                                                                */
+/* ------------------------------------------------------------------ */
+const state = {
+  page:'ws', link:'run', t:761, failFrames:0,
+  mode:'single', cols:2, rowH:160, win:60, paused:false, focus:false, grid:true,
+  filter:false, filterN:9, sideTab:'ch', open:'X1', stats:['mean','std','pp'],
+  iv:[730, 740], hoverX:null, cleared:null,
+  pbT: 2538, pbPlaying:false, pbSpeed:1, selSess:1,
+};
+
+/* ------------------------------------------------------------------ */
+/* plotting                                                             */
+/* ------------------------------------------------------------------ */
+function niceTicks(min, max, n){
+  const span = (max - min) || 1, step0 = span / Math.max(1, n);
+  const mag = Math.pow(10, Math.floor(Math.log10(step0))), e = step0 / mag;
+  const step = (e >= 7.5 ? 10 : e >= 3.5 ? 5 : e >= 1.5 ? 2 : 1) * mag;
+  const out = []; for (let v = Math.ceil(min / step) * step; v <= max + step * 1e-6; v += step) out.push(+v.toFixed(10));
+  return {ticks: out, step};
+}
+const tickLabel = (v, step) => fmt(v, step < .01 ? 3 : step < .1 ? 2 : step < 1 ? 1 : 0);
+
+function buildSeries(t0, t1, useOffset, list, tOff=0, offMap=null){
+  const step = Math.max(.02, (t1 - t0) / 600);
+  const startT = Math.ceil(t0 / step) * step;
+  return list.map(c => {
+    const pts = [];
+    for (let t = startT; t <= t1 + 1e-9; t += step){
+      if (state.cleared !== null && tOff === 0 && t < state.cleared) continue;
+      let v = raw(c, t + tOff); if (useOffset) v += offMap ? offMap[c.id] : c.offset; pts.push([t, v]);
+    }
+    if (state.filter && tOff === 0) smooth(pts, state.filterN);
+    return {c, pts, axis: c.axis || 'left'};
+  });
+}
+function smooth(pts, n){
+  const h = Math.floor(n / 2), src = pts.map(p => p[1]);
+  for (let i = 0; i < pts.length; i++){ let s = 0, k = 0; for (let j = Math.max(0, i - h); j <= Math.min(src.length - 1, i + h); j++){ s += src[j]; k++; } pts[i][1] = s / k; }
+}
+function drawPlot(svg, cfg){
+  const box = svg.getBoundingClientRect(), W = box.width, H = box.height;
+  if (W < 20 || H < 20) return;
+  const L = cfg.series.filter(s => s.axis !== 'right'), R = cfg.series.filter(s => s.axis === 'right');
+  const m = {l: 62, r: R.length ? 58 : 16, t: cfg.compact ? 28 : 22, b: 24};
+  const iw = W - m.l - m.r, ih = H - m.t - m.b;
+  const ext = arr => { let lo = Infinity, hi = -Infinity; arr.forEach(s => s.pts.forEach(p => { if (p[1] < lo) lo = p[1]; if (p[1] > hi) hi = p[1]; })); if (!isFinite(lo)) { lo = 0; hi = 1; } const pad = (hi - lo) * .12 || 1; return [lo - pad, hi + pad]; };
+  const [l0, l1] = ext(L), [r0, r1] = ext(R);
+  const x = t => m.l + (t - cfg.t0) / (cfg.t1 - cfg.t0) * iw;
+  const yl = v => m.t + (1 - (v - l0) / (l1 - l0)) * ih;
+  const yr = v => m.t + (1 - (v - r0) / (r1 - r0)) * ih;
+  let s = '';
+  const lt = niceTicks(l0, l1, Math.max(2, Math.floor(ih / 46)));
+  lt.ticks.forEach(v => { const y = yl(v).toFixed(1); if (cfg.grid !== false) s += `<line class="g-grid" x1="${m.l}" x2="${m.l+iw}" y1="${y}" y2="${y}"/>`; s += `<text class="g-tick" x="${m.l-8}" y="${+y+4}" text-anchor="end">${tickLabel(v, lt.step)}</text>`; });
+  if (R.length){ const rt = niceTicks(r0, r1, Math.max(2, Math.floor(ih / 46))); rt.ticks.forEach(v => { const y = yr(v); s += `<text class="g-tick" x="${m.l+iw+8}" y="${y+4}">${tickLabel(v, rt.step)}</text>`; }); }
+  const span = cfg.t1 - cfg.t0, cand = [1,2,5,10,15,30,60,120,300,600]; let ts = cand.find(c => iw / (span / c) >= 95) || 600;
+  for (let t = Math.ceil(cfg.t0 / ts) * ts; t <= cfg.t1; t += ts){ const xx = x(t).toFixed(1); if (cfg.grid !== false) s += `<line class="g-grid" x1="${xx}" x2="${xx}" y1="${m.t}" y2="${m.t+ih}"/>`; s += `<text class="g-tick" x="${xx}" y="${m.t+ih+16}" text-anchor="middle">${cfg.clock ? cfg.clock(t) : clock(t)}</text>`; }
+  s += `<line class="g-axis" x1="${m.l}" x2="${m.l+iw}" y1="${m.t+ih}" y2="${m.t+ih}"/>`;
+  if (!cfg.compact){
+    s += `<text class="g-title" x="${m.l}" y="${m.t-6}">${cfg.leftTitle||''}</text>`;
+    if (R.length) s += `<text class="g-title" x="${m.l+iw+8}" y="${m.t-6}">${cfg.rightTitle||''}</text>`;
+  }
+  if (cfg.band){ const a = Math.max(cfg.t0, cfg.band[0]), b = Math.min(cfg.t1, cfg.band[1]); if (b > a) s += `<rect class="g-band" x="${x(a)}" y="${m.t}" width="${x(b)-x(a)}" height="${ih}"/>`; }
+  s += `<clipPath id="cp-${svg.id||'x'}"><rect x="${m.l}" y="${m.t-2}" width="${iw}" height="${ih+4}"/></clipPath><g clip-path="url(#cp-${svg.id||'x'})">`;
+  cfg.series.forEach(sr => {
+    const y = sr.axis === 'right' ? yr : yl;
+    const d = sr.pts.map((p, i) => (i ? 'L' : 'M') + x(p[0]).toFixed(1) + ' ' + y(p[1]).toFixed(1)).join('');
+    s += `<path d="${d}" fill="none" stroke="${sr.c.color}" stroke-width="${cfg.compact ? 1.4 : 1.5}" stroke-linejoin="round"/>`;
+  });
+  s += '</g>';
+  if (cfg.playhead !== undefined){ const xx = x(cfg.playhead); s += `<line x1="${xx}" x2="${xx}" y1="${m.t}" y2="${m.t+ih}" stroke="#1C2422" stroke-width="1.5"/><circle cx="${xx}" cy="${m.t}" r="4" fill="#1C2422"/>`; }
+  if (cfg.hoverX !== null && cfg.hoverX !== undefined && cfg.hoverX >= m.l && cfg.hoverX <= m.l + iw){
+    s += `<line class="g-cross" x1="${cfg.hoverX}" x2="${cfg.hoverX}" y1="${m.t}" y2="${m.t+ih}"/>`;
+    const th = cfg.t0 + (cfg.hoverX - m.l) / iw * span;
+    cfg.series.forEach(sr => { const p = nearest(sr.pts, th); if (!p) return; const y = sr.axis === 'right' ? yr : yl; s += `<circle cx="${x(p[0])}" cy="${y(p[1])}" r="3.5" fill="${sr.c.color}" stroke="#fff" stroke-width="2"/>`; });
+    svg._hoverT = th;
+  }
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.innerHTML = s;
+  svg._m = {m, iw, ih};
+}
+function nearest(pts, t){ if (!pts.length) return null; const dt = pts.length > 1 ? pts[1][0] - pts[0][0] : 1; const i = Math.max(0, Math.min(pts.length - 1, Math.round((t - pts[0][0]) / dt))); return pts[i]; }
+
+/* ------------------------------------------------------------------ */
+/* workspace                                                            */
+/* ------------------------------------------------------------------ */
+const visible = () => CH.filter(c => c.visible);
+function renderLegend(){
+  $('#legend').innerHTML = visible().map(c => `<span><i class="sw" style="background:${c.color}"></i>${c.name}${c.axis==='right' ? '<span class="lnote">（右轴）</span>' : ''}${c.computed ? '<span class="lnote">（计算）</span>' : ''}</span>`).join('') + (state.filter ? '<span class="lnote">显示滤波：滑动平均 9 点</span>' : '');
+}
+function renderMain(){
+  if (state.page !== 'ws') return;
+  const t1 = state.paused ? state.pausedT : state.t, t0 = t1 - state.win;
+  if (state.mode === 'single'){
+    const series = buildSeries(t0, t1, true, visible());
+    drawPlot($('#mainPlot'), {t0, t1, series, grid: state.grid, leftTitle: 'nT（已加显示偏移）', rightTitle: '°C', band: state.iv, hoverX: state.hoverX});
+    renderTip(series);
+  } else {
+    const grid = $('#multiGrid');
+    const vis = visible();
+    if (grid.children.length !== vis.length || grid.dataset.ids !== vis.map(c => c.id).join()){
+      grid.dataset.ids = vis.map(c => c.id).join();
+      grid.innerHTML = vis.map(c => `<div class="mplot"><div class="mplot-h"><i class="sw" style="background:${c.color}"></i><b>${c.name}</b><span class="unit">${c.unit}</span><span class="mono ch-val" data-mv="${c.id}"></span></div><svg id="mp-${c.id}"></svg></div>`).join('');
+    }
+    grid.style.setProperty('--mh', state.rowH + 'px');
+    vis.forEach(c => {
+      const series = buildSeries(t0, t1, false, [c]); series[0].axis = 'left';
+      drawPlot($('#mp-' + c.id), {t0, t1, series, grid: state.grid, compact: true});
+      const mv = $(`[data-mv="${c.id}"]`, grid); if (mv) mv.textContent = fmt(raw(c, t1), c.dec);
+    });
+  }
+}
+function renderTip(series){
+  const tip = $('#tip');
+  if (state.hoverX === null || state.link === 'idle'){ tip.style.display = 'none'; return; }
+  const svg = $('#mainPlot'), th = svg._hoverT; if (th === undefined){ tip.style.display = 'none'; return; }
+  let h = `<div class="t-h">${clock(th, true)}</div>`;
+  series.forEach(sr => { const p = nearest(sr.pts, th); if (!p) return; h += `<div class="t-r"><i class="sw" style="background:${sr.c.color}"></i>${sr.c.name}<span class="v">${fmt(raw(sr.c, p[0]), sr.c.dec)} ${sr.c.unit}</span></div>`; });
+  h += '<div class="t-f">数值为原始读数（未加显示偏移）</div>';
+  tip.innerHTML = h; tip.style.display = 'block';
+  const W = svg.getBoundingClientRect().width, left = state.hoverX + 16 + 220 > W ? state.hoverX - 236 : state.hoverX + 16;
+  tip.style.left = left + 'px'; tip.style.top = '24px';
+}
+$('#plotWrap').addEventListener('mousemove', e => { const r = $('#mainPlot').getBoundingClientRect(); state.hoverX = e.clientX - r.left; renderMain(); });
+$('#plotWrap').addEventListener('mouseleave', () => { state.hoverX = null; renderMain(); });
+
+function chRow(c){
+  const v = state.link === 'idle' ? '—' : fmt(raw(c, state.t), c.dec);
+  const open = state.open === c.id;
+  let h = `<div class="ch-row${open ? ' open' : ''}" data-id="${c.id}">
+    <span class="grip" title="拖动排序">⋮⋮</span>
+    <input type="checkbox" ${c.visible ? 'checked' : ''} data-vis="${c.id}" aria-label="显示 ${c.name}">
+    <i class="sw" style="background:${c.color}"></i>
+    <span class="ch-name">${c.name}${c.axis === 'right' ? '<small>右轴</small>' : ''}</span>
+    <span class="ch-val" data-val="${c.id}">${v}</span>
+    <span class="ch-unit">${c.unit}</span>
+    <span class="chev">▼</span></div>`;
+  if (open){
+    h += `<div class="ch-detail">
+      <div class="field"><label>颜色</label><div class="colors">${PAL.map(p => `<i style="background:${p}" class="${p === c.color ? 'on' : ''}" data-col="${c.id}|${p}"></i>`).join('')}</div></div>
+      ${c.temp ? '<div class="field"><label>坐标轴</label><span>右侧独立轴，单位 °C</span></div>' :
+      `<div class="field"><label>显示偏移</label><div class="row"><input class="num" value="${fmt(c.offset, 1)}" style="flex:1"><span class="unit">${c.unit}</span><button class="btn sm">按均值归零</button><button class="btn sm ghost">清除</button></div></div>`}
+      ${c.computed ? `<div class="field"><label>公式</label><input class="mono" value="${c.formula}" style="font-size:12px"></div><div class="row"><span class="spacer"></span><button class="btn sm ghost danger">删除计算通道</button></div>` : ''}
+    </div>`;
+  }
+  return h;
+}
+function renderChannels(){
+  $('#chList').innerHTML = CH.filter(c => !c.computed).map(chRow).join('');
+  $('#compList').innerHTML = CH.filter(c => c.computed).map(chRow).join('');
+}
+function updateValues(){
+  CH.forEach(c => { const el = $(`[data-val="${c.id}"]`); if (el) el.textContent = state.link === 'idle' ? '—' : fmt(raw(c, state.t), c.dec); });
+}
+$('.side').addEventListener('click', e => {
+  const col = e.target.closest('[data-col]');
+  if (col){ const [id, p] = col.dataset.col.split('|'); CH.find(c => c.id === id).color = p; renderChannels(); renderLegend(); $('#multiGrid').dataset.ids = ''; renderMain(); return; }
+  const vis = e.target.closest('[data-vis]');
+  if (vis){ CH.find(c => c.id === vis.dataset.vis).visible = vis.checked; renderLegend(); renderMain(); renderStats(); return; }
+  const row = e.target.closest('.ch-row');
+  if (row && !e.target.closest('input')){ state.open = state.open === row.dataset.id ? null : row.dataset.id; renderChannels(); }
+});
+$('#allVisBtn').onclick = () => { CH.forEach(c => c.visible = true); renderChannels(); renderLegend(); renderMain(); };
+
+const STATS = {mean:'均值', std:'标准差', pp:'峰峰值', rms:'RMS', min:'最小', max:'最大'};
+function windowStats(c, a, b){
+  const vals = []; for (let t = a; t <= b; t += .02) vals.push(raw(c, t));
+  const n = vals.length, mean = vals.reduce((s, v) => s + v, 0) / n;
+  const std = Math.sqrt(vals.reduce((s, v) => s + (v - mean) ** 2, 0) / n);
+  const mn = Math.min(...vals), mx = Math.max(...vals), rms = Math.sqrt(vals.reduce((s, v) => s + v * v, 0) / n);
+  return {n, mean, std, pp: mx - mn, rms, min: mn, max: mx};
+}
+function renderStats(){
+  if (state.sideTab !== 'stat') return;
+  const cols = state.stats;
+  let h = `<thead><tr><th>通道</th>${cols.map(k => `<th class="num">${STATS[k]}</th>`).join('')}</tr></thead><tbody>`;
+  visible().forEach(c => {
+    const st = state.link === 'idle' ? null : windowStats(c, state.t - 10, state.t);
+    h += `<tr><td><i class="sw" style="background:${c.color};margin-right:6px"></i>${c.name} <span class="unit">${c.unit}</span></td>${cols.map(k => `<td class="num">${st ? fmt(st[k], (k === 'std' || c.temp) ? (c.temp ? 3 : 2) : 1) : '—'}</td>`).join('')}</tr>`;
+  });
+  $('#statTbl').innerHTML = h + '</tbody>';
+}
+function renderInterval(){
+  let h = `<thead><tr><th>通道</th><th class="num">点数</th><th class="num">均值</th><th class="num">标准差</th><th class="num">峰峰值</th></tr></thead><tbody>`;
+  visible().forEach(c => { const st = windowStats(c, state.iv[0], state.iv[1]); h += `<tr><td><i class="sw" style="background:${c.color};margin-right:6px"></i>${c.name}</td><td class="num">${st.n}</td><td class="num">${fmt(st.mean, c.temp ? 2 : 1)}</td><td class="num">${fmt(st.std, c.temp ? 3 : 2)}</td><td class="num">${fmt(st.pp, c.temp ? 2 : 1)}</td></tr>`; });
+  $('#ivTbl').innerHTML = h + '</tbody>';
+}
+$('#statToggles').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  b.classList.toggle('on'); state.stats = $$('#statToggles button.on').map(x => x.dataset.k); renderStats();
+});
+
+/* tabs (side + dock) */
+function bindTabs(bar, paneSel, onChange){
+  bar.addEventListener('click', e => {
+    const t = e.target.closest('.tab'); if (!t || t.disabled) return;
+    $$('.tab', bar).forEach(x => x.classList.toggle('on', x === t));
+    $$(paneSel).forEach(p => p.classList.toggle('on', p.dataset.pane === t.dataset.pane));
+    onChange && onChange(t.dataset.pane);
+  });
+}
+bindTabs($('#sideTabs'), '.side .side-pane', p => { state.sideTab = p; renderStats(); if (p === 'iv') renderInterval(); });
+bindTabs($('#dockTabs'), '.dock-pane', p => { $('#rawFilter').hidden = p !== 'raw'; if ($('#dock').classList.contains('collapsed')) toggleDock(); });
+function toggleDock(){ const d = $('#dock'); d.classList.toggle('collapsed'); $('#dockToggle').textContent = d.classList.contains('collapsed') ? '展开' : '收起'; requestAnimationFrame(renderMain); }
+$('#dockToggle').onclick = toggleDock;
+
+/* toolbar */
+function segBind(seg, fn){ seg.addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; $$('button', seg).forEach(x => x.classList.toggle('on', x === b)); fn(b); }); }
+segBind($('#plotModeSeg'), b => {
+  state.mode = b.dataset.mode; $('#colSeg').hidden = state.mode !== 'multi';
+  $('#plotWrap').style.display = state.mode === 'single' ? '' : 'none';
+  $('#legend').style.display = state.mode === 'single' ? '' : 'none';
+  $('#multiGrid').classList.toggle('on', state.mode === 'multi');
+  $('#multiGrid').classList.toggle('cols2', state.cols === 2);
+  requestAnimationFrame(renderMain);
+});
+segBind($('#colSeg'), b => { state.cols = +b.dataset.cols; $('#multiGrid').classList.toggle('cols2', state.cols === 2); requestAnimationFrame(renderMain); });
+$$('#colSeg button').forEach(b => b.classList.toggle('on', +b.dataset.cols === state.cols));
+segBind($('#rowHSeg'), b => { state.rowH = +b.dataset.h; renderMain(); });
+$('#winSel').onchange = e => { state.win = +e.target.value; renderMain(); };
+function setPaused(p){ state.paused = p; if (p) state.pausedT = state.t; $('#wsPage').classList.toggle('paused', p); $('#pauseBtn').textContent = p ? '继续显示' : '暂停显示'; if (!p) renderMain(); }
+$('#pauseBtn').onclick = () => setPaused(!state.paused);
+$('#resumeBtn').onclick = () => setPaused(false);
+function setFocus(f){ state.focus = f; $('#wsPage').classList.toggle('focus', f); $('#focusBtn').textContent = f ? '退出专注（Esc）' : '专注曲线'; requestAnimationFrame(renderMain); }
+$('#focusBtn').onclick = () => setFocus(!state.focus);
+document.addEventListener('keydown', e => { if (e.key === 'Escape'){ if (state.focus) setFocus(false); closeMenus(); $('#exportModal').classList.remove('on'); } });
+function closeMenus(except){ $$('.menu').forEach(m => { if (m !== except) m.classList.remove('on'); }); }
+function menu(btn, m){ $(btn).addEventListener('click', e => { e.stopPropagation(); const el = $(m); const on = !el.classList.contains('on'); closeMenus(); el.classList.toggle('on', on); }); $(m).addEventListener('click', e => e.stopPropagation()); }
+menu('#moreBtn', '#moreMenu'); menu('#addSegBtn', '#addSegMenu'); menu('#grpMenuBtn', '#grpMenu'); menu('#sessMenuBtn', '#sessMenu');
+document.addEventListener('click', () => closeMenus());
+$('#optGrid').onchange = e => { state.grid = e.target.checked; renderMain(); };
+$('#clearBtn').onclick = () => { state.cleared = state.t; closeMenus(); renderMain(); };
+$('#fltOn').onchange = e => { state.filter = e.target.checked; renderLegend(); renderMain(); };
+$('#vErrBadge').onclick = () => {
+  go('ws'); if ($('#dock').classList.contains('collapsed')) toggleDock();
+  $('#dockTabs .tab[data-pane="raw"]').click();
+};
+
+/* dock logs */
+function hexHd(s){ return s.replace(/^AA 55/, '<span class="hd">AA 55</span>'); }
+const IO = [
+  ['14:02:11.540','tx','AA 55 03 01 01 03','已写出 6 字节','开始输出'],
+  ['14:02:11.566','rx','AA 55 83 01 00 D7','<span class="res-ok">应答匹配，26 ms</span>','开始输出'],
+  ['14:09:30.118','tx','AA 55 03 02 00 64 65','已写出 7 字节','设置输出频率'],
+  ['14:09:30.140','rx','AA 55 83 02 00 D4','<span class="res-ok">应答匹配，22 ms</span>','设置输出频率'],
+  ['14:12:05.002','tx','VER?\\r\\n','已写出 6 字节','自由发送'],
+  ['14:12:05.031','rx','DFG-2 FW 2.3.1\\r\\n','未配置预期应答','自由发送'],
+  ['14:13:47.660','tx','AA 55 03 05 01 0A 0D','已写出 7 字节','设置量程'],
+  ['14:13:50.661','rx','—','<span class="res-warn">3000 ms 内未收到应答</span>','设置量程'],
+];
+function ioRows(){ return IO.map(r => `<div class="log-row"><span class="tm">${r[0]}</span><span class="dir ${r[1]}">${r[1] === 'tx' ? '发送' : '接收'}</span><span class="hex">${hexHd(r[2])}</span><span class="st">${r[3]}<span class="muted">${r[4]}</span></span></div>`).join(''); }
+$('#ioLog').innerHTML = ioRows();
+$('#cmdLog').innerHTML = IO.map(r => `<div class="le"><div class="le-top"><span class="tm">${r[0]}</span><span class="dir ${r[1]}">${r[1] === 'tx' ? '发送' : '接收'}</span><span class="hex">${hexHd(r[2])}</span></div><div class="le-sub">${r[3]}<span class="muted">${r[4]}</span></div></div>`).join('');
+const RAWHEX = 'AA 55 34 9A 99 99 99 59 A6 DB 40 66 66 66 66 66 BA A0 C0 33 33 33 33 9A 52 E4 40';
+function rawRows(){
+  const rows = [];
+  for (let i = 0; i < 9; i++){
+    const tt = state.t - i * .02, tm = clock(tt) + '.' + p2(Math.floor((START + tt * 1000) % 1000 / 10)) ;
+    if (i === 3) rows.push(`<div class="log-row raw"><span class="tm">${tm}</span><span class="mono muted">55 B</span><span class="hex">${hexHd(RAWHEX)} … 9E 09 <span class="bad">1A</span> 0D</span><span class="st res-err">✗ 校验失败：XOR 期望 3C，收到 1A</span></div>`);
+    else if (i === 4) rows.push(`<div class="log-row raw"><span class="tm">${tm}</span><span class="mono muted">2 B</span><span class="hex"><span class="drop">3F 0D</span></span><span class="st res-warn">⚠ 重新同步，丢弃 2 字节</span></div>`);
+    else rows.push(`<div class="log-row raw"><span class="tm">${tm}</span><span class="mono muted">55 B</span><span class="hex">${hexHd(RAWHEX)} … 9E 09 3C 0D</span><span class="st res-ok">✓ 7 通道</span></div>`);
+  }
+  return rows.join('');
+}
+const EV = [
+  ['14:02:10.902','创建会话 #129，保存通道就绪'],
+  ['14:02:11.010','已连接 COM3，115200 8N1，协议「双三轴 Binary (AA55, Double, XOR)」'],
+  ['14:02:11.233','收到首帧并已入队保存'],
+  ['14:02:12.240','提交 50 条（批次 1）'],
+  ['14:08:41.551','<span class="res-err">校验失败 1 帧</span>，已重新同步'],
+  ['14:09:30.140','命令「设置输出频率」收到匹配应答'],
+  ['14:13:50.661','<span class="res-warn">命令「设置量程」3000 ms 内未收到应答</span>'],
+  ['14:14:51.903','<span class="res-err">校验失败 1 帧</span>，丢弃 2 字节后重新同步'],
+];
+$('#evLog').innerHTML = EV.map(r => `<div class="log-row ev"><span class="tm">${r[0]}</span><span>${r[1]}</span></div>`).join('');
+
+/* ------------------------------------------------------------------ */
+/* link strip                                                           */
+/* ------------------------------------------------------------------ */
+function updateStrip(){
+  const L = state.link, run = L !== 'idle';
+  $('#app').dataset.link = L;
+  $('#lsDot').className = 'dot' + (run ? ' rec' : '');
+  $('#lsLabel').textContent = run ? '采集中' : '未连接';
+  $('#lsTimer').textContent = run ? dur(state.t) : '';
+  const btn = $('#connBtn');
+  btn.textContent = run ? '停止并断开' : '连接并开始保存';
+  btn.className = 'btn ' + (run ? 'on-dark' : 'primary');
+  const frames = Math.floor(state.t * 49.8);
+  if (!run){
+    ['#vBytes','#vFrames','#vSaved','#vPending','#vByteRate','#vRate'].forEach(s => $(s).textContent = '—');
+    $('#vBytesU').textContent = ''; $('#vSession').textContent = '连接后创建新会话';
+    $('#vSaveBadge').className = 'st-badge ok'; $('#vSaveBadge').textContent = '就绪'; $('#vErrBadge').hidden = true;
+  } else {
+    $('#vErrBadge').hidden = false;
+    $('#vBytes').textContent = (frames * 55 / 1048576).toFixed(2); $('#vBytesU').textContent = 'MB';
+    $('#vByteRate').textContent = (49.8 * 55 / 1000).toFixed(1);
+    $('#vRate').textContent = (49.8 + (Math.sin(state.t) * .15)).toFixed(1);
+    $('#vFrames').textContent = intf(frames);
+    $('#vSession').textContent = '会话 #129';
+    if (L === 'err'){
+      const saved = state.failFrames; $('#vSaved').textContent = intf(saved); $('#vPending').textContent = intf(frames - saved);
+      $('#bPending').textContent = intf(frames - saved);
+      $('#vSaveBadge').className = 'st-badge err'; $('#vSaveBadge').textContent = '写入失败';
+    } else {
+      const pend = 20 + (frames * 7) % 40; $('#vSaved').textContent = intf(frames - pend); $('#vPending').textContent = pend;
+      $('#vSaveBadge').className = 'st-badge ok'; $('#vSaveBadge').textContent = '正常';
+    }
+  }
+  const sendOk = run;
+  $$('.send-btn').forEach(b => b.disabled = !sendOk);
+  $('#sendTarget').textContent = sendOk ? '写到 COM3' : '未连接，不能发送';
+  // playback availability
+  const pb = $('#playBtn'); const live = state.selSess === 0;
+  pb.disabled = run || live;
+  $('#pbReason').hidden = !(run || live);
+  $('#pbReason span').textContent = live ? '这是正在采集的会话。停止采集后才能回放。' : '连接期间不能回放（包括 TCP 自动重连期间）。断开后即可回放；回放不会写入任何会话。';
+}
+function setLink(L){
+  if (L === 'err') state.failFrames = Math.floor((state.t - 25) * 49.8);
+  state.link = L;
+  $$('#linkSeg button').forEach(b => b.classList.toggle('on', b.dataset.link === L));
+  if (L !== 'idle' && state.pbPlaying) togglePb();
+  updateStrip(); renderChannels(); renderStats(); renderMain();
+}
+$('#linkSeg').addEventListener('click', e => { const b = e.target.closest('button'); if (b) setLink(b.dataset.link); });
+$('#connBtn').onclick = () => setLink(state.link === 'idle' ? 'run' : 'idle');
+$$('[data-act="connect"]').forEach(b => b.onclick = () => setLink('run'));
+$('#retryBtn').onclick = () => setLink('run');
+
+/* ------------------------------------------------------------------ */
+/* navigation                                                           */
+/* ------------------------------------------------------------------ */
+function go(page, sec){
+  state.page = page;
+  $$('.rail-item').forEach(b => b.classList.toggle('on', b.dataset.go === page));
+  $$('.page').forEach(p => p.classList.toggle('on', p.dataset.page === page));
+  if ($('#notes').classList.contains('on')) renderNotes();
+  requestAnimationFrame(() => { renderMain(); if (page === 'data') renderPb(); if (page === 'cal') renderCal(); if (sec) setSec(sec); });
+}
+document.addEventListener('click', e => { const g = e.target.closest('[data-go]'); if (g && !g.classList.contains('tab')) go(g.dataset.go, g.dataset.sec); });
+
+/* ------------------------------------------------------------------ */
+/* connection & protocol                                                */
+/* ------------------------------------------------------------------ */
+segBind($('#connTypeSeg'), b => { $('#serFields').hidden = b.dataset.t !== 'ser'; $('#tcpFields').hidden = b.dataset.t !== 'tcp'; });
+segBind($('#protoFmtSeg'), b => { const bin = b.dataset.f === 'bin'; $('#binEditor').style.display = bin ? 'flex' : 'none'; $('#asciiEditor').style.display = bin ? 'none' : 'flex'; });
+const SEGS = [
+  {type:'帧头', kind:'fixed', name:'帧头', bytes:2, fmt:'固定值', extra:'AA 55'},
+  {type:'长度', kind:'len', name:'长度', bytes:1, fmt:'uint8', extra:'不含帧头与长度本身'},
+  ...CH.slice(0, 6).map((c, i) => ({type:'数据', kind:'data', name:c.id, unit:'nT', bytes:8, fmt:'double 小端', ch:i, scale:'1', off:'0', color:c.color})),
+  {type:'数据', kind:'data', name:'温度', unit:'°C', bytes:2, fmt:'int16 小端', ch:6, scale:'0.01', off:'0', color:CH[6].color},
+  {type:'校验', kind:'sum', name:'XOR', bytes:1, fmt:'XOR', extra:'从第 2 字节到校验前'},
+  {type:'帧尾', kind:'fixed', name:'帧尾', bytes:1, fmt:'固定值', extra:'0D'},
+];
+let selSeg = 2;
+function renderProto(){
+  let off = 0, map = '', ruler = '';
+  SEGS.forEach((s, i) => {
+    map += `<div class="bm-seg ${s.kind}${i === selSeg ? ' sel' : ''}" data-i="${i}" style="flex:${s.bytes} 1 0;${s.color ? `--c:${s.color};background:${s.color}1A` : ''}" title="${s.name}，${s.bytes} 字节，偏移 ${off}"><b>${s.kind === 'sum' ? '校验' : s.name}</b><span>${s.bytes} B</span></div>`;
+    ruler += `<span style="flex:${s.bytes} 1 0">${off}</span>`; off += s.bytes;
+  });
+  $('#bytemap').innerHTML = map; $('#bmRuler').innerHTML = ruler + `<span style="flex:0 0 auto;min-width:0">${off}</span>`;
+  const na = '<td class="na">—</td>';
+  let h = `<thead><tr><th>#</th><th>类型</th><th>名称</th><th>单位</th><th class="num">字节</th><th>数据格式</th><th>通道</th><th class="num">缩放</th><th class="num">偏移</th><th>固定值 / 说明</th><th></th></tr></thead><tbody>`;
+  SEGS.forEach((s, i) => {
+    h += `<tr class="${i === selSeg ? 'sel' : ''}" data-i="${i}"><td class="mono muted">${i + 1}</td><td><span class="t-type">${s.color ? `<i class="sw" style="background:${s.color}"></i>` : '<i class="sw" style="background:#C5CEC9"></i>'}${s.type}</span></td>
+      <td>${s.kind === 'data' ? `<input value="${s.name}" style="width:80px">` : s.name}</td>
+      ${s.kind === 'data' ? `<td><input value="${s.unit}" style="width:54px"></td>` : na}
+      <td class="num">${s.kind === 'data' ? s.bytes : `<input class="num" value="${s.bytes}" style="width:46px">`}</td>
+      <td>${s.kind === 'data' ? `<select style="width:120px"><option>${s.fmt}</option><option>float 小端</option><option>int32 大端</option></select>` : s.kind === 'sum' ? `<select style="width:120px"><option>XOR</option><option>SUM8</option><option>CRC16</option></select>` : s.fmt}</td>
+      ${s.kind === 'data' ? `<td>CH${s.ch}</td><td class="num"><input class="num" value="${s.scale}" style="width:64px"></td><td class="num"><input class="num" value="${s.off}" style="width:54px"></td>` : na + na + na}
+      <td>${s.kind === 'fixed' ? `<input class="mono" value="${s.extra}" style="width:90px">` : s.extra ? `<span class="muted">${s.extra}</span>` : '<span class="na">—</span>'}</td>
+      <td><button class="btn sm ghost icon" title="上移">↑</button><button class="btn sm ghost icon" title="下移">↓</button><button class="btn sm ghost icon danger" title="删除">×</button></td></tr>`;
+  });
+  $('#segTbl').innerHTML = h + '</tbody>';
+}
+$('#bytemap').addEventListener('click', e => { const s = e.target.closest('.bm-seg'); if (!s) return; selSeg = +s.dataset.i; renderProto(); const row = $(`#segTbl tr[data-i="${selSeg}"]`), box = row && row.closest('.seg-tbl'); if (box) box.scrollTop = Math.max(0, row.offsetTop - 40); });
+$('#segTbl').addEventListener('click', e => { const r = e.target.closest('tr[data-i]'); if (!r || e.target.closest('input,select,button')) return; selSeg = +r.dataset.i; renderProto(); });
+$('#parseBody').innerHTML = [['CH0','X1','28,312.40','28,313.20','nT'],['CH1','Y1','−2,141.30','−2,141.20','nT'],['CH2','Z1','41,620.80','41,620.90','nT'],['CH3','X2','28,298.70','28,298.70','nT'],['CH4','Y2','−2,156.90','−2,157.00','nT'],['CH5','Z2','41,611.20','41,611.20','nT'],['CH6','温度','24.62','24.63','°C']]
+  .map((r, i) => `<tr><td class="mono muted">${r[0]}</td><td><i class="sw" style="background:${PAL[i]};margin-right:6px"></i>${r[1]}</td><td class="num">${r[2]}</td><td class="num res-err" title="该帧校验失败，数值不会被保存">${r[3]}</td><td class="unit">${r[4]}</td></tr>`).join('');
+
+/* ------------------------------------------------------------------ */
+/* commands                                                             */
+/* ------------------------------------------------------------------ */
+const CMDS = [['开始输出','设备按设定频率输出数据帧'],['停止输出','设备停止输出数据帧'],['设置输出频率','参数：输出频率 1 ~ 200 Hz'],['设置量程','参数：量程档位 1 ~ 3'],['查询版本','ASCII，返回固件版本字符串'],['软复位','设备重启，约 2 s 后恢复输出']];
+$('#cmdList').innerHTML = CMDS.map((c, i) => `<div class="cmd-item${i === 2 ? ' sel' : ''}" data-i="${i}"><b>${c[0]}</b><span>${c[1]}</span></div>`).join('');
+$('#cmdList').addEventListener('click', e => { const it = e.target.closest('.cmd-item'); if (!it) return; $$('#cmdList .cmd-item').forEach(x => x.classList.toggle('sel', x === it)); $('#cmdTitle').textContent = CMDS[+it.dataset.i][0]; });
+
+/* ------------------------------------------------------------------ */
+/* data                                                                 */
+/* ------------------------------------------------------------------ */
+const SESS = [
+  {live:true, name:'会话 #129', start:'2026-10-06 14:02:11', dur:null, n:null, ch:7, rate:'50 Hz', note:''},
+  {name:'东侧场地 A 线', start:'2026-10-06 10:15:03', dur:'01:30:12', n:'270,600', ch:7, rate:'50 Hz', note:'晴，地表干燥'},
+  {name:'夜间温漂', start:'2026-10-05 22:00:00', dur:'08:00:00', n:'1,440,000', ch:7, rate:'50 Hz', note:'恒温箱 25 °C'},
+  {name:'标定前基线', start:'2026-10-05 16:40:22', dur:'00:20:00', n:'60,000', ch:7, rate:'50 Hz', note:''},
+  {name:'DFG-2 单三轴联调', start:'2026-10-04 09:12:40', dur:'00:05:31', n:'3,312', ch:4, rate:'10 Hz', note:'固件 2.3.1'},
+  {name:'低噪声室对比', start:'2026-10-03 15:01:10', dur:'00:45:00', n:'135,000', ch:7, rate:'50 Hz', note:''},
+  {legacy:true, name:'旧版会话 2025-12-18', start:'2025-12-18 09:30:00', dur:'00:10:00', n:'—', ch:3, rate:'100 Hz', note:''},
+];
+function renderSess(){
+  let h = `<thead><tr><th style="width:110px">状态</th><th>名称</th><th>开始时间</th><th class="num">时长</th><th class="num">读数</th><th class="num">通道</th><th class="num">标称采样率</th><th>备注</th></tr></thead><tbody>`;
+  SESS.forEach((s, i) => {
+    const live = s.live && state.link !== 'idle';
+    const st = live ? '<span class="tag rec">采集中</span>' : s.legacy ? '<span class="tag warn">旧格式，需迁移</span>' : '<span class="tag ok">已保存</span>';
+    const n = s.live ? (state.link === 'idle' ? '37,862' : $('#vSaved').textContent) : s.n;
+    const d = s.live ? (state.link === 'idle' ? '00:12:41' : dur(state.t)) : s.dur;
+    h += `<tr class="${i === state.selSess ? 'sel' : ''}${s.legacy ? ' legacy' : ''}" data-i="${i}"><td>${st}</td><td style="font-weight:600;color:var(--ink)">${s.name}</td><td class="mono">${s.start}</td><td class="num">${d}</td><td class="num">${n}</td><td class="num">${s.ch}</td><td class="num">${s.rate}</td><td class="muted">${s.note}</td></tr>`;
+  });
+  $('#sessTbl').innerHTML = h + '</tbody>';
+}
+function renderDetail(){
+  const s = SESS[state.selSess];
+  $('#dName').value = s.name; $('#dNote').value = s.note;
+  const store = s.live && state.link === 'err' ? '<span class="tag err">写入失败，有待写数据</span>' : s.legacy ? '<span class="tag warn">旧格式，需迁移后才能回放与导出</span>' : s.live && state.link !== 'idle' ? '<span class="tag rec">采集中</span>' : '<span class="tag ok">全部已提交</span>';
+  $('#dKv').innerHTML = `<dt>开始</dt><dd class="mono">${s.start}.118</dd><dt>时长</dt><dd class="mono">${s.live ? dur(state.t) : s.dur}</dd><dt>读数</dt><dd class="mono">${s.live ? $('#vSaved').textContent : s.n}</dd><dt>频率</dt><dd>实测平均 <span class="mono">${s.rate === '50 Hz' ? '50.0' : s.rate === '10 Hz' ? '10.0' : '—'}</span> Hz，标称 ${s.rate}</dd><dt>协议</dt><dd>${s.ch === 4 ? 'ZDZ_C08（内置）' : s.ch === 3 ? '旧版固定三轴' : '双三轴 Binary (AA55, Double, XOR)'}</dd><dt>存储</dt><dd>${store}</dd>`;
+  const chs = s.ch === 7 ? CH.slice(0, 7) : CH.slice(0, s.ch);
+  $('#dCh').innerHTML = `<thead><tr><th>索引</th><th>名称</th><th>单位</th></tr></thead><tbody>` + chs.map((c, i) => `<tr><td class="mono muted">CH${i}</td><td>${c.name}</td><td class="unit">${c.unit}</td></tr>`).join('') + '</tbody>';
+  $('#exportBtn').disabled = !!s.legacy;
+  updateStrip();
+}
+$('#sessTbl').addEventListener('click', e => { const r = e.target.closest('tr[data-i]'); if (!r) return; state.selSess = +r.dataset.i; renderSess(); renderDetail(); });
+$('#playBtn').onclick = () => { $('#dataPage').classList.add('playing'); requestAnimationFrame(renderPb); };
+$('#pbBack').onclick = () => { if (state.pbPlaying) togglePb(); $('#dataPage').classList.remove('playing'); };
+const PB_DUR = 5412;
+function renderPb(){
+  if (!$('#dataPage').classList.contains('playing')) return;
+  const t1 = state.pbT, t0 = t1 - 60, off = 4000;
+  if (!state.pbOff){ state.pbOff = {}; CH.forEach(c => state.pbOff[c.id] = c.temp ? 0 : -Math.round(raw(c, 2538 + off) * 10) / 10); }
+  const series = buildSeries(t0, t1 + 0.0001, true, CH.slice(0, 7), off, state.pbOff);
+  const startPb = new Date(2026, 9, 6, 10, 15, 3).getTime();
+  const ck = t => { const d = new Date(startPb + t * 1000); return p2(d.getHours()) + ':' + p2(d.getMinutes()) + ':' + p2(d.getSeconds()); };
+  drawPlot($('#pbPlot'), {t0, t1: t1 + 6, series, leftTitle:'nT（已加显示偏移）', rightTitle:'°C', playhead: t1, clock: ck});
+  $('#pbLegend').innerHTML = CH.slice(0, 7).map(c => `<span><i class="sw" style="background:${c.color}"></i>${c.name}${c.axis === 'right' ? '<span class="lnote">（右轴）</span>' : ''}</span>`).join('');
+  $('#pbCh').innerHTML = CH.slice(0, 7).map(c => `<div class="ch-row" style="grid-template-columns:16px 10px minmax(0,1fr) auto 28px;cursor:default"><input type="checkbox" checked><i class="sw" style="background:${c.color}"></i><span class="ch-name">${c.name}</span><span class="ch-val">${fmt(raw(c, t1 + off), c.dec)}</span><span class="ch-unit">${c.unit}</span></div>`).join('');
+  const f = t1 / PB_DUR * 100; $('#pbFill').style.width = f + '%'; $('#pbKnob').style.left = f + '%';
+  $('#pbPos').textContent = dur(t1) + ' / ' + dur(PB_DUR);
+}
+function togglePb(){ state.pbPlaying = !state.pbPlaying; $('#pbPlay').textContent = state.pbPlaying ? '暂停' : '播放'; $('#pbState').textContent = state.pbPlaying ? '播放中' : '已暂停'; $('#pbState').className = 'tag' + (state.pbPlaying ? ' accent' : ''); }
+$('#pbPlay').onclick = togglePb;
+$('#pbStop').onclick = () => { if (state.pbPlaying) togglePb(); state.pbT = 60; $('#pbState').textContent = '就绪'; renderPb(); };
+segBind($('#pbSpeed'), b => state.pbSpeed = parseFloat(b.textContent));
+$('#pbScrub').addEventListener('click', e => { const r = e.currentTarget.getBoundingClientRect(); state.pbT = Math.max(60, (e.clientX - r.left) / r.width * PB_DUR); renderPb(); });
+function openExport(){ $('#exCh').innerHTML = CH.slice(0, 7).map(c => `<label><input type="checkbox" checked>${c.name} <span class="unit">${c.unit}</span></label>`).join(''); $('#exportModal').classList.add('on'); }
+$('#exportBtn').onclick = openExport; $('#exportBtn2').onclick = openExport;
+$$('[data-close]').forEach(b => b.onclick = () => $('#exportModal').classList.remove('on'));
+
+/* ------------------------------------------------------------------ */
+/* calibration                                                          */
+/* ------------------------------------------------------------------ */
+let calStep = 2;
+function setCalStep(n){
+  calStep = n;
+  $$('.stp').forEach(s => { const k = +s.dataset.s; s.classList.toggle('on', k === n); s.classList.toggle('done', k < n); });
+  $$('.cal-step').forEach(s => s.classList.toggle('on', +s.dataset.s === n));
+  $('#calStepTxt').textContent = `步骤 ${n} / 4`;
+  $('#calPrev').disabled = n === 1; $('#calNext').textContent = n === 4 ? '完成' : '下一步';
+  $('#calGate').textContent = n === 1 ? '已选择传感器类型' : n === 2 ? '至少需要 3 个样本，已满足' : n === 3 ? '计算成功后可继续' : '';
+  renderCal();
+}
+$('#stepper').addEventListener('click', e => { const s = e.target.closest('.stp'); if (s) setCalStep(+s.dataset.s); });
+$('#calPrev').onclick = () => setCalStep(Math.max(1, calStep - 1));
+$('#calNext').onclick = () => setCalStep(Math.min(4, calStep + 1));
+bindTabs($('#calTabs'), '.nothing', () => {});
+$('#calTabs').addEventListener('click', e => { const t = e.target.closest('.tab'); if (!t) return; $('#calOrtho').hidden = t.dataset.ct !== 'ortho'; $('#calOg').hidden = t.dataset.ct !== 'og'; $('#calLib').hidden = t.dataset.ct !== 'lib'; });
+$('#pts48').innerHTML = Array.from({length:48}, (_, i) => `<i class="${i < 17 ? 'on' : i === 17 ? 'next' : ''}"></i>`).join('');
+function sphere(n, seed){
+  const pts = [];
+  for (let i = 0; i < n; i++){ const u = rnd(i, seed), v = rnd(i, seed + 5); const z = .15 + .85 * u * (i % 5 ? 1 : -1); const ph = 2 * Math.PI * v; const r = Math.sqrt(1 - z * z); pts.push([r * Math.cos(ph), r * Math.sin(ph), z]); }
+  return pts;
+}
+function renderCal(){
+  if (state.page !== 'cal') return;
+  const pts = sphere(17, 3), pairs = [['XY',0,1],['XZ',0,2],['YZ',1,2]];
+  $('#proj').innerHTML = pairs.map(([n, a, b]) => `<figure><figcaption>${n} 投影</figcaption><svg viewBox="-60 -60 120 120"><circle r="50" fill="none" stroke="#D2D9D5"/><line x1="-56" x2="56" stroke="#EDF1EE"/><line y1="-56" y2="56" stroke="#EDF1EE"/>${pts.map(p => `<circle cx="${(p[a] * 50).toFixed(1)}" cy="${(-p[b] * 50).toFixed(1)}" r="3.4" fill="#2456C2" fill-opacity=".85"/>`).join('')}</svg></figure>`).join('');
+  $('#calLive').innerHTML = CH.slice(0, 3).map(c => `<span><i class="sw" style="background:${c.color};margin-right:5px"></i>${c.id} ${fmt(raw(c, state.t), 1)}</span>`).join('');
+  if (calStep === 3){
+    const P = sphere(48, 9);
+    const proj = (a, b) => `<svg viewBox="-60 -60 120 120"><line x1="-56" x2="56" stroke="#EDF1EE"/><line y1="-56" y2="56" stroke="#EDF1EE"/>${P.map(p => `<circle cx="${(p[a]*44*1.08+6).toFixed(1)}" cy="${(-(p[b]*44*.93+p[a]*5)-4).toFixed(1)}" r="2.6" fill="#9AA6A1"/>`).join('')}${P.map(p => `<circle cx="${(p[a]*46).toFixed(1)}" cy="${(-p[b]*46).toFixed(1)}" r="2.6" fill="#2456C2"/>`).join('')}</svg>`;
+    let tf = '', tc = ''; for (let i = 0; i < 48; i++){ const x = 10 + i * (380 / 47); tf += (i ? 'L' : 'M') + x.toFixed(1) + ' ' + (75 - 50 * Math.sin(i * .7) * (.6 + .4 * rnd(i, 2))).toFixed(1); tc += (i ? 'L' : 'M') + x.toFixed(1) + ' ' + (75 - 4 * gauss(i, 4)).toFixed(1); }
+    let hist = ''; const bins = [1,3,6,10,12,8,5,2,1]; bins.forEach((b, i) => { hist += `<rect x="${12 + i * 20}" y="${130 - b * 9}" width="16" height="${b * 9}" rx="2" fill="#2456C2" fill-opacity=".8"/>`; });
+    $('#viz5').innerHTML = `
+      <figure><figcaption>XY 投影 <span class="lg"><i style="background:#9AA6A1"></i>原始</span><span class="lg"><i style="background:#2456C2"></i>校正后</span></figcaption>${proj(0,1)}</figure>
+      <figure><figcaption>XZ 投影</figcaption>${proj(0,2)}</figure>
+      <figure><figcaption>YZ 投影</figcaption>${proj(1,2)}</figure>
+      <figure class="wide"><figcaption>总场对比（按样本） <span class="lg"><i style="background:#9AA6A1"></i>原始 ±310 nT</span><span class="lg"><i style="background:#2456C2"></i>校正后 ±9 nT</span></figcaption><svg viewBox="0 0 400 150" preserveAspectRatio="none"><line x1="0" x2="400" y1="75" y2="75" stroke="#EDF1EE"/><path d="${tf}" fill="none" stroke="#9AA6A1" stroke-width="1.6"/><path d="${tc}" fill="none" stroke="#2456C2" stroke-width="1.8"/></svg></figure>
+      <figure><figcaption>残差分布（nT）</figcaption><svg viewBox="0 0 200 150"><line x1="8" x2="196" y1="130" y2="130" stroke="#C6CEC9"/>${hist}<text x="10" y="145" class="g-tick">−12</text><text x="92" y="145" class="g-tick">0</text><text x="172" y="145" class="g-tick">12</text></svg></figure>`;
+  }
+}
+$('#recPt').onclick = () => { const cells = $$('#pts48 i'); const i = cells.findIndex(c => c.classList.contains('next')); if (i < 0) return; cells[i].className = 'on'; if (cells[i + 1]) cells[i + 1].className = 'next'; $('#ptsCount').textContent = `已记录 ${i + 1} / 48 点`; };
+
+/* ------------------------------------------------------------------ */
+/* settings                                                             */
+/* ------------------------------------------------------------------ */
+function setSec(sec){ $$('#setNav button').forEach(b => b.classList.toggle('on', b.dataset.sec === sec)); const el = $('#sec-' + sec); if (el) $('#setBody').scrollTop = el.offsetTop; }
+$('#setNav').addEventListener('click', e => { const b = e.target.closest('button'); if (b) setSec(b.dataset.sec); });
+
+/* ------------------------------------------------------------------ */
+/* loop                                                                 */
+/* ------------------------------------------------------------------ */
+let tick = 0;
+setInterval(() => {
+  tick++;
+  if (state.link !== 'idle') state.t += .2;
+  updateStrip();
+  if (state.page === 'ws'){
+    if (!state.paused && state.link !== 'idle') renderMain();
+    if (tick % 2 === 0) updateValues();
+    if (tick % 5 === 0){ renderStats(); if (state.link !== 'idle') $('#rawLog').innerHTML = rawRows(); }
+  }
+  if (state.page === 'data' && tick % 5 === 0 && !$('#dataPage').classList.contains('playing')) renderSess();
+  if (state.page === 'cal' && tick % 2 === 0) $('#calLive').innerHTML = CH.slice(0, 3).map(c => `<span><i class="sw" style="background:${c.color};margin-right:5px"></i>${c.id} ${fmt(raw(c, state.t), 1)}</span>`).join('');
+  if (state.pbPlaying){ state.pbT = Math.min(PB_DUR, state.pbT + .2 * state.pbSpeed); if (state.pbT >= PB_DUR){ togglePb(); $('#pbState').textContent = '已结束'; } renderPb(); }
+}, 200);
+window.addEventListener('resize', () => { renderMain(); renderPb(); });
+
+renderChannels(); renderLegend(); renderProto(); renderSess(); renderDetail(); renderInterval(); initPins();
+(function fromHash(){
+  // 评审链接：#ws-idle  #ws-err  #ws-multi  #ws-focus  #conn  #cmd  #data  #data-play  #cal  #cal-3  #set  （附加 -pins 显示标注）
+  const h = location.hash.slice(1); if (!h) return;
+  const parts = h.split('-');
+  if (parts.includes('pins')){ document.body.classList.add('pins'); $('#pinToggle').checked = true; }
+  if (parts.includes('idle')) setLink('idle'); else if (parts.includes('err')) setLink('err');
+  go(parts[0]);
+  if (parts.includes('multi')) $('#plotModeSeg [data-mode="multi"]').click();
+  if (parts.includes('focus')) setFocus(true);
+  if (parts.includes('paused')) setPaused(true);
+  if (parts.includes('play')) $('#playBtn').disabled ? null : $('#playBtn').click();
+  if (parts.includes('raw')) $('#dockTabs .tab[data-pane="raw"]').click();
+  if (parts.includes('stat')) $('#sideTabs .tab[data-pane="stat"]').click();
+  const st = parts.map(Number).find(n => n >= 1 && n <= 4); if (parts[0] === 'cal' && st) setCalStep(st);
+  if (parts.includes('ascii')) $('#protoFmtSeg [data-f="ascii"]').click();
+  if (parts.includes('export')) openExport();
+  if (parts.includes('notes')) openNotes();
+})();
+$('#rawLog').innerHTML = rawRows();
+updateStrip();
+requestAnimationFrame(renderMain);
+</script>
+</body>
+</html>

@@ -3,75 +3,136 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="clr-namespace:MagnetometerSystem.App.ViewModels"
              mc:Ignorable="d" d:DesignHeight="600" d:DesignWidth="900">
-    <Grid Margin="15">
+    <!-- 偏移与增益：左侧配置列表，右侧按通道填写。DataContext = SensorCalibrationViewModel。 -->
+    <Grid>
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="300"/>
+            <ColumnDefinition Width="260"/>
             <ColumnDefinition Width="*"/>
         </Grid.ColumnDefinitions>
 
-        <!-- 左侧：配置列表 -->
-        <DockPanel Grid.Column="0" Margin="0,0,10,0">
-            <TextBlock DockPanel.Dock="Top" Text="校准配置列表" FontWeight="Bold" FontSize="14" Margin="0,0,0,8"/>
-            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">
-                <Button Content="新建" Command="{Binding NewProfileCommand}" Padding="8,4" Margin="0,0,5,0"/>
-                <Button Content="刷新" Command="{Binding LoadProfilesCommand}" Padding="8,4" Margin="0,0,5,0"/>
-                <Button Content="删除" Command="{Binding DeleteProfileCommand}" Padding="8,4"/>
-            </StackPanel>
-            <ListBox ItemsSource="{Binding Profiles}" SelectedItem="{Binding SelectedProfile}"
-                     DisplayMemberPath="Name"
-                     SelectionChanged="OnProfileSelectionChanged"/>
-        </DockPanel>
+        <!-- 配置列表 -->
+        <Border BorderBrush="{DynamicResource Line2Brush}" BorderThickness="0,0,1,0">
+            <DockPanel>
+                <Border DockPanel.Dock="Top" Style="{StaticResource PanelHeader}">
+                    <DockPanel>
+                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                            <Button Content="刷新" Style="{StaticResource SmallGhostButton}" Command="{Binding LoadProfilesCommand}" Margin="0,0,4,0"/>
+                            <Button Content="新建" Style="{StaticResource SmallButton}" Command="{Binding NewProfileCommand}"/>
+                        </StackPanel>
+                        <TextBlock Text="配置" Style="{StaticResource PanelTitle}"/>
+                    </DockPanel>
+                </Border>
+                <Grid>
+                    <ListBox ItemsSource="{Binding Profiles}" SelectedItem="{Binding SelectedProfile}" BorderThickness="0" Background="Transparent"
+                             ItemContainerStyle="{StaticResource FlatListItem}" SelectionChanged="OnProfileSelectionChanged">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Margin="14,8">
+                                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                                    <TextBlock Text="{Binding SensorSerial, TargetNullValue=未填序列号}" Style="{StaticResource Hint}"/>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                    <TextBlock Style="{StaticResource Hint}" Margin="14" TextAlignment="Center" VerticalAlignment="Center"
+                               Text="还没有偏移 / 增益配置。点「新建」开始。"
+                               Visibility="{Binding Profiles.Count, Converter={StaticResource ZeroToVisible}}"/>
+                </Grid>
+            </DockPanel>
+        </Border>
 
-        <!-- 右侧：编辑区域 -->
+        <!-- 编辑 -->
         <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto">
-            <StackPanel>
-                <TextBlock Text="校准参数编辑" FontWeight="Bold" FontSize="14" Margin="0,0,0,12"/>
+            <StackPanel Margin="18,14" MaxWidth="620" HorizontalAlignment="Left">
+                <Border Style="{StaticResource Callout}" Margin="0,0,0,14">
+                    <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Ink2Brush}"
+                               Text="这里只保存和管理偏移 / 增益参数。目前采集、曲线显示和导出都不会自动套用这些参数。"/>
+                </Border>
 
-                <TextBlock Text="配置名称" Margin="0,0,0,4"/>
-                <TextBox Text="{Binding EditName, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,10"/>
-
-                <TextBlock Text="传感器类型" Margin="0,0,0,4"/>
-                <ComboBox ItemsSource="{Binding SensorTypes}" SelectedItem="{Binding EditSensorType}" Margin="0,0,0,10"/>
-
-                <TextBlock Text="传感器序列号" Margin="0,0,0,4"/>
-                <TextBox Text="{Binding EditSensorSerial, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,10"/>
-
-                <GroupBox Header="偏移量 (Offset)" Margin="0,0,0,10" Padding="8">
+                <Grid Margin="0,0,0,14">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="12"/>
+                        <ColumnDefinition Width="170"/>
+                        <ColumnDefinition Width="12"/>
+                        <ColumnDefinition Width="150"/>
+                    </Grid.ColumnDefinitions>
                     <StackPanel>
-                        <TextBlock Text="各通道偏移量（逗号分隔，如 100.5, -50.2, 0）" Margin="0,0,0,4" FontSize="11" Foreground="Gray"/>
-                        <TextBox Text="{Binding EditOffsetValues, UpdateSourceTrigger=PropertyChanged}"/>
+                        <TextBlock Text="配置名称" Style="{StaticResource FieldLabel}"/>
+                        <TextBox Text="{Binding EditName, UpdateSourceTrigger=PropertyChanged}"/>
                     </StackPanel>
-                </GroupBox>
+                    <StackPanel Grid.Column="2">
+                        <TextBlock Text="序列号" Style="{StaticResource FieldLabel}"/>
+                        <TextBox Text="{Binding EditSensorSerial, UpdateSourceTrigger=PropertyChanged}"/>
+                    </StackPanel>
+                    <StackPanel Grid.Column="4">
+                        <TextBlock Text="传感器类型" Style="{StaticResource FieldLabel}"/>
+                        <ComboBox ItemsSource="{Binding SensorTypes}" SelectedItem="{Binding EditSensorType}" ItemTemplate="{StaticResource EnumItemTemplate}"/>
+                    </StackPanel>
+                </Grid>
 
-                <GroupBox Header="增益系数 (Gain)" Margin="0,0,0,10" Padding="8">
+                <DockPanel Margin="0,0,0,6">
+                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                        <Button Content="加一个通道" Style="{StaticResource SmallGhostButton}" Command="{Binding AddChannelCommand}"/>
+                        <Button Content="去掉最后一个" Style="{StaticResource SmallGhostButton}" Command="{Binding RemoveLastChannelCommand}"/>
+                    </StackPanel>
+                    <TextBlock Text="按通道填写（通道序号从 0 开始）" Style="{StaticResource FieldLabel}" VerticalAlignment="Center" Margin="0"/>
+                </DockPanel>
+                <Border BorderBrush="{DynamicResource LineBrush}" BorderThickness="1" CornerRadius="{DynamicResource ControlRadius}" Margin="0,0,0,14">
                     <StackPanel>
-                        <TextBlock Text="各通道增益系数（逗号分隔，如 1.002, 0.998, 1.001）" Margin="0,0,0,4" FontSize="11" Foreground="Gray"/>
-                        <TextBox Text="{Binding EditGainValues, UpdateSourceTrigger=PropertyChanged}"/>
+                        <Grid Background="{DynamicResource Panel2Brush}" Height="30">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="90"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="通道" Margin="12,0" VerticalAlignment="Center" FontSize="12" Foreground="{DynamicResource Ink2Brush}"/>
+                            <TextBlock Grid.Column="1" Text="偏移" Margin="8,0" VerticalAlignment="Center" FontSize="12" Foreground="{DynamicResource Ink2Brush}"/>
+                            <TextBlock Grid.Column="2" Text="增益" Margin="8,0" VerticalAlignment="Center" FontSize="12" Foreground="{DynamicResource Ink2Brush}"/>
+                        </Grid>
+                        <ItemsControl ItemsSource="{Binding Channels}" Focusable="False">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate DataType="{x:Type vm:CalibrationChannelRow}">
+                                    <Border BorderBrush="{DynamicResource Line2Brush}" BorderThickness="0,1,0,0" Padding="0,4">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="90"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="{Binding Name}" FontFamily="{DynamicResource MonoFont}" Margin="12,0" VerticalAlignment="Center"/>
+                                            <TextBox Grid.Column="1" Style="{StaticResource MonoTextBox}" Margin="4,0" Text="{Binding Offset, UpdateSourceTrigger=PropertyChanged}"/>
+                                            <TextBox Grid.Column="2" Style="{StaticResource MonoTextBox}" Margin="4,0,8,0" Text="{Binding Gain, UpdateSourceTrigger=PropertyChanged}"/>
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
                     </StackPanel>
-                </GroupBox>
+                </Border>
 
-                <TextBlock Text="备注" Margin="0,0,0,4"/>
-                <TextBox Text="{Binding EditNotes, UpdateSourceTrigger=PropertyChanged}"
-                         AcceptsReturn="True" Height="60" TextWrapping="Wrap"
-                         VerticalScrollBarVisibility="Auto" Margin="0,0,0,12"/>
+                <TextBlock Text="备注" Style="{StaticResource FieldLabel}"/>
+                <TextBox Text="{Binding EditNotes, UpdateSourceTrigger=PropertyChanged}" AcceptsReturn="True" TextWrapping="Wrap"
+                         Height="60" VerticalContentAlignment="Top" Padding="6,4" VerticalScrollBarVisibility="Auto" Margin="0,0,0,14"/>
 
-                <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
-                    <Button Content="保存" Command="{Binding SaveProfileCommand}" Padding="15,6" Margin="0,0,10,0"/>
-                </StackPanel>
-
-                <TextBlock Text="{Binding StatusMessage}" FontStyle="Italic">
-                    <TextBlock.Style>
-                        <Style TargetType="TextBlock">
-                            <Setter Property="Foreground" Value="DarkGreen"/>
-                            <Style.Triggers>
-                                <DataTrigger Binding="{Binding IsStatusError}" Value="True">
-                                    <Setter Property="Foreground" Value="Red"/>
-                                </DataTrigger>
-                            </Style.Triggers>
-                        </Style>
-                    </TextBlock.Style>
-                </TextBlock>
+                <DockPanel>
+                    <Button DockPanel.Dock="Right" Content="删除配置…" Style="{StaticResource DangerButton}" Command="{Binding DeleteProfileCommand}"/>
+                    <Button Content="保存" Style="{StaticResource PrimaryButton}" MinWidth="88" Command="{Binding SaveProfileCommand}"/>
+                    <TextBlock Text="{Binding StatusMessage}" VerticalAlignment="Center" Margin="12,0" TextWrapping="Wrap">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Foreground" Value="{DynamicResource OkBrush}"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsStatusError}" Value="True">
+                                        <Setter Property="Foreground" Value="{DynamicResource ErrBrush}"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                </DockPanel>
             </StackPanel>
         </ScrollViewer>
     </Grid>

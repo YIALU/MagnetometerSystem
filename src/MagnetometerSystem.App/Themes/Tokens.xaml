@@ -1,0 +1,54 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- 设计令牌：所有页面只从这里取色和字体，不在视图里写色值。 -->
+
+    <!-- 内容区（浅色） -->
+    <SolidColorBrush x:Key="EnclosureBrush" Color="#E8ECEA"/>
+    <SolidColorBrush x:Key="PanelBrush" Color="#FBFCFB"/>
+    <SolidColorBrush x:Key="Panel2Brush" Color="#F3F6F4"/>
+    <SolidColorBrush x:Key="Panel3Brush" Color="#EAEFEC"/>
+    <SolidColorBrush x:Key="InkBrush" Color="#1C2422"/>
+    <SolidColorBrush x:Key="Ink2Brush" Color="#4B5753"/>
+    <SolidColorBrush x:Key="MutedBrush" Color="#66726E"/>
+    <SolidColorBrush x:Key="LineBrush" Color="#D2D9D5"/>
+    <SolidColorBrush x:Key="Line2Brush" Color="#E4E9E6"/>
+
+    <!-- 导航栏与数据链路条（深色） -->
+    <SolidColorBrush x:Key="GraphiteBrush" Color="#1E2927"/>
+    <SolidColorBrush x:Key="Graphite2Brush" Color="#28342F"/>
+    <SolidColorBrush x:Key="Graphite3Brush" Color="#34433E"/>
+    <SolidColorBrush x:Key="GraphiteLineBrush" Color="#34423E"/>
+    <SolidColorBrush x:Key="GInkBrush" Color="#E3EAE6"/>
+    <SolidColorBrush x:Key="GMutedBrush" Color="#91A39C"/>
+
+    <!-- 强调色与状态色。红色只用于录制指示和错误。 -->
+    <SolidColorBrush x:Key="AccentBrush" Color="#2456C2"/>
+    <SolidColorBrush x:Key="AccentHoverBrush" Color="#1D4AA8"/>
+    <SolidColorBrush x:Key="AccentSoftBrush" Color="#E4ECFA"/>
+    <SolidColorBrush x:Key="AccentOnDarkBrush" Color="#8FB0F5"/>
+    <SolidColorBrush x:Key="OkBrush" Color="#1D8048"/>
+    <SolidColorBrush x:Key="OkSoftBrush" Color="#E1F2E7"/>
+    <SolidColorBrush x:Key="OkOnDarkBrush" Color="#7FD6A2"/>
+    <SolidColorBrush x:Key="WarnBrush" Color="#946100"/>
+    <SolidColorBrush x:Key="WarnSoftBrush" Color="#FAF0D8"/>
+    <SolidColorBrush x:Key="WarnOnDarkBrush" Color="#F2C261"/>
+    <SolidColorBrush x:Key="ErrBrush" Color="#BF3A2F"/>
+    <SolidColorBrush x:Key="ErrSoftBrush" Color="#FBE7E4"/>
+    <SolidColorBrush x:Key="ErrOnDarkBrush" Color="#FF9A8F"/>
+    <SolidColorBrush x:Key="RecBrush" Color="#E5483D"/>
+    <!-- 收发记录“接收”徽标 -->
+    <SolidColorBrush x:Key="RxBrush" Color="#2B5C4F"/>
+    <SolidColorBrush x:Key="RxSoftBrush" Color="#E3EEEA"/>
+
+    <!-- 旧键名：保留给尚未迁移的引用 -->
+    <SolidColorBrush x:Key="WorkspaceBackground" Color="#E8ECEA"/>
+    <SolidColorBrush x:Key="SurfaceBrush" Color="#FBFCFB"/>
+    <SolidColorBrush x:Key="BorderBrush" Color="#D2D9D5"/>
+
+    <FontFamily x:Key="UiFont">Segoe UI Variable Text, Segoe UI, Microsoft YaHei UI, Microsoft YaHei</FontFamily>
+    <!-- 等宽字体只用于字节、时间戳和需要对齐的数值列 -->
+    <FontFamily x:Key="MonoFont">Cascadia Mono, Consolas, Microsoft YaHei UI</FontFamily>
+
+    <CornerRadius x:Key="PanelRadius">6</CornerRadius>
+    <CornerRadius x:Key="ControlRadius">4</CornerRadius>
+</ResourceDictionary>

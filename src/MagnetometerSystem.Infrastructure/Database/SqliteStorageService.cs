@@ -288,6 +288,52 @@ public class SqliteStorageService : IDataStorageService, IDisposable
     }
 
     /// <inheritdoc />
+    public async Task<ReadingPage> GetReadingsPageAsync(
+        string sessionId, DateTime startTime, DateTime endTime, ReadingPageCursor? after, int limit)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(limit);
+        using var conn = new SqliteConnection(_dbInit.ConnectionString);
+        await conn.OpenAsync();
+
+        var sensorTypeName = await conn.ExecuteScalarAsync<string?>(
+            "SELECT sensor_type FROM sessions WHERE id = @Id", new { Id = sessionId });
+        if (sensorTypeName == null) return new ReadingPage([], [], null);
+        var legacyTable = await conn.ExecuteScalarAsync<string?>(
+            "SELECT legacy_data_table FROM sessions WHERE id = @Id", new { Id = sessionId });
+        if (legacyTable != null)
+            throw new NotSupportedException($"旧版原始数据保留在 {legacyTable}，需迁移后读取。");
+        var channelNames = await GetChannelNamesAsync(conn, sessionId);
+        Enum.TryParse<SensorType>(sensorTypeName, out var sensorType);
+
+        // 键集分页：沿 (session_id, timestamp) 索引及隐含的 id 前进，每页只取 limit 行，不重复、不遗漏。
+        var sql = "SELECT id, session_id, timestamp, data FROM readings WHERE session_id = @SessionId"
+            + " AND julianday(timestamp) >= julianday(@StartTime) AND julianday(timestamp) <= julianday(@EndTime)";
+        var parameters = new DynamicParameters();
+        parameters.Add("SessionId", sessionId);
+        parameters.Add("StartTime", startTime.ToUniversalTime().ToString("O"));
+        parameters.Add("EndTime", endTime.ToUniversalTime().ToString("O"));
+        if (after != null)
+        {
+            sql += " AND (timestamp, id) > (@AfterTimestamp, @AfterId)";
+            parameters.Add("AfterTimestamp", after.Timestamp);
+            parameters.Add("AfterId", after.Id);
+        }
+        sql += " ORDER BY timestamp, id LIMIT @Limit";
+        parameters.Add("Limit", limit);
+
+        var readings = new List<MagnetometerReading>();
+        var utcTimestamps = new List<DateTime>();
+        ReadingPageCursor? last = null;
+        foreach (var row in await conn.QueryAsync(sql, parameters))
+        {
+            readings.Add(MapRowToReading(row, channelNames, sensorType));
+            utcTimestamps.Add(ParseUtc((string)row.timestamp));
+            last = new ReadingPageCursor((string)row.timestamp, (long)row.id);
+        }
+        return new ReadingPage(readings, utcTimestamps, readings.Count == limit ? last : null);
+    }
+
+    /// <inheritdoc />
     public async Task DeleteSessionAsync(string sessionId)
     {
         using var conn = new SqliteConnection(_dbInit.ConnectionString);
@@ -692,6 +738,10 @@ public class SqliteStorageService : IDataStorageService, IDisposable
             EndedAt = row.ended_at is string endedAt && !string.IsNullOrEmpty(endedAt)
                 ? ParseUtcAsLocal(endedAt)
                 : null,
+            StartedAtUtc = ParseUtc((string)row.started_at),
+            EndedAtUtc = row.ended_at is string endedUtc && !string.IsNullOrEmpty(endedUtc)
+                ? ParseUtc(endedUtc)
+                : null,
             SensorType = sensorType,
             SampleRate = (double)row.sample_rate,
             ChannelCount = (int)(long)row.channel_count,
@@ -748,12 +798,13 @@ public class SqliteStorageService : IDataStorageService, IDisposable
     /// 将 DB 里存储的 UTC ISO-8601 时间字符串解析为本地时间（Kind=Local）。
     /// DB 仍统一保持 UTC 存储；仅显示/读取时转本地，避免时区歧义。
     /// </summary>
-    private static DateTime ParseUtcAsLocal(string iso)
+    private static DateTime ParseUtcAsLocal(string iso) => ParseUtc(iso).ToLocalTime();
+
+    /// <summary>存储的时间戳按 UTC 解析（无时区标记时视为 UTC），不经过本地时间。</summary>
+    private static DateTime ParseUtc(string iso)
     {
         var dt = DateTime.Parse(iso, null, DateTimeStyles.RoundtripKind);
-        if (dt.Kind == DateTimeKind.Unspecified)
-            dt = DateTime.SpecifyKind(dt, DateTimeKind.Utc);
-        return dt.ToLocalTime();
+        return dt.Kind == DateTimeKind.Unspecified ? DateTime.SpecifyKind(dt, DateTimeKind.Utc) : dt.ToUniversalTime();
     }
 
     #endregion
