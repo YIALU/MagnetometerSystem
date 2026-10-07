@@ -613,6 +613,8 @@ class SignalSettings:
 
 
 AXIS_BASE = {"X": 28000.0, "Y": -2500.0, "Z": 42000.0, "H": 28000.0, "F": 50000.0}
+# 信号设置（基值、幅值、噪声、尖峰）以 nT 为准，按通道的磁场单位换算；单位未知（如“设备单位”）时按 nT 数值发送
+NT_PER_UNIT = {"nT": 1.0, "uT": 1e3, "µT": 1e3, "μT": 1e3, "mT": 1e6, "T": 1e9}
 AXIS_PHASE = {"X": 0.0, "Y": 2.0944, "Z": 4.1888}
 
 
@@ -652,7 +654,8 @@ class SignalGenerator:
             else:
                 base = AXIS_BASE.get(axis or "F", 50000.0) + (sensor_no - 1) * 35.0
                 phase = AXIS_PHASE.get(axis or "X", 0.0) + (sensor_no - 1) * 0.15
-                profile = ("magnetic", base, phase)
+                scale = 1.0 / NT_PER_UNIT.get(unit, 1.0)   # nT → 通道单位
+                profile = ("magnetic", base, phase, scale)
             self.profiles[c.index] = profile
 
     @staticmethod
@@ -679,7 +682,8 @@ class SignalGenerator:
                     swing = self.walk[index]
                 else:
                     swing = s.amplitude * self.wave(s.waveform, omega + profile[2])
-                values[index] = profile[1] + swing + gauss(0.0, s.noise) + spike
+                # 先按 nT 计算，再换算到通道单位
+                values[index] = (profile[1] + swing + gauss(0.0, s.noise) + spike) * profile[3]
             elif kind == "temperature":
                 values[index] = profile[1] + 0.5 * math.sin(2.0 * math.pi * t / 600.0) + gauss(0.0, 0.01)
             elif kind == "gps":
@@ -1537,6 +1541,7 @@ def run_headless(args, protocol: Protocol):
     engine.request("start")
     deadline = time.monotonic() + args.seconds if args.seconds > 0 else None
     next_report = time.monotonic() + 1
+    failed = False
     try:
         while engine.alive and (deadline is None or time.monotonic() < deadline):
             time.sleep(0.05)
@@ -1546,6 +1551,10 @@ def run_headless(args, protocol: Protocol):
                     print("← " + describe_rx(payload))
                 elif kind in ("warn", "error", "info", "stopped"):
                     print(payload)
+                if kind == "stopped":
+                    failed = True
+            if failed:
+                break   # 无窗口时不能手动重新开始：发送已停止就结束，以失败退出
             if time.monotonic() >= next_report:
                 next_report += 1
                 s = engine.stats
@@ -1557,6 +1566,8 @@ def run_headless(args, protocol: Protocol):
     s = engine.stats
     print(f"结束：正常 {s.good} 帧，坏校验 {s.bad}，截断 {s.truncated}，噪声 {s.noise}，"
           f"共 {s.bytes_sent} B，收到 {s.rx_bytes} B，写超时 {s.write_timeouts}，不确定 {s.uncertain} 帧，未发出 {s.unsent} 帧")
+    if failed:
+        raise SystemExit(1)
 
 
 def main(argv=None):
