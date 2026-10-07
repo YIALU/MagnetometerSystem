@@ -235,6 +235,81 @@ public class OrthogonalityFittingLayoutTests
         });
 
     [Fact]
+    public Task ChangingTheSessionFittingMapBlocksNextUntilSamplesMatchIt() =>
+        WpfTestHost.RunAsync(async () =>
+        {
+            using var fixture = await Fixture.CreateAsync();
+            var vm = fixture.CreateVm(3);
+            string id = await fixture.Storage.StartSessionAsync("四通道", new SensorConfig
+            {
+                Type = SensorType.Generic, ChannelCountOverride = 4,
+                ChannelNamesOverride = ["CH0", "CH1", "CH2", "CH3"], ChannelUnitsOverride = ["nT", "nT", "nT", "nT"],
+            }, new ConnectionConfig());
+            await fixture.Storage.SaveReadingsAsync(Enumerable.Range(0, 3).Select(i => new MagnetometerReading
+            { SessionId = id, Timestamp = DateTime.UtcNow.AddSeconds(i), ChannelValues = [4 * i + 1, 4 * i + 2, 4 * i + 3, 4 * i + 4] }).ToList());
+            await fixture.Storage.EndSessionAsync(id);
+            await ImportSessionAsync(vm, Assert.Single((await fixture.Storage.GetSessionsAsync()).Where(s => s.Id == id)));
+            vm.CurrentStep = 2;
+
+            SelectInOrder(vm, 3);   // 用户选定通道后按所选通道读取
+            await WaitUntil(() => vm.CollectedSampleCount == 3);
+            Assert.Equal(new double[] { 1, 2, 3 }, vm.CollectedData[0]);
+            Assert.True(vm.CanGoNext);
+
+            vm.FitX1 = 1;   // 无效（与 Y 重复）：不能重新读取，旧样本也不能继续使用
+            Assert.True(vm.FittingMapMismatch);
+            Assert.False(vm.CanGoNext);
+            Assert.Contains("拟合通道已更改", vm.StepGateText);
+            vm.FitX1 = 0;   // 改回取样时的通道
+            Assert.False(vm.FittingMapMismatch);
+            Assert.True(vm.CanGoNext);
+
+            vm.FitZ1 = 3;   // 有效的新选择：按新通道重新读取，成功后可继续
+            await WaitUntil(() => vm.CollectedData[0][2] == 4);
+            Assert.Equal(new double[] { 1, 2, 4 }, vm.CollectedData[0]);
+            Assert.True(vm.CanGoNext);
+        });
+
+    [Fact]
+    public Task ChangingTheLiveFittingMapAfterCollectingBlocksNextWhileTheSameLayoutIsShown() =>
+        WpfTestHost.RunAsync(async () =>
+        {
+            using var fixture = await Fixture.CreateAsync();
+            var vm = fixture.CreateVm(3);
+            await fixture.PrepareLiveAsync(["nT", "nT", "nT", "nT"]);
+            SelectInOrder(vm, 3);
+            vm.StartCollectingCommand.Execute(null);
+            for (int i = 0; i < 3; i++)
+                fixture.Bus.PublishReading(new MagnetometerReading { Timestamp = DateTime.UtcNow, ChannelValues = [i, i + 10, i + 20, i + 30] });
+            vm.StopCollectingCommand.Execute(null);
+            vm.CurrentStep = 2;
+            Assert.True(vm.CanGoNext);
+
+            vm.FitX1 = 3;
+            Assert.False(vm.CanGoNext);
+            vm.FitX1 = 0;
+            Assert.True(vm.CanGoNext);
+
+            // 断开后下拉框不再描述这批样本的列：已采集的样本仍可继续使用。
+            vm.FitX1 = 3;
+            Assert.False(vm.CanGoNext);
+            fixture.Bus.PublishAcquisitionStopped();
+            fixture.Bus.PublishConnectionChanged(null);
+            Assert.Empty(vm.FittingChannelOptions);
+            Assert.True(vm.CanGoNext);
+            Assert.Equal(new double[] { 0, 10, 20 }, vm.CollectedData[0]);
+        });
+
+    private static async Task WaitUntil(Func<bool> condition)
+    {
+        for (var deadline = DateTime.UtcNow.AddSeconds(5); !condition();)
+        {
+            if (DateTime.UtcNow > deadline) throw new TimeoutException("等待会话重新读取超时");
+            await Task.Delay(10);
+        }
+    }
+
+    [Fact]
     public void ProfileCsvQuotesNamesAndSerialsPerRfc4180()
     {
         var profile = new OrthogonalityParams

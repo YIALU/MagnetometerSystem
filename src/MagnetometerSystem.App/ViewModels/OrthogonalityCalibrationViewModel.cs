@@ -128,6 +128,31 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
 
     /// <summary>当前在通道选项中显示的会话（来源为“已保存会话”时）。</summary>
     private SessionInfo? _loadedSession;
+
+    // 已有样本是按哪个来源、哪组通道取得的（导入文件时为 null）。来源相同而所选通道不同时，
+    // 下拉框显示的已不是样本实际使用的列，不能据此计算和保存校正。
+    private int[]? _samplesMap;
+    private string _samplesSourceKey = "";
+
+    /// <summary>当前来源与已有样本相同，但所选拟合通道与取样时不同。</summary>
+    public bool FittingMapMismatch =>
+        _samplesMap != null && _samplesSourceKey.Length > 0 && _samplesSourceKey == CurrentFittingSourceKey()
+        && !SelectedFittingMap().SequenceEqual(_samplesMap);
+
+    private string CurrentFittingSourceKey()
+    {
+        if (DataSource == CalibrationDataSource.Session)
+            return _loadedSession is { } session ? "session\u0001" + session.Id : "";
+        var (names, units) = FittingSourceLayout();
+        return names.Count == 0 ? "" : "live\u0001" + string.Join("\u0001", names) + "\u0002" + string.Join("\u0001", units);
+    }
+
+    private void RememberSamplesMap(int[]? map)
+    {
+        _samplesMap = map;
+        _samplesSourceKey = map == null ? "" : CurrentFittingSourceKey();
+        UpdateStepNavigation();
+    }
     private bool _applyingSuggestion;
     private int _sessionLoadVersion;
 
@@ -178,6 +203,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         }
         finally { _applyingSuggestion = false; }
         UpdateFittingChannelHint();
+        UpdateStepNavigation();
     }
 
     partial void OnFitX1Changed(int value) => OnFittingChannelsEdited();
@@ -192,6 +218,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
     {
         if (_applyingSuggestion) return;
         UpdateFittingChannelHint();
+        UpdateStepNavigation();
         ReloadSessionIfSelected();
     }
 
@@ -406,7 +433,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         {
             1 => SelectedSensorType == SensorType.TriaxialFluxgate
                  || SelectedSensorType == SensorType.DualTriaxialFluxgate,
-            2 => CollectedSampleCount >= 3 && !IsCollecting,
+            2 => CollectedSampleCount >= 3 && !IsCollecting && !FittingMapMismatch,
             3 => SelectedSensorType == SensorType.DualTriaxialFluxgate
                 ? (CalculationResult?.Success == true && SecondCalculationResult?.Success == true)
                 : CalculationResult?.Success == true,
@@ -421,6 +448,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
     {
         1 => CanGoNext ? "已选择传感器类型" : "请选择单三轴或双三轴磁通门",
         2 when IsCollecting => "先结束采集，再进入下一步",
+        2 when FittingMapMismatch => "拟合通道已更改，与已有样本不一致：改回原来的通道，或重新采集 / 加载",
         2 => CollectedSampleCount >= 3 ? $"至少需要 3 个样本，已有 {CollectedSampleCount:N0} 个" : $"至少需要 3 个样本，当前 {CollectedSampleCount:N0} 个",
         3 when CanGoNext => "计算完成，可以保存",
         3 when IsDualSensor => "两组都计算成功后可继续",
@@ -545,6 +573,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
             _collectedLabels = map.Select(i => names[i]).ToArray();
             _collectedLayoutNames = names;
             _collectedLayoutUnits = units;
+            RememberSamplesMap(map);
         }
         catch (Exception ex) { CollectionStatus = ex.Message; return; }
         lock (_sampleLock)
@@ -1105,6 +1134,8 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
     {
         if (IsCollecting) StopCollecting();
         SetCollectedUnit(unit, channelCount);
+        _samplesMap = null;   // 导入文件有自己的列映射；会话导入由调用方随后记录所用通道
+        _samplesSourceKey = "";
         lock (_sampleLock)
         {
             _collectedData.Clear();
@@ -1640,6 +1671,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
             }
 
             ReplaceSamples(importedData, importedDataSecond, sourceUnit, requiredCols);
+            RememberSamplesMap(map);
             CollectionStatus = $"已从会话 '{session.Name}' 加载 {importedData.Count} 个样本（{sourceUnit}，{string.Join("、", map.Select(i => session.ChannelNames[i]))}）";
 
             UpdateCoverageEstimate();
