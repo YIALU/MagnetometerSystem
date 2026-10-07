@@ -39,12 +39,37 @@ public class ProjectionPlot : FrameworkElement
     public Brush GuideBrush { get => (Brush)GetValue(GuideBrushProperty); set => SetValue(GuideBrushProperty, value); }
 
     private bool _redrawPending;
+    private INotifyCollectionChanged? _subscribed;
+
+    public ProjectionPlot()
+    {
+        // 样本集合比控件活得久（ViewModel 持有）：只在加载期间订阅，卸载即退订，切页后旧控件不被集合事件留住。
+        Loaded += (_, _) => Subscribe(Points);
+        Unloaded += (_, _) => Unsubscribe();
+    }
 
     private static void OnPointsChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
         var plot = (ProjectionPlot)d;
-        if (e.OldValue is INotifyCollectionChanged oldList) oldList.CollectionChanged -= plot.OnCollectionChanged;
-        if (e.NewValue is INotifyCollectionChanged newList) newList.CollectionChanged += plot.OnCollectionChanged;
+        if (plot.IsLoaded) plot.Subscribe(e.NewValue as IEnumerable);
+    }
+
+    private void Subscribe(IEnumerable? points)
+    {
+        Unsubscribe();
+        if (points is INotifyCollectionChanged list)
+        {
+            list.CollectionChanged += OnCollectionChanged;
+            _subscribed = list;
+        }
+        InvalidateVisual(); // 卸载期间样本可能已变化
+    }
+
+    private void Unsubscribe()
+    {
+        if (_subscribed == null) return;
+        _subscribed.CollectionChanged -= OnCollectionChanged;
+        _subscribed = null;
     }
 
     private void OnCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)

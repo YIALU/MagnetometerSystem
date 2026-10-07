@@ -42,14 +42,27 @@ public class WeightPanel : Panel
         if (children.Length == 0) return [];
         var weights = children.Select(WeightOf).ToArray();
         if (double.IsInfinity(available)) return weights.Select(w => Math.Max(MinItemWidth, w * 24)).ToArray();
-        var total = weights.Sum();
-        var widths = weights.Select(w => available * w / total).ToArray();
-        // 先给过窄的元素补到最小宽度，再从其余元素等比扣回。
-        var small = widths.Select(w => w < MinItemWidth).ToArray();
-        var deficit = widths.Where((w, i) => small[i]).Sum(w => MinItemWidth - w);
-        var rest = widths.Where((w, i) => !small[i]).Sum();
+        available = Math.Max(0, available);
+        // 段很多时（如 21 通道协议）最小宽度之和可能超过总宽：此时最小宽度降为平均宽度，保证宽度非负且总和不超出。
+        var min = Math.Min(MinItemWidth, available / children.Length);
+        var pinned = new bool[children.Length];
+        double remaining = available, restWeight = weights.Sum();
+        // 按权重分配；分到的宽度小于最小值的段固定为最小值，其余段在剩余宽度中重新按权重分配，直到不再变化。
+        for (bool changed = true; changed;)
+        {
+            changed = false;
+            for (int i = 0; i < weights.Length; i++)
+            {
+                if (pinned[i] || remaining * weights[i] / restWeight >= min) continue;
+                pinned[i] = true;
+                remaining -= min;
+                restWeight -= weights[i];
+                changed = true;
+            }
+        }
+        var widths = new double[children.Length];
         for (int i = 0; i < widths.Length; i++)
-            widths[i] = small[i] ? MinItemWidth : rest > 0 ? widths[i] - deficit * widths[i] / rest : widths[i];
+            widths[i] = pinned[i] ? min : Math.Max(0, remaining) * weights[i] / restWeight;
         return widths;
     }
 
