@@ -104,5 +104,50 @@ public class DriftNoiseAnalyzerTests
     {
         Assert.Throws<ArgumentException>(() =>
             DriftNoiseAnalyzer.Analyze([T0, T0.AddSeconds(1)], [1.0, 2.0], new DriftNoiseOptions { NoiseWindowSeconds = 0 }));
+        // 非有限长度会让窗口切分无法前进，必须在开始前拒绝。
+        foreach (var bad in new[] { double.PositiveInfinity, double.NaN })
+        {
+            Assert.Throws<ArgumentException>(() =>
+                DriftNoiseAnalyzer.Analyze([T0, T0.AddSeconds(1)], [1.0, 2.0], new DriftNoiseOptions { NoiseWindowSeconds = bad }));
+            Assert.Throws<ArgumentException>(() =>
+                DriftNoiseAnalyzer.Analyze([T0, T0.AddSeconds(1)], [1.0, 2.0], new DriftNoiseOptions { DriftSegmentSeconds = bad }));
+        }
+    }
+
+    [Fact]
+    public void TinyFiniteWindowsStillTerminate()
+    {
+        var (t, v) = Series(200, 1, (_, s) => s);
+        // 窗口相对时间戳极短时，窗口终点会被舍入回起点；切分仍须每次至少前进一个点。
+        var run = Task.Run(() => DriftNoiseAnalyzer.Analyze(t, v, new DriftNoiseOptions { NoiseWindowSeconds = 1e-300, DriftSegmentSeconds = 1e-300 }));
+        Assert.True(run.Wait(TimeSpan.FromSeconds(10)), "窗口切分没有结束");
+        Assert.Empty(run.Result.NoiseWindows); // 每个窗口只有 1 点，少于最少点数
+    }
+
+    [Fact]
+    public void CancellationIsObservedDuringTheComputation()
+    {
+        using var cts = new CancellationTokenSource();
+        var (t, v) = Series(300_000, 0.01, (_, s) => s);
+        // 读取 1000 个数值后取消：分析在计算过程中就应停止，而不是算完整个通道。
+        var values = new CancelAfterReads(v, 1000, cts);
+        Assert.Throws<OperationCanceledException>(() => DriftNoiseAnalyzer.Analyze(t, values, null, cts.Token));
+        Assert.True(values.Reads < v.Length, "取消后仍读完了全部数值");
+    }
+
+    private sealed class CancelAfterReads(double[] values, int limit, CancellationTokenSource cts) : IReadOnlyList<double>
+    {
+        public int Reads { get; private set; }
+        public double this[int index]
+        {
+            get
+            {
+                if (++Reads == limit) cts.Cancel();
+                return values[index];
+            }
+        }
+        public int Count => values.Length;
+        public IEnumerator<double> GetEnumerator() => ((IEnumerable<double>)values).GetEnumerator();
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
     }
 }

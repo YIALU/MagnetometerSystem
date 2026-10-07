@@ -127,6 +127,15 @@ public class AnalysisViewModelTests
         Assert.Contains("超出可表示的时间范围", vm.StatusMessage);
         Assert.False(vm.IsBusy);
 
+        // 文本框输入 Infinity 会绑定为正无穷：按输入错误拒绝，不能让窗口切分卡住。
+        vm.RangeStartText = vm.RangeEndText = "";
+        vm.NoiseWindowSeconds = double.PositiveInfinity;
+        await vm.RunCommand.ExecuteAsync(null);
+        Assert.True(vm.IsError);
+        Assert.Contains("有限正数", vm.StatusMessage);
+        Assert.False(vm.IsBusy);
+        vm.NoiseWindowSeconds = 10;
+
         vm.RangeStartText = "-5"; vm.RangeEndText = "";
         await vm.RunCommand.ExecuteAsync(null);
         Assert.True(vm.IsError);

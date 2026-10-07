@@ -54,30 +54,37 @@ public sealed record DriftNoiseResult(
 /// </summary>
 public static class DriftNoiseAnalyzer
 {
-    public static DriftNoiseResult Analyze(IReadOnlyList<DateTime> timestamps, IReadOnlyList<double> values, DriftNoiseOptions? options = null)
+    /// <param name="cancellationToken">在排序后、各阶段之间及长循环内检查；取消时抛出 <see cref="OperationCanceledException"/>。</param>
+    public static DriftNoiseResult Analyze(IReadOnlyList<DateTime> timestamps, IReadOnlyList<double> values, DriftNoiseOptions? options = null,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(timestamps);
         ArgumentNullException.ThrowIfNull(values);
         if (timestamps.Count != values.Count)
             throw new ArgumentException("时间戳与数值数量不一致。");
         options ??= new DriftNoiseOptions();
-        if (!(options.NoiseWindowSeconds > 0) || !(options.DriftSegmentSeconds > 0))
-            throw new ArgumentException("噪声窗口和漂移分段长度必须为正数。");
+        if (!IsValidLength(options.NoiseWindowSeconds) || !IsValidLength(options.DriftSegmentSeconds))
+            throw new ArgumentException("噪声窗口和漂移分段长度必须为有限正数。");
 
+        cancellationToken.ThrowIfCancellationRequested();
         var warnings = new List<string>();
         var order = Enumerable.Range(0, timestamps.Count).OrderBy(i => timestamps[i]).ToArray();
+        cancellationToken.ThrowIfCancellationRequested();
         var t0 = order.Length > 0 ? timestamps[order[0]] : default;
         var ts = new List<double>(order.Length);
         var vs = new List<double>(order.Length);
         int nonFinite = 0;
-        foreach (var i in order)
+        for (int n = 0; n < order.Length; n++)
         {
+            if ((n & 0xFFFF) == 0) cancellationToken.ThrowIfCancellationRequested();
+            var i = order[n];
             if (!double.IsFinite(values[i])) { nonFinite++; continue; }
             ts.Add((timestamps[i] - t0).TotalSeconds);
             vs.Add(values[i]);
         }
 
         var quality = ComputeQuality(ts, nonFinite, options.GapFactor);
+        cancellationToken.ThrowIfCancellationRequested();
         if (nonFinite > 0) warnings.Add($"已剔除 {nonFinite} 个非有限值。");
         if (quality.GapCount > 0) warnings.Add($"检测到 {quality.GapCount} 处采样缺失，最长 {quality.MaxGapSeconds:0.###} s。");
 
@@ -94,7 +101,7 @@ public static class DriftNoiseAnalyzer
         var detrendedStd = ResidualStd(ts, vs, 0, vs.Count, slope, intercept);
 
         var segments = new List<SegmentMean>();
-        foreach (var (start, count, segStart) in Windows(ts, options.DriftSegmentSeconds))
+        foreach (var (start, count, segStart) in Windows(ts, options.DriftSegmentSeconds, cancellationToken))
             if (count >= options.MinPointsPerWindow)
                 segments.Add(new SegmentMean(segStart, segStart + options.DriftSegmentSeconds, count, Basic(vs, start, count).Mean));
         var spread = segments.Count > 0 ? segments.Max(s => s.Mean) - segments.Min(s => s.Mean) : double.NaN;
@@ -102,7 +109,7 @@ public static class DriftNoiseAnalyzer
 
         var windows = new List<NoiseWindow>();
         var windowPp = new List<double>();
-        foreach (var (start, count, windowStart) in Windows(ts, options.NoiseWindowSeconds))
+        foreach (var (start, count, windowStart) in Windows(ts, options.NoiseWindowSeconds, cancellationToken))
         {
             if (count < options.MinPointsPerWindow) continue;
             double s, k;
@@ -143,16 +150,21 @@ public static class DriftNoiseAnalyzer
             duration > 0 ? (ts.Count - 1) / duration : double.NaN, gaps, maxGap);
     }
 
+    private static bool IsValidLength(double seconds) => double.IsFinite(seconds) && seconds > 0;
+
     /// <summary>按实际时间切出不重叠窗口，返回 (起始下标, 点数, 窗口起始秒)。</summary>
-    private static IEnumerable<(int Start, int Count, double WindowStart)> Windows(List<double> ts, double length)
+    private static IEnumerable<(int Start, int Count, double WindowStart)> Windows(List<double> ts, double length, CancellationToken cancellationToken)
     {
         int i = 0;
         while (i < ts.Count)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var windowStart = Math.Floor(ts[i] / length) * length;
             var end = windowStart + length;
             int j = i;
             while (j < ts.Count && ts[j] < end) j++;
+            // 窗口相对时间戳极短时 end 会被舍入回 windowStart；每个窗口至少前进一个点，循环必然结束。
+            if (j == i) j = i + 1;
             yield return (i, j - i, windowStart);
             i = j;
         }

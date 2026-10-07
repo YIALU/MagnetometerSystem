@@ -144,9 +144,11 @@ public partial class AnalysisViewModel : ObservableObject
             DetrendNoiseWindows = DetrendNoiseWindows,
             DriftSegmentSeconds = DriftSegmentSeconds,
         };
-        if (!(options.NoiseWindowSeconds > 0) || !(options.DriftSegmentSeconds > 0))
+        // “Infinity” 会被绑定转换为正无穷，必须一并拒绝，否则窗口切分无法前进。
+        if (!double.IsFinite(options.NoiseWindowSeconds) || !(options.NoiseWindowSeconds > 0)
+            || !double.IsFinite(options.DriftSegmentSeconds) || !(options.DriftSegmentSeconds > 0))
         {
-            Report("噪声窗口和漂移分段必须为正数。", true);
+            Report("噪声窗口和漂移分段必须为有限正数。", true);
             return;
         }
 
@@ -181,7 +183,7 @@ public partial class AnalysisViewModel : ObservableObject
             var rows = await Task.Run(() => channels.Select((c, k) =>
             {
                 token.ThrowIfCancellationRequested();
-                var result = DriftNoiseAnalyzer.Analyze(times, columns[k], options);
+                var result = DriftNoiseAnalyzer.Analyze(times, columns[k], options, token);
                 var seconds = times.Select(t => (t - times[0]).TotalSeconds).ToArray();
                 return new AnalysisResultRow { Channel = c, Result = result, Seconds = seconds, Values = columns[k] };
             }).ToArray(), token);
