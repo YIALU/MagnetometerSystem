@@ -738,6 +738,10 @@ public class SqliteStorageService : IDataStorageService, IDisposable
             EndedAt = row.ended_at is string endedAt && !string.IsNullOrEmpty(endedAt)
                 ? ParseUtcAsLocal(endedAt)
                 : null,
+            StartedAtUtc = ParseUtc((string)row.started_at),
+            EndedAtUtc = row.ended_at is string endedUtc && !string.IsNullOrEmpty(endedUtc)
+                ? ParseUtc(endedUtc)
+                : null,
             SensorType = sensorType,
             SampleRate = (double)row.sample_rate,
             ChannelCount = (int)(long)row.channel_count,

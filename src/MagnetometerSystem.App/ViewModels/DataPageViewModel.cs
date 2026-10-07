@@ -57,8 +57,9 @@ public partial class DataPageViewModel : ObservableObject
     public bool IsSelectedLegacy => Sessions.SelectedSession?.LegacyDataTable != null;
     public bool IsSelectedActive => Sessions.SelectedSession is { } s && s.Id == Sessions.ActiveSessionId;
 
+    // 时长按 UTC 时刻计算，跨夏令时切换不会多或少一小时。
     public string SelectedDurationText => Sessions.SelectedSession is { } s
-        ? s.EndedAt is { } end ? FormatDuration(end - s.StartedAt) : "进行中"
+        ? s.Duration is { } duration ? FormatDuration(duration) : "进行中"
         : "";
 
     /// <summary>不能回放时说明原因；能回放时为空。</summary>

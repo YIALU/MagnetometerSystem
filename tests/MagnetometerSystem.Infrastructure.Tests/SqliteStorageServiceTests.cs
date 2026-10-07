@@ -65,6 +65,20 @@ public class SqliteStorageServiceTests : IAsyncLifetime
     };
 
     [Fact]
+    public async Task GetSessionsAsync_ProvidesStoredUtcInstantsForDurations()
+    {
+        var sessionId = await _service.StartSessionAsync("utc", CreateDefaultConfig(), CreateDefaultConnectionConfig());
+        await _service.EndSessionAsync(sessionId);
+        var session = Assert.Single((await _service.GetSessionsAsync()).Where(s => s.Id == sessionId));
+        // 时长按存储中的 UTC 时刻计算，不依赖本地时间换算。
+        Assert.Equal(DateTimeKind.Utc, session.StartedAtUtc.Kind);
+        Assert.Equal(DateTimeKind.Utc, session.EndedAtUtc!.Value.Kind);
+        Assert.Equal(session.StartedAt.ToUniversalTime(), session.StartedAtUtc);
+        Assert.Equal(session.EndedAtUtc.Value - session.StartedAtUtc, session.Duration);
+        Assert.True(session.Duration >= TimeSpan.Zero);
+    }
+
+    [Fact]
     public async Task GetReadingsPageAsync_ReturnsEveryRowInRangeOnceWithinTheLimit()
     {
         var sessionId = await _service.StartSessionAsync("paging", CreateDefaultConfig(), CreateDefaultConnectionConfig());

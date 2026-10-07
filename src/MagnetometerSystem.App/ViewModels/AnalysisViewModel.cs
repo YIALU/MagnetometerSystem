@@ -121,8 +121,8 @@ public partial class AnalysisViewModel : ObservableObject
             });
     }
 
-    public string SessionSpanText => SelectedSession is { EndedAt: { } end } s
-        ? $"{s.StartedAt:yyyy-MM-dd HH:mm:ss} — {end:HH:mm:ss}，时长 {FormatDuration(end - s.StartedAt)}，{s.TotalReadings:N0} 条"
+    public string SessionSpanText => SelectedSession is { EndedAt: { } end, Duration: { } duration } s
+        ? $"{s.StartedAt:yyyy-MM-dd HH:mm:ss} — {end:HH:mm:ss}，时长 {FormatDuration(duration)}，{s.TotalReadings:N0} 条"
         : "";
 
     [RelayCommand]
@@ -163,9 +163,9 @@ public partial class AnalysisViewModel : ObservableObject
         try
         {
             // 起止按 UTC 计算：偏移秒数是实际经过时间，跨夏令时切换时不能按本地钟面相加。
-            var startUtc = session.StartedAt.ToUniversalTime();
+            var startUtc = session.StartedAtUtc;
             from = startOffset is { } a ? startUtc.AddSeconds(a) : startUtc;
-            to = endOffset is { } b ? startUtc.AddSeconds(b) : sessionEnd.ToUniversalTime();
+            to = endOffset is { } b ? startUtc.AddSeconds(b) : session.EndedAtUtc ?? sessionEnd.ToUniversalTime();
         }
         catch (ArgumentOutOfRangeException)
         {

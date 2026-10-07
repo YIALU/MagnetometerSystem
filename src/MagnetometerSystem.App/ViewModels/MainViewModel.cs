@@ -157,9 +157,10 @@ public partial class MainViewModel : ObservableObject
     public ObservableCollection<WorkspaceEvent> Events { get; } = new();
 
     private DispatcherTimer? _linkTimer;
-    private DateTime _acquisitionStartedAt;
+    // 链路条的速率与计时用单调时钟（Stopwatch 时间戳），本地时间跨夏令时调整时不会冻结或跳变。
+    private long _acquisitionStartedTicks;
     private long _lastBytes, _lastParsed;
-    private DateTime _lastSample;
+    private long _lastSampleTicks;
 
     public MainViewModel(ConnectionViewModel connectionVm, RealtimeChartViewModel realtimeChartVm, SessionListViewModel sessionListVm, HistoryPlaybackViewModel historyPlaybackVm, OrthogonalityCalibrationViewModel orthoCalibVm, SensorCalibrationViewModel sensorCalibVm, SettingsViewModel settingsVm, DeviceCommandViewModel deviceCommandVm, DataBus dataBus, AnalysisViewModel? analysisVm = null)
     {
@@ -327,7 +328,7 @@ public partial class MainViewModel : ObservableObject
 
     private void StartLinkTimer()
     {
-        _acquisitionStartedAt = _lastSample = DateTime.Now;
+        _acquisitionStartedTicks = _lastSampleTicks = Stopwatch.GetTimestamp();
         _lastBytes = _lastParsed = 0;
         ElapsedText = "00:00:00";
         _linkTimer ??= new DispatcherTimer(TimeSpan.FromSeconds(1), DispatcherPriority.Background, (_, _) => SampleLinkRates(), Dispatcher.CurrentDispatcher);
@@ -345,8 +346,8 @@ public partial class MainViewModel : ObservableObject
     /// <summary>实测频率 = 每秒新增解析帧数；不使用标称采样率推算。</summary>
     private void SampleLinkRates()
     {
-        var now = DateTime.Now;
-        var seconds = (now - _lastSample).TotalSeconds;
+        var now = Stopwatch.GetTimestamp();
+        var seconds = Stopwatch.GetElapsedTime(_lastSampleTicks, now).TotalSeconds;
         if (seconds <= 0) return;
         var bytes = ConnectionVM.ReceivedByteCount;
         var parsed = ConnectionVM.ParsedReadingCount;
@@ -354,9 +355,9 @@ public partial class MainViewModel : ObservableObject
         if (bytes < _lastBytes || parsed < _lastParsed) { _lastBytes = bytes; _lastParsed = parsed; }
         ReceiveRateText = $"{(bytes - _lastBytes) / seconds / 1024:0.0} kB/s";
         MeasuredRateText = LinkState == LinkState.Acquiring ? $"{(parsed - _lastParsed) / seconds:0.0} Hz" : "—";
-        _lastBytes = bytes; _lastParsed = parsed; _lastSample = now;
+        _lastBytes = bytes; _lastParsed = parsed; _lastSampleTicks = now;
         // 按总小时显示，超过 24 小时的长时采集不会回绕到 00:00:00。
-        ElapsedText = FormatElapsed(now - _acquisitionStartedAt);
+        ElapsedText = FormatElapsed(Stopwatch.GetElapsedTime(_acquisitionStartedTicks, now));
     }
 
     internal static string FormatElapsed(TimeSpan elapsed) =>

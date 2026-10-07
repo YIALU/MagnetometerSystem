@@ -77,6 +77,18 @@ public class SessionInfo
     public string Name { get; set; } = string.Empty;
     public DateTime StartedAt { get; set; }
     public DateTime? EndedAt { get; set; }
+
+    private DateTime? _startedAtUtc, _endedAtUtc;
+
+    /// <summary>开始时刻（UTC）。存储层直接取自记录，未设置时由本地时间换算；计算时长用它，StartedAt 只用于显示。</summary>
+    public DateTime StartedAtUtc { get => _startedAtUtc ?? StartedAt.ToUniversalTime(); set => _startedAtUtc = value; }
+
+    /// <summary>结束时刻（UTC），未结束为 null；规则同 <see cref="StartedAtUtc"/>。</summary>
+    public DateTime? EndedAtUtc { get => _endedAtUtc ?? EndedAt?.ToUniversalTime(); set => _endedAtUtc = value; }
+
+    /// <summary>会话时长，按 UTC 时刻计算（跨夏令时切换不多也不少一小时）；未结束为 null。</summary>
+    public TimeSpan? Duration => EndedAtUtc is { } end ? end - StartedAtUtc : null;
+
     public SensorType SensorType { get; set; }
     /// <summary>连接时记录的标称采样率，不代表设备实际输出频率；回放使用读数时间戳。</summary>
     public double SampleRate { get; set; }
