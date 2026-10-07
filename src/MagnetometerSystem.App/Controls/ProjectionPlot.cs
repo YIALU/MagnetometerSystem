@@ -13,7 +13,7 @@ namespace MagnetometerSystem.App.Controls;
 /// </summary>
 public class ProjectionPlot : FrameworkElement
 {
-    private const int MaxDrawnPoints = 3000;
+    internal const int MaxDrawnPoints = 3000;
 
     public static readonly DependencyProperty PointsProperty = DependencyProperty.Register(
         nameof(Points), typeof(IEnumerable), typeof(ProjectionPlot),
@@ -92,8 +92,10 @@ public class ProjectionPlot : FrameworkElement
         dc.DrawLine(guide, new Point(center.X - radius - 4, center.Y), new Point(center.X + radius + 4, center.Y));
         dc.DrawLine(guide, new Point(center.X, center.Y - radius - 4), new Point(center.X, center.Y + radius + 4));
 
-        var samples = Points?.OfType<double[]>().Where(p => p.Length >= 3).ToList();
-        if (samples is not { Count: > 0 }) return;
+        // 只取至多 MaxDrawnPoints 个均匀抽样点（按下标直接读取，不复制整个集合）；
+        // 中心与半径也按这些点估算——这是姿态覆盖预览，不参与拟合计算。
+        var samples = Sample(Points);
+        if (samples.Count == 0) return;
 
         double mx = 0, my = 0, mz = 0;
         foreach (var p in samples) { mx += p[0]; my += p[1]; mz += p[2]; }
@@ -109,13 +111,32 @@ public class ProjectionPlot : FrameworkElement
 
         int a = Math.Clamp(AxisA, 0, 2), b = Math.Clamp(AxisB, 0, 2);
         var dot = Math.Max(2.0, Math.Min(3.4, size / 40));
-        var step = Math.Max(1, samples.Count / MaxDrawnPoints);
-        for (int i = 0; i < samples.Count; i += step)
+        foreach (var p in samples)
         {
-            var p = samples[i];
             var x = center.X + (p[a] - mean[a]) / maxR * radius;
             var y = center.Y - (p[b] - mean[b]) / maxR * radius;
             if (double.IsFinite(x) && double.IsFinite(y)) dc.DrawEllipse(PointBrush, null, new Point(x, y), dot, dot);
         }
+    }
+
+    /// <summary>均匀抽取至多 <see cref="MaxDrawnPoints"/> 个三轴样本；可按下标访问的集合不做全量复制。</summary>
+    internal static List<double[]> Sample(IEnumerable? points)
+    {
+        var result = new List<double[]>();
+        if (points is IList list)
+        {
+            int count = list.Count;
+            int step = Math.Max(1, (count + MaxDrawnPoints - 1) / MaxDrawnPoints);
+            for (int i = 0; i < count; i += step)
+                if (list[i] is double[] { Length: >= 3 } p) result.Add(p);
+            return result;
+        }
+        if (points == null) return result;
+        foreach (var item in points)
+        {
+            if (item is double[] { Length: >= 3 } p) result.Add(p);
+            if (result.Count >= MaxDrawnPoints) break;
+        }
+        return result;
     }
 }
