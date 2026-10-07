@@ -40,6 +40,12 @@ public partial class AnalysisViewModel : ObservableObject
     /// <summary>按时间分块读取，块之间可取消；避免长会话一次性占满内存。</summary>
     private static readonly TimeSpan LoadChunk = TimeSpan.FromMinutes(30);
 
+    /// <summary>
+    /// 一次分析在内存中保留的数值上限（时间戳 + 所选通道值）。分析需要所选时间段的全部原始点，
+    /// 不做降采样；超过上限时停止读取并提示缩短时间段或减少通道，避免长时高频会话占满内存。
+    /// </summary>
+    internal long MaxAnalysisValues { get; set; } = 20_000_000;
+
     private readonly IDataStorageService _storage;
     private CancellationTokenSource? _cts;
     private bool _loaded;
@@ -173,18 +179,25 @@ public partial class AnalysisViewModel : ObservableObject
         FocusedResult = null;
         try
         {
-            var (times, columns) = await LoadAsync(session.Id, from, to, channels.Select(c => c.Index).ToArray(), token);
+            var maxPoints = Math.Max(1, MaxAnalysisValues / (1 + channels.Length));
+            var (times, columns) = await LoadAsync(session.Id, from, to, channels.Select(c => c.Index).ToArray(), maxPoints, token);
+            if (times.Count > maxPoints)
+            {
+                Report($"所选时间段超过 {maxPoints:N0} 个时间点（{channels.Length} 个通道时的上限），请缩短时间段或减少通道后再分析。", true);
+                return;
+            }
             if (times.Count == 0)
             {
                 Report("所选时间段内没有数据。", true);
                 return;
             }
             Report($"正在计算 {channels.Length} 个通道…", false);
+            // 各通道共用同一组相对时间。
+            var seconds = times.Select(t => (t - times[0]).TotalSeconds).ToArray();
             var rows = await Task.Run(() => channels.Select((c, k) =>
             {
                 token.ThrowIfCancellationRequested();
                 var result = DriftNoiseAnalyzer.Analyze(times, columns[k], options, token);
-                var seconds = times.Select(t => (t - times[0]).TotalSeconds).ToArray();
                 return new AnalysisResultRow { Channel = c, Result = result, Seconds = seconds, Values = columns[k] };
             }).ToArray(), token);
             foreach (var row in rows) Results.Add(row);
@@ -205,9 +218,12 @@ public partial class AnalysisViewModel : ObservableObject
         }
     }
 
-    /// <summary>分块读取并只保留所选通道的原始值；按读数 ID 去除块边界的重复行。</summary>
+    /// <summary>
+    /// 分块读取并只保留所选通道的原始值；按读数 ID 去除块边界的重复行。
+    /// 点数超过 <paramref name="maxPoints"/> 时立即停止读取，返回的时间点数会大于上限，由调用方提示。
+    /// </summary>
     private async Task<(List<DateTime> Times, double[][] Columns)> LoadAsync(
-        string sessionId, DateTime from, DateTime to, int[] indices, CancellationToken token)
+        string sessionId, DateTime from, DateTime to, int[] indices, long maxPoints, CancellationToken token)
     {
         var times = new List<DateTime>();
         var columns = indices.Select(_ => new List<double>()).ToArray();
@@ -230,6 +246,7 @@ public partial class AnalysisViewModel : ObservableObject
             }
             // 只需记住最近一块的 ID 即可去除边界重复，避免长会话的集合无限增长。
             seen = lastChunk;
+            if (times.Count > maxPoints) return (times, []);
         }
         return (times, columns.Select(c => c.ToArray()).ToArray());
     }

@@ -8,6 +8,7 @@ using System.Windows;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using MagnetometerSystem.App.Helpers;
 using MagnetometerSystem.Core.Communication;
 using MagnetometerSystem.Core.Models;
 using MagnetometerSystem.Core.Protocol;
@@ -90,6 +91,8 @@ public partial class DeviceCommandViewModel : ObservableObject, IDisposable
     private long _pendingSentTicks;
     private string? _pendingCommandName;
     private const int MaxTrafficEntries = 500;
+    /// <summary>一次刷新的新条目不超过该数量时逐条追加，超过时整体替换。</summary>
+    private const int IncrementalTrafficBatch = 32;
     private const int MaxRxContentChars = 240;
     private const string CatalogKey = "device.commandCatalog";
 
@@ -146,7 +149,7 @@ public partial class DeviceCommandViewModel : ObservableObject, IDisposable
 
     // ---- 日志 / 状态 ----
     /// <summary>收发记录（最近 500 条），按 100 ms 节拍从缓冲并入。</summary>
-    public ObservableCollection<TrafficEntry> TrafficEntries { get; } = new();
+    public BatchObservableCollection<TrafficEntry> TrafficEntries { get; } = new();
 
     /// <summary>界面来不及刷新、在缓冲中被挤掉的记录数（高速连续数据时可能出现）。</summary>
     [ObservableProperty]
@@ -909,8 +912,19 @@ public partial class DeviceCommandViewModel : ObservableObject, IDisposable
             _logBuffer.Clear();
             dropped = _droppedPending;
         }
-        foreach (var entry in pending) TrafficEntries.Add(entry);
-        while (TrafficEntries.Count > MaxTrafficEntries) TrafficEntries.RemoveAt(0);
+        // 少量新条目逐条追加；高速设备一次刷新有大量接收块时，先裁剪再整体替换（一个 Reset 通知），
+        // 不在界面线程上产生数百次逐项增删通知。
+        if (pending.Length <= IncrementalTrafficBatch)
+        {
+            foreach (var entry in pending) TrafficEntries.Add(entry);
+            while (TrafficEntries.Count > MaxTrafficEntries) TrafficEntries.RemoveAt(0);
+        }
+        else
+        {
+            var keep = Math.Max(0, MaxTrafficEntries - pending.Length);
+            TrafficEntries.ReplaceAll(TrafficEntries.Skip(Math.Max(0, TrafficEntries.Count - keep))
+                .Concat(pending.Skip(Math.Max(0, pending.Length - MaxTrafficEntries))).ToArray());
+        }
         DroppedTrafficEntries = dropped;
     }
 

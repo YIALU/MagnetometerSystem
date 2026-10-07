@@ -149,6 +149,27 @@ public class AnalysisViewModelTests
     });
 
     [Fact]
+    public Task Run_RefusesRangesBeyondTheMemoryBudgetAndSharesTimeAxis() => WpfTestHost.RunAsync(async () =>
+    {
+        using var f = await Fixture.CreateAsync();
+        var vm = await ReadyAsync(f.Storage);
+        // 2 个通道 + 时间戳 = 每个时间点 3 个值；上限 3000 个值即 1000 个时间点。
+        vm.MaxAnalysisValues = 3000;
+
+        await vm.RunCommand.ExecuteAsync(null);
+        Assert.True(vm.IsError);
+        Assert.Contains("超过 1,000 个时间点", vm.StatusMessage);
+        Assert.Empty(vm.Results);
+        Assert.False(vm.IsBusy);
+
+        vm.RangeStartText = "100"; vm.RangeEndText = "200";
+        await vm.RunCommand.ExecuteAsync(null);
+        Assert.False(vm.IsError, vm.StatusMessage);
+        Assert.Equal(2, vm.Results.Count);
+        Assert.Same(vm.Results[0].Seconds, vm.Results[1].Seconds);
+    });
+
+    [Fact]
     public Task Csv_EscapesNamesKeepsFullPrecisionAndRecordsSettings() => WpfTestHost.RunAsync(async () =>
     {
         using var f = await Fixture.CreateAsync();

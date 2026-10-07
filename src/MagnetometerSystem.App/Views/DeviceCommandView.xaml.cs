@@ -26,7 +26,8 @@ public partial class DeviceCommandView : UserControl
 
     private void OnTrafficChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
-        if (e.Action != NotifyCollectionChangedAction.Add || _vm is null or { PauseAutoScroll: true }) return;
+        // 大批量刷新以 Reset 整体替换，同样跟到最新一条。
+        if (e.Action is not (NotifyCollectionChangedAction.Add or NotifyCollectionChangedAction.Reset) || _vm is null or { PauseAutoScroll: true }) return;
         if (TrafficList.Items.Count > 0 && TrafficList.IsVisible) TrafficList.ScrollIntoView(TrafficList.Items[^1]);
     }
 }

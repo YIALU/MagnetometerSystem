@@ -430,6 +430,46 @@ public class ProtocolFlowTests
         Assert.True(ready(), "等待界面状态更新超时");
     }
 
+    [Fact]
+    public Task TrafficLog_LargeFlushesUseOneResetAndKeepTheNewestEntries() => WpfTestHost.RunAsync(() =>
+    {
+        using var vm = new DeviceCommandViewModel(new DataBus(), new EmptyCommandConfig());
+        var enqueue = typeof(DeviceCommandViewModel).GetMethod("EnqueueEntry", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+        var flush = typeof(DeviceCommandViewModel).GetMethod("FlushLogBuffer", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+        var start = DateTime.Now;
+        void Receive(int from, int count)
+        {
+            for (int i = from; i < from + count; i++)
+                enqueue.Invoke(vm, [new TrafficEntry(start.AddMilliseconds(i), TrafficKind.Rx, 1, $"#{i}", "", "", null)]);
+        }
+        var actions = new List<System.Collections.Specialized.NotifyCollectionChangedAction>();
+        vm.TrafficEntries.CollectionChanged += (_, e) => actions.Add(e.Action);
+
+        // 少量条目逐条追加。
+        Receive(0, 3);
+        flush.Invoke(vm, null);
+        Assert.Equal(3, actions.Count);
+        Assert.All(actions, a => Assert.Equal(System.Collections.Specialized.NotifyCollectionChangedAction.Add, a));
+
+        // 高速设备一次刷新 700 个接收块：只发一个 Reset，保留最新的 500 条。
+        actions.Clear();
+        Receive(3, 700);
+        flush.Invoke(vm, null);
+        Assert.Equal([System.Collections.Specialized.NotifyCollectionChangedAction.Reset], actions);
+        Assert.Equal(500, vm.TrafficEntries.Count);
+        Assert.Equal("#203", vm.TrafficEntries[0].Content);
+        Assert.Equal("#702", vm.TrafficEntries[^1].Content);
+
+        // 已满时少量新条目仍逐条追加并挤掉最旧的。
+        actions.Clear();
+        Receive(703, 2);
+        flush.Invoke(vm, null);
+        Assert.Equal(4, actions.Count); // 2 次追加 + 2 次移除
+        Assert.Equal(500, vm.TrafficEntries.Count);
+        Assert.Equal("#704", vm.TrafficEntries[^1].Content);
+        return Task.CompletedTask;
+    });
+
     private sealed class EmptyCommandConfig : IAppConfigService
     {
         public Task<T?> GetAsync<T>(string key) => Task.FromResult(default(T));

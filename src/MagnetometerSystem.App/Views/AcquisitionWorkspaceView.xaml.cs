@@ -87,7 +87,8 @@ public partial class AcquisitionWorkspaceView : UserControl
 
     private void OnTrafficChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
-        if (e.Action == NotifyCollectionChangedAction.Add && _vm?.DeviceCommandVM.PauseAutoScroll != true
+        // 大批量刷新以 Reset 整体替换，同样跟到最新一条。
+        if (e.Action is NotifyCollectionChangedAction.Add or NotifyCollectionChangedAction.Reset && _vm?.DeviceCommandVM.PauseAutoScroll != true
             && TrafficLog.Items.Count > 0 && TrafficLog.IsVisible)
             TrafficLog.ScrollIntoView(TrafficLog.Items[^1]);
     }
