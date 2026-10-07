@@ -310,6 +310,8 @@ class Protocol:
                 return f"数据区 {self._payload_length()} 字节，超出 {seg_count(length)} 字节长度字段的范围。"
         if self.config.get("RequireChecksum") and not any(seg_type(s) == "Checksum" for s in segs):
             return "协议要求校验，但没有校验段。"
+        if self.config.get("RequireChecksum") and self.checksum_disabled:
+            return "协议要求校验，但校验段未启用（上位机会拒绝连接）。"
         return None
 
     def _validate_legacy(self) -> str | None:

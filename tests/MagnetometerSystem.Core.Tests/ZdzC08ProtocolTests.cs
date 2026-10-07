@@ -417,6 +417,26 @@ public class ZdzC08ProtocolTests
     }
 
     [Fact]
+    public void RequiredChecksum_RejectsDisabledChecksumSegment()
+    {
+        // 声明必须校验却关闭了校验段：解析器会跳过比对，必须在连接前拒绝，不能静默接收损坏的载荷。
+        var config = ProtocolConfig.CreateZdzC08();
+        config.RequireChecksum = true;
+        Assert.Contains("启用校验", Assert.Throws<ArgumentException>(config.Validate).Message);
+        Assert.Contains("启用校验", Assert.Throws<ArgumentException>(() => new ConfigurableBinaryParser(config)).Message);
+        var restored = ProtocolConfig.FromJson(config.ToJson())!;
+        Assert.Throws<ArgumentException>(() => new ConfigurableBinaryParser(restored));
+
+        WithTestChecksum(config).Validate();
+        var parser = new ConfigurableBinaryParser(config);
+        var corrupted = SyntheticDocumentFrame();
+        corrupted[20] ^= 0x5A;
+        parser.Feed(corrupted, 0, corrupted.Length);
+        Assert.False(parser.TryParse(out _));
+        Assert.Equal(1, parser.RejectedFrameCount);
+    }
+
+    [Fact]
     public void FromJson_ChecksumWithoutEnabledField_StaysEnabled()
     {
         // 加入开关之前保存的协议没有 ChecksumEnabled 字段，必须保持原来的校验行为。

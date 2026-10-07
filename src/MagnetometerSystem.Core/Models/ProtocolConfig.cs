@@ -295,6 +295,9 @@ public class ProtocolConfig
                 || checksum.ChecksumStartIndex < 0 || checksum.ChecksumStartIndex >= Segments.IndexOf(checksum)
                 || (checksum.ChecksumAlgorithm == ChecksumAlgorithm.CRC16 && !Enum.IsDefined(checksum.Crc16Variant)))
                 throw new ArgumentException(message);
+            // 协议声明必须校验时，未启用的校验段等于不校验：拒绝，避免损坏的载荷被当作有效数据保存。
+            if (!checksum.ChecksumEnabled)
+                throw new ArgumentException("该协议要求校验，但校验段未启用：请在校验段勾选“启用校验”，并按固件确认参数后再连接。");
         }
         else if (Checksum == ChecksumType.None || !Enum.IsDefined(Checksum))
             throw new ArgumentException(message);
