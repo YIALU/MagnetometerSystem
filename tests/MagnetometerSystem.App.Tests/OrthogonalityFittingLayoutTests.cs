@@ -456,6 +456,18 @@ public class OrthogonalityFittingLayoutTests
         return Assert.Single((await fixture.Storage.GetSessionsAsync()).Where(s => s.Id == id));
     }
 
+    [Fact]
+    public Task NullChannelNamesOrUnitsDoNotBreakTheConnectionCallback() =>
+        WpfTestHost.RunAsync(async () =>
+        {
+            using var fixture = await Fixture.CreateAsync();
+            var vm = fixture.CreateVm(3);
+            // 连接回调里建立拟合通道选项：名称或单位为 null 时不能抛异常（否则连接会被拆掉）。
+            await fixture.PrepareLiveAsync([null!, "nT", "nT", "nT"], ["T", null!, "Y", "Z"]);
+            Assert.Equal(new[] { "T", "通道 1 (nT)", "Y (nT)", "Z (nT)" }, vm.FittingChannelOptions.Select(o => o.Label));
+            Assert.Equal((1, 2, 3), (vm.FitX1, vm.FitY1, vm.FitZ1));   // 磁场通道恰好 3 个，按顺序
+        });
+
     private static async Task WaitUntil(Func<bool> condition)
     {
         for (var deadline = DateTime.UtcNow.AddSeconds(5); !condition();)

@@ -18,13 +18,13 @@ public static class FittingChannelMap
     {
         if (groups is not (1 or 2) || names.Count != units.Count) return null;
         var magnetic = Enumerable.Range(0, names.Count)
-            .Where(i => OrthogonalityParams.CanonicalUnit(units[i]).Length > 0 && !names[i].TrimStart().StartsWith('Δ'))
+            .Where(i => OrthogonalityParams.CanonicalUnit(units[i]).Length > 0 && !(names[i] ?? "").TrimStart().StartsWith('Δ'))
             .ToArray();
 
         var probes = new List<(string Key, string Unit, int?[] Axes)>();
         foreach (var i in magnetic)
         {
-            if (AxisOf(names[i]) is not var (axis, key)) continue;
+            if (AxisOf(names[i] ?? "") is not var (axis, key)) continue;
             var unit = OrthogonalityParams.CanonicalUnit(units[i]);
             var probe = probes.FirstOrDefault(p => p.Key == key && p.Unit == unit);
             if (probe.Axes == null) probes.Add(probe = (key, unit, new int?[3]));

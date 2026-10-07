@@ -206,7 +206,11 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         FittingChannelOptions.Clear();
         if (names.Count == units.Count)
             for (int i = 0; i < names.Count; i++)
-                FittingChannelOptions.Add(new FittingChannelOption(i, units[i].Length > 0 ? $"{names[i]} ({units[i]})" : names[i]));
+            {
+                string name = names[i] ?? "", unit = units[i] ?? "";
+                var label = name.Length > 0 ? name : $"通道 {i}";
+                FittingChannelOptions.Add(new FittingChannelOption(i, unit.Length > 0 ? $"{label} ({unit})" : label));
+            }
         ApplyFittingSuggestion();
     }
 

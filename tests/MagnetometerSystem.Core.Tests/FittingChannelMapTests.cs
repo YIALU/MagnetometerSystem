@@ -59,6 +59,34 @@ public class FittingChannelMapTests
     }
 
     [Fact]
+    public void NullNamesOrUnitsAreTreatedAsUnknown()
+    {
+        string[] names = [null!, "X", "Y", "Z"];
+        string[] units = ["nT", null!, "nT", "nT"];
+        // 单位为 null 的 X 不算磁场通道；剩下恰好 3 个同单位磁场通道，按顺序分配（不抛异常）。
+        Assert.Equal(new[] { 0, 2, 3 }, FittingChannelMap.Suggest(names, units, 1));
+        Assert.Equal(new[] { 1, 2, 3 }, FittingChannelMap.Suggest(names, ["°C", "nT", "nT", "nT"], 1));
+        Assert.Contains("单位", Assert.Throws<ArgumentException>(() => FittingChannelMap.Validate([1, 2, 3], units, 1)).Message);
+    }
+
+    [Fact]
+    public void FromJson_ExplicitNullChannelTextBecomesEmpty()
+    {
+        var protocol = ProtocolConfig.CreateCct5Gradiometer();
+        var json = System.Text.RegularExpressions.Regex.Replace(protocol.ToJson(), @"""Unit"": ""nT""", @"""Unit"": null");
+        json = json.Replace(@"""Name"": ""X1""", @"""Name"": null");
+        var ascii = ProtocolConfig.CreateDefaultAsciiTriaxial().ToJson().Replace(@"""Unit"": ""nT""", @"""Unit"": null");
+
+        var restored = ProtocolConfig.FromJson(json)!;
+        var restoredAscii = ProtocolConfig.FromJson(ascii)!;
+
+        restored.Validate();
+        Assert.All(restored.DerivedChannelUnits, unit => Assert.Equal("", unit));
+        Assert.Equal("", restored.DerivedChannelNames[0]);
+        Assert.All(restoredAscii.DerivedChannelUnits, unit => Assert.Equal("", unit));
+    }
+
+    [Fact]
     public void Validate_ReturnsUnitOrExplainsTheProblem()
     {
         string[] units = ["nT", "µT", "uT", "uT", "°C", "nT"];

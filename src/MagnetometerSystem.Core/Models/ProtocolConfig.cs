@@ -362,10 +362,31 @@ public class ProtocolConfig
             {
                 config.MigrateFromLegacy();
             }
+            config.NormalizeChannelText();
             config.MigrateChecksumPlaceholder();
             config.ComputeSegmentOffsets();
         }
         return config;
+    }
+
+    /// <summary>
+    /// JSON 里显式写成 null 的名称 / 单位会绕过属性默认值；按空文本处理（单位未知），
+    /// 免得通道元数据传到会话、图表单位轴和拟合通道时出现 null。
+    /// </summary>
+    private void NormalizeChannelText()
+    {
+        FieldMappings ??= [];
+        Segments ??= [];
+        foreach (var field in FieldMappings)
+        {
+            field.Name ??= "";
+            field.Unit ??= "";
+        }
+        foreach (var segment in Segments)
+        {
+            segment.Name ??= "";
+            segment.Unit ??= "";
+        }
     }
 
     /// <summary>v0.5.3 及以前数采卡预设里的校验占位段名称。</summary>

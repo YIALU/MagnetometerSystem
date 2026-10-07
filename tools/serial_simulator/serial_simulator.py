@@ -217,10 +217,11 @@ class Protocol:
                  if self.is_binary and self.segments else self.fields)
         result = []
         for n, item in enumerate(items):
-            unit = item.get("Unit")
+            # 与上位机一致：缺少 Unit 时为默认的 nT，显式 null 视为未知单位（空）
+            unit = item["Unit"] if "Unit" in item else "nT"
             result.append(Channel(int(item.get("ChannelIndex", n) or 0),
                                   str(item.get("Name") or f"CH{n}"),
-                                  "nT" if unit is None else str(unit)))
+                                  "" if unit is None else str(unit)))
         if not result and not self.is_binary:
             # 未配置字段映射时解析器按列全收，这里发三列
             result = [Channel(0, "X", "nT"), Channel(1, "Y", "nT"), Channel(2, "Z", "nT")]
