@@ -129,9 +129,9 @@ CTMBS 通用重复长度封装中的合法状态/参数响应及多组 dat+5 响
 
 串口仍是环境跳过；未运行真实安装器、实体设备或长时间吞吐验收。便携 ZIP 另用 `build.ps1` 的实际 `Compress-Archive` 命令进行临时目录归档，检查可执行文件与 `portable.marker` 位于 ZIP 根目录并保留子目录；该检查不是一次正式发布。
 
-## 2026-10-07 验证记录（界面重设计并入 v0.5.2）
+## 2026-10-07 验证记录（界面重设计，v0.5.3）
 
-环境为 Windows 本机，工作树 `MagnetometerSystem-0.5.2`（分支 `codex/ui-redesign`，基于 `origin/master` v0.5.2，改动未提交），Debug 构建。`dotnet build MagnetometerSystem.sln -c Debug` 0 错误（只有原有 `NU1701`），`dotnet test MagnetometerSystem.sln -c Debug --no-build`：
+环境为 Windows 本机，分支 `codex/ui-redesign`（基于 `master` v0.5.2，版本号升至 0.5.3，经 GitHub PR 审查），Debug 构建。`dotnet build MagnetometerSystem.sln -c Debug --no-restore` 0 错误（只有原有 `NU1701`），`dotnet test MagnetometerSystem.sln -c Debug --no-build --no-restore -m:1`：
 
 | 项目 | 通过 | 跳过 | 失败 |
 | --- | ---: | ---: | ---: |
