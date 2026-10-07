@@ -134,25 +134,53 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
     private int[]? _samplesMap;
     private string _samplesSourceKey = "";
 
-    /// <summary>当前来源与已有样本相同，但所选拟合通道与取样时不同。</summary>
-    public bool FittingMapMismatch =>
-        _samplesMap != null && _samplesSourceKey.Length > 0 && _samplesSourceKey == CurrentFittingSourceKey()
-        && !SelectedFittingMap().SequenceEqual(_samplesMap);
+    private const string FileSourceKey = "file";
+
+    /// <summary>
+    /// 界面显示的来源或拟合通道与已有样本的来源不一致：显示的是另一个来源（换了会话、切到别的有数据的来源），
+    /// 或同一来源下改了拟合通道。当前来源没有可显示的通道（已断开、未选会话）时不拦截，它不描述别的样本。
+    /// </summary>
+    public bool FittingMapMismatch
+    {
+        get
+        {
+            if (_samplesSourceKey.Length == 0) return false;
+            var current = CurrentFittingSourceKey();
+            if (current.Length == 0) return false;
+            if (current != _samplesSourceKey) return true;
+            return _samplesMap != null && !SelectedFittingMap().SequenceEqual(_samplesMap);
+        }
+    }
+
+    /// <summary>已有样本来自另一个来源（相对当前显示）。</summary>
+    private bool SamplesFromOtherSource
+    {
+        get
+        {
+            var current = CurrentFittingSourceKey();
+            return _samplesSourceKey.Length > 0 && current.Length > 0 && current != _samplesSourceKey;
+        }
+    }
 
     private string CurrentFittingSourceKey()
     {
+        if (DataSource == CalibrationDataSource.File) return FileSourceKey;
         if (DataSource == CalibrationDataSource.Session)
             return _loadedSession is { } session ? "session\u0001" + session.Id : "";
         var (names, units) = FittingSourceLayout();
         return names.Count == 0 ? "" : "live\u0001" + string.Join("\u0001", names) + "\u0002" + string.Join("\u0001", units);
     }
 
-    private void RememberSamplesMap(int[]? map)
+    /// <summary>记录现有样本的来源与所用通道（导入文件时没有通道映射）。</summary>
+    private void RememberSamplesSource(int[]? map, string sourceKey)
     {
         _samplesMap = map;
-        _samplesSourceKey = map == null ? "" : CurrentFittingSourceKey();
+        _samplesSourceKey = sourceKey;
         UpdateStepNavigation();
     }
+
+    /// <summary>选项是按哪个实时布局建立的；停止采集后布局已变时据此重建。</summary>
+    private string _optionsSourceKey = "";
     private bool _applyingSuggestion;
     private int _sessionLoadVersion;
 
@@ -174,6 +202,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
     private void RefreshFittingChannels()
     {
         var (names, units) = FittingSourceLayout();
+        _optionsSourceKey = CurrentFittingSourceKey();
         FittingChannelOptions.Clear();
         if (names.Count == units.Count)
             for (int i = 0; i < names.Count; i++)
@@ -448,6 +477,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
     {
         1 => CanGoNext ? "已选择传感器类型" : "请选择单三轴或双三轴磁通门",
         2 when IsCollecting => "先结束采集，再进入下一步",
+        2 when SamplesFromOtherSource => "已有样本来自另一个数据来源：切回该来源，或在当前来源重新采集 / 加载",
         2 when FittingMapMismatch => "拟合通道已更改，与已有样本不一致：改回原来的通道，或重新采集 / 加载",
         2 => CollectedSampleCount >= 3 ? $"至少需要 3 个样本，已有 {CollectedSampleCount:N0} 个" : $"至少需要 3 个样本，当前 {CollectedSampleCount:N0} 个",
         3 when CanGoNext => "计算完成，可以保存",
@@ -573,7 +603,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
             _collectedLabels = map.Select(i => names[i]).ToArray();
             _collectedLayoutNames = names;
             _collectedLayoutUnits = units;
-            RememberSamplesMap(map);
+            RememberSamplesSource(map, CurrentFittingSourceKey());
         }
         catch (Exception ex) { CollectionStatus = ex.Message; return; }
         lock (_sampleLock)
@@ -763,6 +793,9 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         _dataBus.ReadingReceived -= OnCalibrationDataReceived;
         IsCollecting = false;
         FlushPendingSamples();
+        // 采集中途重连了别的协议时选项没有刷新；停止后若实时布局已变，按新布局重建，免得下拉框仍显示旧通道名。
+        if (DataSource == CalibrationDataSource.Live && CurrentFittingSourceKey() != _optionsSourceKey)
+            RefreshFittingChannels();
         CollectionStatus = $"采集完成，共 {CollectedSampleCount} 个样本";
 
         CloseRawCsv();
@@ -1115,6 +1148,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
             }
 
             ReplaceSamples(importedData, importedDataSecond, importUnit, requiredCols);
+            RememberSamplesSource(null, FileSourceKey);
 
             string skipInfo = skippedLines > 0 ? $"（跳过 {skippedLines} 行）" : "";
             CollectionStatus = $"已从文件导入 {importedData.Count} 个样本{skipInfo}";
@@ -1675,7 +1709,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
             }
 
             ReplaceSamples(importedData, importedDataSecond, sourceUnit, requiredCols);
-            RememberSamplesMap(map);
+            RememberSamplesSource(map, CurrentFittingSourceKey());
             CollectionStatus = $"已从会话 '{session.Name}' 加载 {importedData.Count} 个样本（{sourceUnit}，{string.Join("、", map.Select(i => session.ChannelNames[i]))}）";
 
             UpdateCoverageEstimate();

@@ -381,6 +381,81 @@ public class OrthogonalityFittingLayoutTests
         public Task<IReadOnlyList<string>> GetCorrectionVersionIdsAsync(string sessionId) => inner.GetCorrectionVersionIdsAsync(sessionId);
     }
 
+    [Fact]
+    public Task SelectingAnotherSessionBlocksNextUntilItLoads() =>
+        WpfTestHost.RunAsync(async () =>
+        {
+            using var fixture = await Fixture.CreateAsync();
+            var vm = fixture.CreateVm(3);
+            var a = await SaveThreeReadingSessionAsync(fixture, "A");
+            var b = await SaveThreeReadingSessionAsync(fixture, "B");
+            await ImportSessionAsync(vm, a);
+            vm.CurrentStep = 2;
+            Assert.Equal(3, vm.CollectedSampleCount);
+            Assert.True(vm.CanGoNext);
+
+            // 选了会话 B 但读取失败（元数据不一致）：A 的样本保留，但不能当作 B 的数据进入下一步。
+            b.ChannelCount = 4;
+            await ImportSessionAsync(vm, b);
+            Assert.Contains("不一致", vm.CollectionStatus);
+            Assert.Equal(3, vm.CollectedSampleCount);
+            Assert.False(vm.CanGoNext);
+            Assert.Contains("另一个数据来源", vm.StepGateText);
+
+            // B 修正后读取成功：样本换成 B 的，可以继续。
+            b.ChannelCount = 3;
+            await ImportSessionAsync(vm, b);
+            Assert.Contains("B", vm.CollectionStatus);
+            Assert.True(vm.CanGoNext);
+
+            // 切到有连接的实时来源：显示的是另一组通道，切回会话来源后恢复。
+            await fixture.PrepareLiveAsync(["nT", "nT", "nT"]);
+            vm.DataSource = CalibrationDataSource.Live;
+            Assert.False(vm.CanGoNext);
+            vm.DataSource = CalibrationDataSource.Session;
+            Assert.True(vm.CanGoNext);
+        });
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public Task StoppingAfterAProtocolChangeRebuildsTheChannelOptions(bool readingArrives) =>
+        WpfTestHost.RunAsync(async () =>
+        {
+            using var fixture = await Fixture.CreateAsync();
+            var vm = fixture.CreateVm(3);
+            await fixture.PrepareLiveAsync(["nT", "nT", "nT"], ["X", "Y", "Z"]);
+            vm.StartCollectingCommand.Execute(null);
+            Assert.True(vm.IsCollecting, vm.CollectionStatus);
+            fixture.Bus.PublishReading(new MagnetometerReading { Timestamp = DateTime.UtcNow, ChannelValues = [1, 2, 3] });
+
+            // 采集中重连了轴顺序不同的协议：采集中不刷新选项。
+            await fixture.PrepareLiveAsync(["nT", "nT", "nT"], ["Bz", "By", "Bx"]);
+            Assert.Equal("X (nT)", vm.FittingChannelOptions[0].Label);
+            if (readingArrives)
+                fixture.Bus.PublishReading(new MagnetometerReading { Timestamp = DateTime.UtcNow, ChannelValues = [4, 5, 6] });
+            else
+                vm.StopCollectingCommand.Execute(null);
+
+            Assert.False(vm.IsCollecting);
+            Assert.Equal(new[] { "Bz (nT)", "By (nT)", "Bx (nT)" }, vm.FittingChannelOptions.Select(o => o.Label));
+            Assert.Equal((2, 1, 0), (vm.FitX1, vm.FitY1, vm.FitZ1));   // 按新名称重新识别
+            Assert.Equal(new double[] { 1, 2, 3 }, Assert.Single(vm.CollectedData));
+        });
+
+    private static async Task<SessionInfo> SaveThreeReadingSessionAsync(Fixture fixture, string name)
+    {
+        string id = await fixture.Storage.StartSessionAsync(name, new SensorConfig
+        {
+            Type = SensorType.Generic, ChannelCountOverride = 3,
+            ChannelNamesOverride = ["X", "Y", "Z"], ChannelUnitsOverride = ["nT", "nT", "nT"],
+        }, new ConnectionConfig());
+        await fixture.Storage.SaveReadingsAsync(Enumerable.Range(0, 3).Select(i => new MagnetometerReading
+        { SessionId = id, Timestamp = DateTime.UtcNow.AddSeconds(i), ChannelValues = [i, i + 1, i + 2] }).ToList());
+        await fixture.Storage.EndSessionAsync(id);
+        return Assert.Single((await fixture.Storage.GetSessionsAsync()).Where(s => s.Id == id));
+    }
+
     private static async Task WaitUntil(Func<bool> condition)
     {
         for (var deadline = DateTime.UtcNow.AddSeconds(5); !condition();)
