@@ -233,7 +233,7 @@
                     </StackPanel>
                     <StackPanel VerticalAlignment="Center">
                         <TextBlock Foreground="{DynamicResource ErrBrush}" FontWeight="SemiBold">
-                            <Run Text="保存失败，"/><Run Text="{Binding SessionListVM.PendingReadingCount, Mode=OneWay, StringFormat=N0}"/><Run Text=" 条读数仍在内存中等待写入。采集和显示继续进行。"/>
+                            <Run Text="保存失败，采集已停止接收新数据；已接收的 "/><Run Text="{Binding SessionListVM.PendingReadingCount, Mode=OneWay, StringFormat=N0}"/><Run Text=" 条读数仍在内存中，等待重试写入。"/>
                         </TextBlock>
                         <TextBlock Text="{Binding SessionListVM.StorageError}" Foreground="{DynamicResource ErrBrush}" FontSize="12" TextWrapping="Wrap" Margin="0,2,0,0"/>
                     </StackPanel>

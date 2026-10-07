@@ -1414,7 +1414,8 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
             var importedDataSecond = new List<double[]>();
             foreach (var r in readings)
             {
-                var v = r.ChannelValues;
+                // 拟合用校正前的原始值；已校正的读数再拟合会叠加上一次校正。
+                var v = r.OriginalChannelValues ?? r.ChannelValues;
                 if (v.Length != requiredCols)
                     throw new ArgumentException("会话读数与通道元数据不一致，未加载拟合数据。请按格式说明整理为明确三轴 CSV。");
                 importedData.Add(new[] { v[0], v[1], v[2] });

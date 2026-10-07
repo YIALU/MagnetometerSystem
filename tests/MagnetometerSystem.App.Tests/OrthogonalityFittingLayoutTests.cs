@@ -160,6 +160,32 @@ public class OrthogonalityFittingLayoutTests
             }
         });
 
+    [Fact]
+    public Task HistoricalImportFitsOriginalValuesOfCorrectedReadings() =>
+        WpfTestHost.RunAsync(async () =>
+        {
+            using var fixture = await Fixture.CreateAsync();
+            var vm = fixture.CreateVm(3);
+            string id = await fixture.Storage.StartSessionAsync("corrected input", new SensorConfig
+            {
+                Type = SensorType.Generic, ChannelCountOverride = 3,
+                ChannelNamesOverride = ["X", "Y", "Z"], ChannelUnitsOverride = ["nT", "nT", "nT"],
+            }, new ConnectionConfig());
+            await fixture.Storage.SaveReadingsAsync([new MagnetometerReading
+            {
+                SessionId = id, Timestamp = DateTime.UtcNow, ChannelValues = [11, 12, 13],
+                OriginalChannelValues = [1, 2, 3], IsOrthogonalityCorrected = true,
+            }]);
+            await fixture.Storage.EndSessionAsync(id);
+            var stored = Assert.Single(await fixture.Storage.GetReadingsAsync(id));
+            Assert.Equal(new double[] { 1, 2, 3 }, stored.OriginalChannelValues);
+
+            await ImportSessionAsync(vm, Assert.Single((await fixture.Storage.GetSessionsAsync()).Where(s => s.Id == id)));
+
+            // 已校正读数用原始值拟合，不在上一次校正的结果上再拟合。
+            Assert.Equal(new double[] { 1, 2, 3 }, Assert.Single(vm.CollectedData));
+        });
+
     private static List<double[]> SecondGroup(OrthogonalityCalibrationViewModel vm) =>
         (List<double[]>)typeof(OrthogonalityCalibrationViewModel)
             .GetField("_collectedDataSecondGroup", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(vm)!;

@@ -372,6 +372,9 @@ public class ProtocolFlowTests
                 Assert.DoesNotContain("已收到实时帧", vm.ResponseStatus);
             }
             await send.WaitAsync(TimeSpan.FromSeconds(3));
+            // 实时帧以 \nack\n 结尾但不是独立的 $ack\n：收发记录不能把它记成本次命令的 ACK。
+            await WaitForAsync(() => vm.TrafficEntries.Where(e => e.Kind == TrafficKind.Rx).Sum(e => e.ByteCount) == Volatile.Read(ref receivedBytes));
+            Assert.DoesNotContain(vm.TrafficEntries, e => e.Kind == TrafficKind.Rx && e.Result.StartsWith("设备返回 ACK"));
         }
         finally { bus.PublishConnectionChanged(null); listener.Stop(); }
     });
