@@ -79,7 +79,16 @@ public static class DriftNoiseAnalyzer
 
         cancellationToken.ThrowIfCancellationRequested();
         var warnings = new List<string>();
-        var order = Enumerable.Range(0, timestamps.Count).OrderBy(i => timestamps[i]).ToArray();
+        // 分页读取的数据通常已按时间排列：先用可取消的线性检查跳过排序，乱序时才排序。
+        bool inOrder = true;
+        for (int i = 1; i < timestamps.Count && inOrder; i++)
+        {
+            if ((i & 0xFFFF) == 0) cancellationToken.ThrowIfCancellationRequested();
+            inOrder = timestamps[i] >= timestamps[i - 1];
+        }
+        var order = inOrder
+            ? Enumerable.Range(0, timestamps.Count).ToArray()
+            : Enumerable.Range(0, timestamps.Count).OrderBy(i => timestamps[i]).ToArray();
         cancellationToken.ThrowIfCancellationRequested();
         var t0 = order.Length > 0 ? timestamps[order[0]] : default;
         var ts = new List<double>(order.Length);
@@ -94,7 +103,7 @@ public static class DriftNoiseAnalyzer
             vs.Add(values[i]);
         }
 
-        var quality = ComputeQuality(ts, nonFinite, options.GapFactor);
+        var quality = ComputeQuality(ts, nonFinite, options.GapFactor, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         if (nonFinite > 0) warnings.Add($"已剔除 {nonFinite} 个非有限值。");
         if (quality.GapCount > 0) warnings.Add($"检测到 {quality.GapCount} 处采样缺失，最长 {quality.MaxGapSeconds:0.###} s。");
@@ -107,9 +116,9 @@ public static class DriftNoiseAnalyzer
                 double.NaN, double.NaN, double.NaN, double.NaN, [], double.NaN, [], double.NaN, double.NaN, double.NaN, warnings);
         }
 
-        var (mean, std, min, max, rms) = Basic(vs, 0, vs.Count);
-        var (slope, intercept, r2) = LinearFit(ts, vs, 0, vs.Count);
-        var detrendedStd = ResidualStd(ts, vs, 0, vs.Count, slope, intercept);
+        var (mean, std, min, max, rms) = Basic(vs, 0, vs.Count, cancellationToken);
+        var (slope, intercept, r2) = LinearFit(ts, vs, 0, vs.Count, cancellationToken);
+        var detrendedStd = ResidualStd(ts, vs, 0, vs.Count, slope, intercept, cancellationToken);
 
         // 按可能的最多窗口数决定抽取步长，保留的记录不超过 MaxRetainedWindows；统计量逐个窗口累计。
         var duration = ts[^1] - ts[0];
@@ -121,7 +130,7 @@ public static class DriftNoiseAnalyzer
         foreach (var (start, count, segStart) in Windows(ts, options.DriftSegmentSeconds, cancellationToken))
         {
             if (count < options.MinPointsPerWindow) continue;
-            var segmentMean = Basic(vs, start, count).Mean;
+            var segmentMean = Basic(vs, start, count, cancellationToken).Mean;
             if (segmentCount % segmentStride == 0)
                 segments.Add(new SegmentMean(segStart, segStart + options.DriftSegmentSeconds, count, segmentMean));
             segmentCount++;
@@ -139,11 +148,12 @@ public static class DriftNoiseAnalyzer
         {
             if (count < options.MinPointsPerWindow) continue;
             double s, k;
-            if (options.DetrendNoiseWindows) (k, s, _) = LinearFit(ts, vs, start, count);
-            else { k = 0; s = Basic(vs, start, count).Mean; }
+            if (options.DetrendNoiseWindows) (k, s, _) = LinearFit(ts, vs, start, count, cancellationToken);
+            else { k = 0; s = Basic(vs, start, count, cancellationToken).Mean; }
             double sumSq = 0, lo = double.MaxValue, hi = double.MinValue;
             for (int i = start; i < start + count; i++)
             {
+                if (((i - start) & 0xFFFF) == 0xFFFF) cancellationToken.ThrowIfCancellationRequested();
                 var r = vs[i] - (s + k * ts[i]);
                 sumSq += r * r;
                 lo = Math.Min(lo, r); hi = Math.Max(hi, r);
@@ -166,13 +176,18 @@ public static class DriftNoiseAnalyzer
         };
     }
 
-    private static DataQuality ComputeQuality(List<double> ts, int nonFinite, double gapFactor)
+    private static DataQuality ComputeQuality(List<double> ts, int nonFinite, double gapFactor, CancellationToken cancellationToken)
     {
         if (ts.Count < 2)
             return new DataQuality(ts.Count, nonFinite, 0, double.NaN, double.NaN, 0, 0);
         var intervals = new double[ts.Count - 1];
-        for (int i = 1; i < ts.Count; i++) intervals[i - 1] = ts[i] - ts[i - 1];
+        for (int i = 1; i < ts.Count; i++)
+        {
+            if ((i & 0xFFFF) == 0) cancellationToken.ThrowIfCancellationRequested();
+            intervals[i - 1] = ts[i] - ts[i - 1];
+        }
         var median = Median(intervals);
+        cancellationToken.ThrowIfCancellationRequested();
         int gaps = 0; double maxGap = 0;
         if (median > 0)
             foreach (var dt in intervals)
@@ -202,30 +217,43 @@ public static class DriftNoiseAnalyzer
         }
     }
 
-    private static (double Mean, double Std, double Min, double Max, double Rms) Basic(List<double> v, int start, int count)
+    // 以下逐点扫描在长窗口（如覆盖整个时间段）时可达数百万点：每 65536 点检查一次取消。
+    internal static (double Mean, double Std, double Min, double Max, double Rms) Basic(List<double> v, int start, int count,
+        CancellationToken cancellationToken = default)
     {
         double sum = 0, sumSq = 0, min = double.MaxValue, max = double.MinValue;
         for (int i = start; i < start + count; i++)
         {
+            if (((i - start) & 0xFFFF) == 0xFFFF) cancellationToken.ThrowIfCancellationRequested();
             sum += v[i]; sumSq += v[i] * v[i];
             min = Math.Min(min, v[i]); max = Math.Max(max, v[i]);
         }
         var mean = sum / count;
         // 两遍法求方差，避免大均值（如 5 万 nT）下的精度损失。
         double dev = 0;
-        for (int i = start; i < start + count; i++) dev += (v[i] - mean) * (v[i] - mean);
+        for (int i = start; i < start + count; i++)
+        {
+            if (((i - start) & 0xFFFF) == 0xFFFF) cancellationToken.ThrowIfCancellationRequested();
+            dev += (v[i] - mean) * (v[i] - mean);
+        }
         return (mean, Math.Sqrt(dev / count), min, max, Math.Sqrt(sumSq / count));
     }
 
     /// <summary>最小二乘直线 v = intercept + slope·t；返回斜率、截距和决定系数。</summary>
-    private static (double Slope, double Intercept, double RSquared) LinearFit(List<double> t, List<double> v, int start, int count)
+    internal static (double Slope, double Intercept, double RSquared) LinearFit(List<double> t, List<double> v, int start, int count,
+        CancellationToken cancellationToken = default)
     {
         double mt = 0, mv = 0;
-        for (int i = start; i < start + count; i++) { mt += t[i]; mv += v[i]; }
+        for (int i = start; i < start + count; i++)
+        {
+            if (((i - start) & 0xFFFF) == 0xFFFF) cancellationToken.ThrowIfCancellationRequested();
+            mt += t[i]; mv += v[i];
+        }
         mt /= count; mv /= count;
         double stt = 0, stv = 0, svv = 0;
         for (int i = start; i < start + count; i++)
         {
+            if (((i - start) & 0xFFFF) == 0xFFFF) cancellationToken.ThrowIfCancellationRequested();
             var dt = t[i] - mt; var dv = v[i] - mv;
             stt += dt * dt; stv += dt * dv; svv += dv * dv;
         }
@@ -235,11 +263,13 @@ public static class DriftNoiseAnalyzer
         return (slope, mv - slope * mt, r2);
     }
 
-    private static double ResidualStd(List<double> t, List<double> v, int start, int count, double slope, double intercept)
+    internal static double ResidualStd(List<double> t, List<double> v, int start, int count, double slope, double intercept,
+        CancellationToken cancellationToken = default)
     {
         double sumSq = 0;
         for (int i = start; i < start + count; i++)
         {
+            if (((i - start) & 0xFFFF) == 0xFFFF) cancellationToken.ThrowIfCancellationRequested();
             var r = v[i] - (intercept + slope * t[i]);
             sumSq += r * r;
         }
@@ -249,7 +279,8 @@ public static class DriftNoiseAnalyzer
     private static double Median(IReadOnlyList<double> values)
     {
         if (values.Count == 0) return double.NaN;
-        var sorted = values.OrderBy(x => x).ToArray();
+        var sorted = values.ToArray();
+        Array.Sort(sorted);
         int mid = sorted.Length / 2;
         return sorted.Length % 2 == 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
     }

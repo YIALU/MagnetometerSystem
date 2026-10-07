@@ -132,6 +132,33 @@ public class DriftNoiseAnalyzerTests
     }
 
     [Fact]
+    public void LongScansObserveCancellation()
+    {
+        // 覆盖整个时间段的窗口会让单次扫描达到数百万点：扫描内部必须定期检查取消。
+        const int n = 200_000;
+        var t = Enumerable.Range(0, n).Select(i => (double)i).ToList();
+        var v = Enumerable.Range(0, n).Select(i => Math.Sin(i * 0.01)).ToList();
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        Assert.Throws<OperationCanceledException>(() => DriftNoiseAnalyzer.Basic(v, 0, n, cts.Token));
+        Assert.Throws<OperationCanceledException>(() => DriftNoiseAnalyzer.LinearFit(t, v, 0, n, cts.Token));
+        Assert.Throws<OperationCanceledException>(() => DriftNoiseAnalyzer.ResidualStd(t, v, 0, n, 0, 0, cts.Token));
+    }
+
+    [Fact]
+    public void OutOfOrderTimestampsGiveTheSameResultAsSorted()
+    {
+        var (t, v) = Series(5000, 0.1, (i, s) => 50000 + 0.01 * s + Math.Sin(i));
+        var sorted = DriftNoiseAnalyzer.Analyze(t, v, new DriftNoiseOptions { NoiseWindowSeconds = 5, DriftSegmentSeconds = 50 });
+        var idx = Enumerable.Range(0, t.Length).Reverse().ToArray();
+        var shuffled = DriftNoiseAnalyzer.Analyze(idx.Select(i => t[i]).ToArray(), idx.Select(i => v[i]).ToArray(),
+            new DriftNoiseOptions { NoiseWindowSeconds = 5, DriftSegmentSeconds = 50 });
+        Assert.Equal(sorted.DriftPerHour, shuffled.DriftPerHour, 9);
+        Assert.Equal(sorted.NoiseMedianStd, shuffled.NoiseMedianStd, 9);
+        Assert.Equal(sorted.Quality.MedianIntervalSeconds, shuffled.Quality.MedianIntervalSeconds, 9);
+    }
+
+    [Fact]
     public void TinyFiniteWindowsStillTerminate()
     {
         var (t, v) = Series(200, 1, (_, s) => s);
