@@ -720,7 +720,8 @@ class Stats:
     rx_bytes: int = 0
     write_timeouts: int = 0
     skipped: int = 0
-    unsent: int = 0            # 写出超时、没有完整发出的帧
+    unsent: int = 0            # 写出超时后没有写出的帧
+    uncertain: int = 0         # 写出超时那次写入涉及的帧：是否发出未知
     last_frame: bytes = b""
     last_values: dict = field(default_factory=dict)
 
@@ -739,10 +740,11 @@ class FrameSource:
         self.sim_time = 0.0
         self.stats = Stats()
         self.can_bad, self.can_truncate = protocol.fault_support()
-        self._pending = Stats()   # 已生成、尚未确认完整写出的帧
+        # 已生成、尚未确认写出的片段，按生成顺序：(字节数, 种类, 物理值, 帧字节)。种类为 good / bad / truncated / noise。
+        self._pending: list[tuple[int, str, dict | None, bytes]] = []
 
     def next(self, settings: RunSettings, fault: str | None = None) -> bytes:
-        """生成一帧（可能带前置噪声）。计数先记在待确认里，写出成功后由 commit() 计入统计。"""
+        """生成一帧（可能带前置噪声）。先记为待确认，按实际写出的字节由 settle() 逐帧计入统计。"""
         out = bytearray()
         if fault is None and settings.noise_pct > 0 and self.rng.random() * 100 < settings.noise_pct:
             out += self.noise()
@@ -758,43 +760,49 @@ class FrameSource:
             elif roll < bad_pct + truncate_pct:
                 fault = "truncate"
         frame = self.protocol.build(values, fault, settings.decimals, self.rng)
-        pending = self._pending
-        if fault == "bad":
-            pending.bad += 1
-        elif fault == "truncate":
-            pending.truncated += 1
-        else:
-            pending.good += 1
-            pending.last_values = values
-        pending.last_frame = frame
+        kind = {"bad": "bad", "truncate": "truncated"}.get(fault or "", "good")
+        self._pending.append((len(frame), kind, values if kind == "good" else None, frame))
         return bytes(out + frame)
 
+    def settle(self, written: int, uncertain: int = 0):
+        """按写出结果逐帧结算：前 written 个字节确定已写出，其后 uncertain 个字节所在的那次写入超时、
+        写出了多少未知（pyserial 超时时不报告），再往后的没有写出。
+        完整落在已写出部分的帧计入统计；与不确定部分重叠的帧记为“不确定”；其余记为“未发出”。"""
+        s, end = self.stats, 0
+        for length, kind, values, frame in self._pending:
+            start, end = end, end + length
+            if end > written:
+                if kind != "noise":
+                    if start < written + uncertain:
+                        s.uncertain += 1
+                    else:
+                        s.unsent += 1
+                continue
+            setattr(s, kind, getattr(s, kind) + 1)
+            if kind != "noise":
+                s.last_frame = frame
+            if values is not None:
+                s.last_values = values
+        self._pending = []
+
     def commit(self):
-        """上一批字节已完整写出：计入发送统计。"""
-        s, p = self.stats, self._pending
-        s.good += p.good
-        s.bad += p.bad
-        s.truncated += p.truncated
-        s.noise += p.noise
-        if p.last_frame:
-            s.last_frame = p.last_frame
-        if p.last_values:
-            s.last_values = p.last_values
-        self._pending = Stats()
+        """待确认的字节已全部写出。"""
+        self.settle(sum(length for length, *_ in self._pending))
 
     def discard(self):
-        """上一批没有完整写出（超时）：不算已发送，记为未发出。"""
-        self.stats.unsent += self._pending.frames
-        self._pending = Stats()
+        """待确认的字节都没有写出。"""
+        self.settle(0)
 
     def noise(self) -> bytes:
-        self._pending.noise += 1
         n = self.rng.randint(1, 16)
         if self.protocol.is_binary:
-            return bytes(self.rng.randrange(256) for _ in range(n))
-        # 文本协议里的噪声单独成行，只让这一行被拒，不连累下一帧
-        junk = "".join(self.rng.choice("abcxyzQW@!?~^%&*") for _ in range(n))
-        return (junk + (self.protocol.config.get("AsciiLineEnding") or "\r\n")).encode("ascii")
+            data = bytes(self.rng.randrange(256) for _ in range(n))
+        else:
+            # 文本协议里的噪声单独成行，只让这一行被拒，不连累下一帧
+            junk = "".join(self.rng.choice("abcxyzQW@!?~^%&*") for _ in range(n))
+            data = (junk + (self.protocol.config.get("AsciiLineEnding") or "\r\n")).encode("ascii")
+        self._pending.append((len(data), "noise", None, b""))
+        return data
 
 
 class SimulatorEngine:
@@ -873,11 +881,14 @@ class SimulatorEngine:
                 return
             settings = self.settings
             if action == "start":
-                self.sending = True
                 self._rate = 0.0  # 下一轮重新起算发送节拍
                 header = self.source.protocol.header_lines()
+                if header and not self._write(header, settings):
+                    self.sending = False
+                    self._emit("stopped", "表头没有完整写出，已停止发送：否则上位机会把随后的数据行当作表头跳过。请检查对端后重新开始。")
+                    continue
+                self.sending = True
                 if header:
-                    self._write(header, settings)
                     self._emit("info", f"已发送 {self.source.protocol.header_line_count()} 行表头")
             elif action == "stop":
                 self.sending = False
@@ -889,7 +900,11 @@ class SimulatorEngine:
             elif action == "noise":
                 self._send(self.source.noise(), settings)
             elif action == "header":
-                self._write(self.source.protocol.header_lines(), settings)
+                header = self.source.protocol.header_lines()
+                if self._write(header, settings):
+                    self._emit("info", f"已发送 {self.source.protocol.header_line_count()} 行表头")
+                else:
+                    self._emit("warn", "表头没有完整写出")
             elif action == "spike":
                 self.source.generator.spike = True
             elif action == "protocol":
@@ -924,15 +939,20 @@ class SimulatorEngine:
         self._send(bytes(chunk), settings)
 
     def _send(self, data: bytes, settings: RunSettings):
-        """写出生成的帧：完整写出才计入统计，超时则记为未发出。"""
-        if self._write(data, settings):
-            self.source.commit()
-        else:
-            self.source.discard()
+        """写出生成的帧并逐帧结算：确定写出的帧计入统计，超时那次写入涉及的帧记为不确定，之后的记为未发出。"""
+        written, uncertain = self._write_detail(data, settings)
+        self.source.settle(written, uncertain)
 
     def _write(self, data: bytes, settings: RunSettings) -> bool:
+        """写出 data，全部写出时返回 True。"""
+        written, uncertain = self._write_detail(data, settings)
+        return uncertain == 0 and written == len(data)
+
+    def _write_detail(self, data: bytes, settings: RunSettings) -> tuple[int, int]:
+        """返回 (确定写出的字节数, 超时那次写入的字节数)。超时时 pyserial 不报告已写出多少，该次写入的字节记为不确定。"""
         if not data:
-            return True
+            return 0, 0
+        total = 0
         pieces = [data]
         if settings.split and len(data) > 1:
             pieces, pos = [], 0
@@ -946,15 +966,19 @@ class SimulatorEngine:
             except serial.SerialTimeoutException:
                 written = -1
             if written != len(piece):
-                self.stats.bytes_sent += max(written, 0)
                 self.stats.write_timeouts += 1
                 if self.stats.write_timeouts in (1, 10, 100) or self.stats.write_timeouts % 1000 == 0:
-                    self._emit("warn", f"写出超时 {self.stats.write_timeouts} 次：对端可能没有打开或没有读取，未完整写出的帧不计入已发")
-                return False
+                    self._emit("warn", f"写出超时 {self.stats.write_timeouts} 次：对端可能没有打开或没有读取，该次写入涉及的帧记为“不确定”，之后的不再写出")
+                if written >= 0:   # 少写了但报告了字节数：已写出的部分是确定的
+                    total += written
+                    self.stats.bytes_sent += written
+                    return total, len(piece) - written
+                return total, len(piece)
+            total += written
             self.stats.bytes_sent += written
             if n + 1 < len(pieces):
                 time.sleep(self.rng.uniform(0.0, 0.002))
-        return True
+        return total, 0
 
     def _receive(self):
         waiting = self.port.in_waiting
@@ -1419,6 +1443,10 @@ def run_gui(protocols: list[Protocol], load_errors: list[str]):
                     return
                 if kind == "rx":
                     self._log("← " + describe_rx(payload), "rx")
+                elif kind == "stopped":
+                    self.sending = False
+                    self._update_buttons()
+                    self._log(payload, "error")
                 elif kind in ("warn", "error", "info"):
                     self._log(payload, kind)
 
@@ -1447,7 +1475,7 @@ def run_gui(protocols: list[Protocol], load_errors: list[str]):
                 text += f" · 实际 {rate:.1f} 帧/秒"
             text += f" · 收到 {stats.rx_bytes:,} B"
             if stats.write_timeouts:
-                text += f" · 写超时 {stats.write_timeouts}（未发出 {stats.unsent} 帧）"
+                text += f" · 写超时 {stats.write_timeouts}（不确定 {stats.uncertain} 帧，未发出 {stats.unsent} 帧）"
             if stats.skipped:
                 text += f" · 跳过 {stats.skipped}"
             return text
@@ -1512,7 +1540,7 @@ def run_headless(args, protocol: Protocol):
                 kind, payload = engine.events.get_nowait()
                 if kind == "rx":
                     print("← " + describe_rx(payload))
-                elif kind in ("warn", "error", "info"):
+                elif kind in ("warn", "error", "info", "stopped"):
                     print(payload)
             if time.monotonic() >= next_report:
                 next_report += 1
@@ -1524,7 +1552,7 @@ def run_headless(args, protocol: Protocol):
         engine.close()
     s = engine.stats
     print(f"结束：正常 {s.good} 帧，坏校验 {s.bad}，截断 {s.truncated}，噪声 {s.noise}，"
-          f"共 {s.bytes_sent} B，收到 {s.rx_bytes} B，写超时 {s.write_timeouts}，未发出 {s.unsent} 帧")
+          f"共 {s.bytes_sent} B，收到 {s.rx_bytes} B，写超时 {s.write_timeouts}，不确定 {s.uncertain} 帧，未发出 {s.unsent} 帧")
 
 
 def main(argv=None):

@@ -1143,7 +1143,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
     /// <summary>
     /// 一键归零：把当前显示的每条曲线（可见通道与启用的计算通道）在时间窗口内的均值移到 0。
     /// 只设置显示偏移（暂停时用冻结的数据），不改变保存的原始值、统计表和十字准线读数。
-    /// 手动纵轴范围是按原始数值设的，归零后曲线会移出范围，因此主 Y 轴改为自动。
+    /// 开启显示滤波时按滤波后的曲线计算。手动纵轴范围是按原始数值设的，归零后曲线会移出范围，因此主 Y 轴改为自动。
     /// </summary>
     [RelayCommand(CanExecute = nameof(CanZeroVisibleChannels))]
     private void ZeroVisibleChannels()
@@ -1156,8 +1156,10 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
         foreach (var config in ChannelConfigs.Where(c => c.Visible))
         {
             int ch = config.ChannelIndex;
+            // 曲线按“加偏移 → 滤波”绘制；移动平均与中值滤波都与常数偏移可交换，
+            // 所以用滤波后曲线的均值作偏移，画出来的（滤波后）曲线均值正好为 0。
             if (ch < channelData.Length && channelData[ch].Length >= start + count
-                && FiniteMean(channelData[ch].AsSpan(start, count)) is { } mean)
+                && FiniteMean(ApplyFilter(channelData[ch].AsSpan(start, count).ToArray())) is { } mean)
                 config.DisplayOffset = -mean;
         }
 
@@ -1173,7 +1175,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
                     row[ch] = channelData[ch].Length > start + i ? channelData[ch][start + i] : double.NaN;
                 values[i] = evaluator.Evaluate(row);
             }
-            if (FiniteMean(values) is { } mean) computed.DisplayOffset = -mean;
+            if (FiniteMean(ApplyFilter(values)) is { } mean) computed.DisplayOffset = -mean;
         }
 
         AutoScaleY = true;

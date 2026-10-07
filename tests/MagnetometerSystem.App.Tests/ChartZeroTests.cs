@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using MagnetometerSystem.App.ViewModels;
 using MagnetometerSystem.Core.Models;
+using MagnetometerSystem.Core.Processing;
 using MagnetometerSystem.Core.Services;
 
 namespace MagnetometerSystem.App.Tests;
@@ -19,6 +20,45 @@ public class ChartZeroTests
     {
         Timestamp = start.AddSeconds(second), SensorType = SensorType.Generic,
         ChannelValues = [second, 20000, 30000, 25],
+    });
+
+    [Theory]
+    [InlineData(FilterType.MovingAverage)]
+    [InlineData(FilterType.Median)]
+    public Task ZeroCentresTheFilteredCurveThatIsActuallyPlotted(FilterType filter) => WpfTestHost.RunAsync(async () =>
+    {
+        var bus = new DataBus();
+        using var vm = new RealtimeChartViewModel(bus) { PlotControl = new ScottPlot.WPF.WpfPlot() };
+        bus.PublishAcquisitionStarted(Configuration());
+        await WpfTestHost.PumpAsync();
+        var start = new DateTime(2020, 1, 1);
+        // 窗口末端一个尖峰：滤波后的均值与原始均值明显不同。
+        for (int i = 0; i <= 60; i++)
+            bus.PublishProcessedReading(new MagnetometerReading
+            {
+                Timestamp = start.AddSeconds(i), SensorType = SensorType.Generic,
+                ChannelValues = [i == 60 ? 1000 : i, 20000, 30000, 25],
+            });
+        vm.TimeWindowSeconds = 10;
+        vm.IsFilterEnabled = true;
+        vm.SelectedFilterType = filter;
+        vm.FilterWindowSize = 5;
+        vm.RefreshPlot();
+
+        vm.ZeroVisibleChannelsCommand.Execute(null);
+
+        double[] window = [.. Enumerable.Range(50, 10).Select(i => (double)i), 1000];
+        var processor = new DataProcessor();
+        var filtered = filter == FilterType.MovingAverage ? processor.MovingAverage(window, 5) : processor.MedianFilter(window, 5);
+        var offset = vm.ChannelConfigs.Single(c => c.ChannelIndex == 0).DisplayOffset;
+        Assert.Equal(-filtered.Average(), offset, 9);
+        Assert.NotEqual(-window.Average(), offset, 3);
+        // 实际画出的 CH0 曲线（加偏移后再滤波）均值为 0。
+        var curve = vm.PlotControl.Plot.GetPlottables().OfType<ScottPlot.Plottables.Scatter>()
+            .Single(p => p.LegendText.StartsWith("CH0"));
+        Assert.Equal(0, curve.Data.GetScatterPoints().Average(pt => pt.Y), 9);
+        bus.PublishAcquisitionStopped();
+        await WpfTestHost.PumpAsync();
     });
 
     [Fact]
