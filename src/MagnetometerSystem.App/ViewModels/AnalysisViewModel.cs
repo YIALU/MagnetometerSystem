@@ -150,8 +150,18 @@ public partial class AnalysisViewModel : ObservableObject
             return;
         }
 
-        var from = startOffset is { } a ? session.StartedAt.AddSeconds(a) : session.StartedAt;
-        var to = endOffset is { } b ? session.StartedAt.AddSeconds(b) : sessionEnd;
+        DateTime from, to;
+        try
+        {
+            from = startOffset is { } a ? session.StartedAt.AddSeconds(a) : session.StartedAt;
+            to = endOffset is { } b ? session.StartedAt.AddSeconds(b) : sessionEnd;
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            // 有限但极大的秒数（如 1e300）超出 DateTime 范围：按输入错误提示，不让命令异常结束。
+            Report("时间段超出可表示的时间范围，请填写相对会话开始的秒数。", true);
+            return;
+        }
         if (to <= from) { Report("结束时间必须晚于开始时间。", true); return; }
 
         _cts = new CancellationTokenSource();

@@ -120,6 +120,13 @@ public class AnalysisViewModelTests
         Assert.True(vm.IsError);
         Assert.Contains("晚于", vm.StatusMessage);
 
+        // 有限但超出 DateTime 范围的秒数按输入错误提示，命令不能异常结束。
+        vm.RangeStartText = "1e300"; vm.RangeEndText = "";
+        await vm.RunCommand.ExecuteAsync(null);
+        Assert.True(vm.IsError);
+        Assert.Contains("超出可表示的时间范围", vm.StatusMessage);
+        Assert.False(vm.IsBusy);
+
         vm.RangeStartText = "-5"; vm.RangeEndText = "";
         await vm.RunCommand.ExecuteAsync(null);
         Assert.True(vm.IsError);

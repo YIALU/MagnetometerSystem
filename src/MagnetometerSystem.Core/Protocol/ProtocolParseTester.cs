@@ -31,7 +31,10 @@ public static class ProtocolParseTester
     public const int MaxInputBytes = 64 * 1024;
     public const int MaxFrames = 500;
 
-    /// <summary>把用户输入转换为字节。HEX 允许空格、换行、“-”和 0x 前缀；文本支持 \r \n \t \\ 转义。</summary>
+    /// <summary>
+    /// 把用户输入转换为字节。HEX 允许空格、换行、“-”和 0x 前缀；文本支持 \r \n \t \\ 转义。
+    /// 文本按原样转成字节，不改写行尾，诊断结果与设备实际发送的字节一致（文本框中直接换行是 CRLF）。
+    /// </summary>
     public static byte[] ReadInput(string text, ParseTestInputKind kind)
     {
         if (string.IsNullOrWhiteSpace(text)) return [];
@@ -42,9 +45,22 @@ public static class ProtocolParseTester
                 throw new FormatException("HEX 只能包含 0-9、A-F 和分隔空格。");
             return CommandFrameBuilder.ParseHexBytes(cleaned.Replace(",", " "));
         }
-        var unescaped = text.Replace("\\r", "\r").Replace("\\n", "\n").Replace("\\t", "\t").Replace("\\\\", "\\");
-        // 从文本框粘贴的多行内容统一成设备常用的 \n 行尾，避免 \r\n 与 \n 混杂。
-        return Encoding.ASCII.GetBytes(unescaped.Replace("\r\n", "\n"));
+        return Encoding.ASCII.GetBytes(Unescape(text));
+    }
+
+    /// <summary>单遍解码转义，"\\n" 得到反斜杠加 n，而不是换行。</summary>
+    private static string Unescape(string text)
+    {
+        var result = new StringBuilder(text.Length);
+        for (int i = 0; i < text.Length; i++)
+        {
+            char decoded = text[i] == '\\' && i + 1 < text.Length
+                ? text[i + 1] switch { 'r' => '\r', 'n' => '\n', 't' => '\t', '\\' => '\\', _ => '\0' }
+                : '\0';
+            if (decoded != '\0') { result.Append(decoded); i++; }
+            else result.Append(text[i]);
+        }
+        return result.ToString();
     }
 
     public static ParseTestResult Run(ProtocolConfig protocol, byte[] input)

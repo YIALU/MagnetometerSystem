@@ -72,6 +72,24 @@ public class ProtocolParseTesterTests
     }
 
     [Fact]
+    public void TextInputKeepsExactBytesAndDecodesEscapesInOnePass()
+    {
+        // 转义 \r\n 与文本框里的直接换行（CRLF）都原样保留；"\\n" 是反斜杠加 n，不是换行。
+        Assert.Equal("a\r\nb\r\nc\\n"u8.ToArray(), ProtocolParseTester.ReadInput("a\\r\\nb\r\nc\\\\n", ParseTestInputKind.Text));
+    }
+
+    [Fact]
+    public void CrTerminatedProtocolParsesPastedCrlfAndEscapedCr()
+    {
+        var protocol = ProtocolConfig.CreateDefaultAsciiTriaxial();
+        protocol.AsciiLineEnding = "\r";
+        var bytes = ProtocolParseTester.ReadInput("1,2,3\r\n4,5,6\\r", ParseTestInputKind.Text);
+        var result = ProtocolParseTester.Run(protocol, bytes);
+        Assert.Equal(2, result.Frames.Count);
+        Assert.Equal(6, result.Frames[1].Values[2]);
+    }
+
+    [Fact]
     public void HexInputAcceptsPrefixesAndRejectsGarbage()
     {
         Assert.Equal(new byte[] { 0xAA, 0x55, 0x0D }, ProtocolParseTester.ReadInput("0xAA,0x55 0d", ParseTestInputKind.Hex));
