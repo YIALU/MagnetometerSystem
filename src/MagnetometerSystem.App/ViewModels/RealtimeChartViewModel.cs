@@ -89,6 +89,12 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private string _statisticsText = "";
 
+    /// <summary>滚动统计表（原始值）；最多每 0.5 s 更新一次，避免列表随绘图刷新频繁重建。</summary>
+    [ObservableProperty]
+    private IReadOnlyList<LiveStatisticsRow> _statisticsRows = [];
+    private DateTime _lastStatisticsRowsUpdate = DateTime.MinValue;
+
+
     [ObservableProperty]
     private string _computationError = "";
 
@@ -180,6 +186,8 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private bool _isChartHeightAutomatic = true;
 
+    partial void OnCurrentViewModeChanged(ViewMode value) => IsMultiPlotMode = value == ViewMode.Multi;
+    partial void OnIsMultiPlotModeChanged(bool value) => CurrentViewMode = value ? ViewMode.Multi : ViewMode.Single;
     partial void OnSinglePlotHeightChanged(double value) => IsChartHeightAutomatic = false;
     partial void OnMultiPlotHeightChanged(double value) => IsChartHeightAutomatic = false;
 
@@ -451,6 +459,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
         }
 
         DataPointCount = totalCount;
+        _lastFrame = (times, rawData);
         if (times.Length == 0)
         {
             if (!IsMultiPlotMode && PlotControl != null) PlotControl.Refresh();
@@ -541,6 +550,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
         foreach (var axis in _unitAxes.Values.Where(a => !ReferenceEquals(a, plot.Axes.Left)))
             plot.Axes.AutoScaleY(axis);
         plot.ShowLegend();
+        AddOverlays(plot, null);
         PlotControl.Refresh();
     }
 
@@ -609,6 +619,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
 
             plot.Axes.Left.Label.Text = $"{config.Name} ({config.Unit})";
             ConfigurePlotAxes(plot, xMin, xMax);
+            AddOverlays(plot, config);
             plotCtrl.Refresh();
             plotIdx++;
         }
@@ -665,6 +676,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
 
             plot.Axes.Left.Label.Text = $"{computed.Name} ({computed.Unit})";
             ConfigurePlotAxes(plot, xMin, xMax);
+            AddOverlays(plot, null);
             plotCtrl.Refresh();
             plotIdx++;
         }
@@ -756,7 +768,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
 
     private void UpdateStatistics(double[] times, double[][] channelData, int startIdx, int count)
     {
-        if (count <= 0 || _channelCount <= 0) { StatisticsText = ""; return; }
+        if (count <= 0 || _channelCount <= 0) { StatisticsText = ""; StatisticsRows = []; return; }
 
         // 确定统计窗口
         var statConfig = StatisticsConfig;
@@ -776,6 +788,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
         }
 
         var lines = new List<string>();
+        var rows = new List<LiveStatisticsRow>();
         for (int ch = 0; ch < _channelCount; ch++)
         {
             if (ch >= channelData.Length || channelData[ch].Length < statStartIdx + statCount)
@@ -786,6 +799,13 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
             string name = ch < _channelNames.Length ? _channelNames[ch] : $"CH{ch}";
             var result = StatisticsResultItem.Compute(name, span);
             lines.Add(result.Format(statConfig));
+            rows.Add(new LiveStatisticsRow(result, _channelUnits.ElementAtOrDefault(ch) ?? "", span.Length));
+        }
+        var now = DateTime.UtcNow;
+        if ((now - _lastStatisticsRowsUpdate).TotalMilliseconds >= 500 || rows.Count != StatisticsRows.Count)
+        {
+            _lastStatisticsRowsUpdate = now;
+            StatisticsRows = rows;
         }
         StatisticsText = "原始数据  ·  " + string.Join("  |  ", lines);
     }
@@ -846,6 +866,8 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private void ClearChart()
     {
+        _lastFrame = null;
+        _hoverTime = null;
         lock (_dataLock)
         {
             _timeBuffer.Clear();
@@ -857,6 +879,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
         }
         DataPointCount = 0;
         StatisticsText = "暂无数据";
+        StatisticsRows = [];
         ClearIntervalSelection();
         _pausedData = IsPaused ? CapturePlotData(includeAll: true) : null;
         foreach (var config in ChannelConfigs) config.LatestValue = "—";
@@ -1012,6 +1035,9 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
         IsAddingGradient = false;
     }
 
+    partial void OnIsAddingTotalFieldChanged(bool value) => ComputationError = "";
+    partial void OnIsAddingGradientChanged(bool value) => ComputationError = "";
+
     [RelayCommand]
     private void CancelAddWizard()
     {
@@ -1067,6 +1093,34 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
     }
 
     // ---- 自动偏移 ----
+
+    /// <summary>通道颜色可选色块：与默认色相同的 8 色。</summary>
+    public static IReadOnlyList<string> ChannelSwatches { get; } = ChannelDisplayConfig.PresetColors;
+
+    [RelayCommand]
+    private void ClearChannelOffset(int channelIndex)
+    {
+        if (ChannelConfigs.FirstOrDefault(c => c.ChannelIndex == channelIndex) is { } config)
+            config.DisplayOffset = 0;
+    }
+
+    [RelayCommand]
+    private void MoveChannelUp(ChannelDisplayConfig? config)
+    {
+        if (config is null) return;
+        var index = ChannelConfigs.IndexOf(config);
+        if (index > 0) ReorderChannels(index, index - 1);
+    }
+
+    [RelayCommand]
+    private void MoveChannelDown(ChannelDisplayConfig? config)
+    {
+        if (config is null) return;
+        var index = ChannelConfigs.IndexOf(config);
+        if (index >= 0 && index < ChannelConfigs.Count - 1) ReorderChannels(index, index + 1);
+    }
+
+    // ---- 自动偏移（原有） ----
 
     /// <summary>
     /// 自动偏移：计算指定通道的平均值，设置 DisplayOffset = -average
@@ -1135,6 +1189,142 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
         {
             def.DisplayOffset = -(sum / validCount);
         }
+    }
+
+    // ---- 曲线交互：拖动选区间、十字准线 ----
+    // 叠加层只画在曲线上，不影响数据、保存或统计；鼠标移动时只替换叠加层并重绘，不重新复制缓冲。
+
+    private (double[] Times, double[][] Raw)? _lastFrame;
+    private double? _dragStart, _dragEnd, _hoverTime;
+    private readonly Dictionary<ScottPlot.Plot, (ChannelDisplayConfig? Channel, List<ScottPlot.IPlottable> Items)> _overlays = new();
+    private static readonly ScottPlot.Color OverlayAccent = ScottPlot.Color.FromHex("#2456C2");
+    private static readonly ScottPlot.Color OverlayMuted = ScottPlot.Color.FromHex("#66726E");
+
+    /// <summary>曲线上鼠标所在时间（采集开始后的秒数）；null 表示鼠标不在曲线上。</summary>
+    public double? HoverTime => _hoverTime;
+
+    public void SetHoverTime(double? seconds)
+    {
+        if (_hoverTime == seconds) return;
+        _hoverTime = seconds;
+        RefreshOverlays();
+    }
+
+    public void BeginPlotSelection(double seconds)
+    {
+        _dragStart = _dragEnd = seconds;
+        RefreshOverlays();
+    }
+
+    public void UpdatePlotSelection(double seconds)
+    {
+        if (_dragStart is null) return;
+        _dragEnd = seconds;
+        RefreshOverlays();
+    }
+
+    public void CancelPlotSelection()
+    {
+        _dragStart = _dragEnd = null;
+        RefreshOverlays();
+    }
+
+    /// <summary>结束拖动：按拖过的时间范围填入区间并计算统计。返回是否得到有效区间。</summary>
+    public bool EndPlotSelection(double seconds)
+    {
+        if (_dragStart is not { } start) return false;
+        _dragStart = _dragEnd = null;
+        var (from, to) = (Math.Min(start, seconds), Math.Max(start, seconds));
+        if (_lastFrame is { Times.Length: > 0 } frame)
+        {
+            from = Math.Max(from, frame.Times[0]);
+            to = Math.Min(to, frame.Times[^1]);
+        }
+        if (!(to > from)) { RefreshOverlays(); return false; }
+        IntervalStartInput = from.ToString("0.###", CultureInfo.CurrentCulture);
+        IntervalEndInput = to.ToString("0.###", CultureInfo.CurrentCulture);
+        ApplyIntervalSelection();
+        RefreshOverlays();
+        return CurrentInterval != null;
+    }
+
+    partial void OnCurrentIntervalChanged(IntervalSelection? value) => RefreshOverlays();
+
+    /// <summary>在一张图上加区间阴影、拖动预览和十字准线读数。channel 为多图模式下这张图对应的通道。</summary>
+    private void AddOverlays(ScottPlot.Plot plot, ChannelDisplayConfig? channel)
+    {
+        var items = new List<ScottPlot.IPlottable>();
+        if (CurrentInterval is { } interval)
+        {
+            var span = plot.Add.VerticalSpan(interval.StartTime, interval.EndTime);
+            span.FillStyle.Color = OverlayAccent.WithAlpha(.10);
+            span.LineStyle.Color = OverlayAccent.WithAlpha(.45);
+            span.LineStyle.Width = 1;
+            items.Add(span);
+        }
+        if (_dragStart is { } a && _dragEnd is { } b && a != b)
+        {
+            var drag = plot.Add.VerticalSpan(Math.Min(a, b), Math.Max(a, b));
+            drag.FillStyle.Color = OverlayAccent.WithAlpha(.22);
+            drag.LineStyle.Width = 0;
+            items.Add(drag);
+        }
+        if (_hoverTime is { } t && _lastFrame is { Times.Length: > 0 } frame)
+        {
+            var line = plot.Add.VerticalLine(t);
+            line.Color = OverlayMuted.WithAlpha(.8);
+            line.LineWidth = 1;
+            line.LinePattern = ScottPlot.LinePattern.Dashed;
+            items.Add(line);
+            var text = HoverText(frame, t, channel);
+            if (text is not null)
+            {
+                var ann = plot.Add.Annotation(text, channel is null ? ScottPlot.Alignment.UpperRight : ScottPlot.Alignment.LowerLeft);
+                ann.LabelFontSize = 11;
+                ann.LabelFontName = ChartFontHelper.DefaultCjkFont;
+                ann.LabelBackgroundColor = new ScottPlot.Color(255, 255, 255, 225);
+                ann.LabelBorderColor = ScottPlot.Color.FromHex("#D2D9D5");
+                ann.LabelBorderWidth = 1;
+                items.Add(ann);
+            }
+        }
+        _overlays[plot] = (channel, items);
+    }
+
+    /// <summary>十字准线读数：最近的时间点及各可见通道的原始值（不含显示偏移和滤波）。</summary>
+    private string? HoverText((double[] Times, double[][] Raw) frame, double t, ChannelDisplayConfig? only)
+    {
+        var times = frame.Times;
+        if (t < times[0] || t > times[^1]) return null;
+        int i = Array.BinarySearch(times, t);
+        if (i < 0)
+        {
+            i = ~i;
+            if (i >= times.Length || (i > 0 && t - times[i - 1] < times[i] - t)) i--;
+        }
+        var sb = new StringBuilder($"{times[i]:0.000} s（原始值）");
+        foreach (var cfg in only is null ? ChannelConfigs.Where(c => c.Visible) : [only])
+        {
+            if (cfg.ChannelIndex >= frame.Raw.Length || i >= frame.Raw[cfg.ChannelIndex].Length) continue;
+            sb.Append('\n').Append(cfg.Name).Append("  ").Append(frame.Raw[cfg.ChannelIndex][i].ToString("G8", CultureInfo.CurrentCulture));
+            if (!string.IsNullOrEmpty(cfg.Unit)) sb.Append(' ').Append(cfg.Unit);
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>只替换叠加层并重绘，不重新取数。</summary>
+    private void RefreshOverlays()
+    {
+        // 多图重建后旧图已不在界面上，先丢掉它们的记录。
+        var live = MultiPlotControls.Select(c => c.Plot).Append(PlotControl?.Plot).ToHashSet();
+        foreach (var stale in _overlays.Keys.Where(p => !live.Contains(p)).ToArray()) _overlays.Remove(stale);
+        foreach (var (plot, (channel, items)) in _overlays.ToArray())
+        {
+            foreach (var item in items) plot.Remove(item);
+            AddOverlays(plot, channel);
+        }
+        PlotControl?.Refresh();
+        foreach (var control in MultiPlotControls) control.Refresh();
     }
 
     // ---- 区间分析操作 ----
@@ -1313,4 +1503,10 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
         _dataBus.AcquisitionStarted -= OnAcquisitionStarted;
         _dataBus.AcquisitionStopped -= OnAcquisitionStopped;
     }
+}
+
+/// <summary>统计表的一行：原始值统计 + 单位 + 参与点数。</summary>
+public sealed record LiveStatisticsRow(StatisticsResultItem Stats, string Unit, int Count)
+{
+    public string Name => Stats.ChannelName;
 }

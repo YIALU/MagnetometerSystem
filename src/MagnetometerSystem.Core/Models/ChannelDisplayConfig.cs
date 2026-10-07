@@ -52,8 +52,8 @@ public class ChannelDisplayConfig : INotifyPropertyChanged
         }
     }
 
-    /// <summary>曲线颜色（ARGB hex 字符串，如 "#FF0000FF"）</summary>
-    private string _colorHex = "#FF0000FF";
+    /// <summary>曲线颜色（ARGB hex 字符串，如 "#FF2A78D6"）</summary>
+    private string _colorHex = "#FF2A78D6";
     public string ColorHex
     {
         get => _colorHex;
@@ -61,37 +61,20 @@ public class ChannelDisplayConfig : INotifyPropertyChanged
     }
 
     /// <summary>
-    /// 预设颜色列表。默认色按 index % Length 回绕分配，因此长度决定了
-    /// "多少个通道之后开始出现同色"。21 通道协议（磁梯度数采卡-pt）下
-    /// 8 色会让 CH0/CH8/CH16 撞色，故扩到 24 色。
-    /// 前 8 个保持原有顺序和取值，已保存的用户配置和既有截图不受影响。
+    /// 默认通道颜色：经色觉辨识校验的 8 色（与界面色块一致）。默认色按 index % Length 回绕分配，
+    /// 超过 8 个通道时颜色会重复，靠图例中的通道名区分；需要时可在“通道”面板逐个改色。
+    /// 已保存的用户配置保留原色值，不受影响。
     /// </summary>
     public static readonly string[] PresetColors =
     [
-        "#FF0000FF", // Blue
-        "#FFFF0000", // Red
-        "#FF008000", // Green
-        "#FFFF8C00", // Orange
-        "#FF800080", // Purple
-        "#FF00FFFF", // Cyan
-        "#FFFF00FF", // Magenta
-        "#FFB8860B", // DarkGoldenrod
-        "#FF1E90FF", // DodgerBlue
-        "#FFDC143C", // Crimson
-        "#FF2E8B57", // SeaGreen
-        "#FFFF6347", // Tomato
-        "#FF9932CC", // DarkOrchid
-        "#FF008B8B", // DarkCyan
-        "#FFC71585", // MediumVioletRed
-        "#FF808000", // Olive
-        "#FF4169E1", // RoyalBlue
-        "#FF8B0000", // DarkRed
-        "#FF6B8E23", // OliveDrab
-        "#FFD2691E", // Chocolate
-        "#FF483D8B", // DarkSlateBlue
-        "#FF20B2AA", // LightSeaGreen
-        "#FFA0522D", // Sienna
-        "#FF708090", // SlateGray
+        "#FF2A78D6", // 蓝
+        "#FFEB6834", // 橙
+        "#FF1BAF7A", // 绿
+        "#FFEDA100", // 黄
+        "#FFE87BA4", // 粉
+        "#FF008300", // 深绿
+        "#FF4A3AA7", // 紫
+        "#FFE34948", // 红
     ];
 
     /// <summary>

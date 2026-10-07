@@ -21,12 +21,12 @@
                    FontSize="18" FontWeight="Bold" Margin="0,0,0,4"/>
 
         <TextBlock Grid.Row="1" x:Name="VersionSummaryText"
-                   FontFamily="Consolas" FontSize="13" Foreground="#444"
+                   FontFamily="Consolas" FontSize="13" Foreground="{DynamicResource Ink2Brush}"
                    Margin="0,0,0,2"/>
 
         <StackPanel Grid.Row="2" Margin="0,0,0,12">
         <TextBlock x:Name="PackageInfoText"
-                   FontSize="12" Foreground="#888"
+                   FontSize="12" Foreground="{DynamicResource MutedBrush}"
                    Margin="0,0,0,6" TextWrapping="Wrap"/>
             <TextBlock Text="检查更新不会自动下载或安装。点击“下载更新”后才会开始，您也可以继续使用当前版本。"
                        FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>
@@ -37,14 +37,14 @@
             </StackPanel>
         </StackPanel>
 
-        <Border Grid.Row="3" BorderBrush="#D0D0D0" BorderThickness="1"
-                Background="#FAFAFA" CornerRadius="3" Padding="10">
+        <Border Grid.Row="3" BorderBrush="{DynamicResource LineBrush}" BorderThickness="1"
+                Background="{DynamicResource Panel2Brush}" CornerRadius="3" Padding="10">
             <ScrollViewer VerticalScrollBarVisibility="Auto">
                 <StackPanel>
                     <TextBlock Text="本次更新" FontWeight="SemiBold" Margin="0,0,0,8"/>
-                    <TextBlock x:Name="UpdateSummaryText" TextWrapping="Wrap" LineHeight="20" Foreground="#333"/>
+                    <TextBlock x:Name="UpdateSummaryText" TextWrapping="Wrap" LineHeight="20" Foreground="{DynamicResource InkBrush}"/>
                     <Expander Header="完整更新说明" Margin="0,12,0,0">
-                        <TextBlock x:Name="ReleaseNotesText" TextWrapping="Wrap" LineHeight="20" Foreground="#555" Margin="0,8,0,0"/>
+                        <TextBlock x:Name="ReleaseNotesText" TextWrapping="Wrap" LineHeight="20" Foreground="{DynamicResource Ink2Brush}" Margin="0,8,0,0"/>
                     </Expander>
                 </StackPanel>
             </ScrollViewer>
@@ -53,7 +53,7 @@
         <StackPanel Grid.Row="4" x:Name="ProgressPanel"
                     Visibility="Collapsed" Margin="0,12,0,0">
             <ProgressBar x:Name="DownloadProgressBar" Height="6" Minimum="0" Maximum="100"/>
-            <TextBlock x:Name="StatusText" FontSize="12" Foreground="#666" Margin="0,6,0,0"
+            <TextBlock x:Name="StatusText" FontSize="12" Foreground="{DynamicResource MutedBrush}" Margin="0,6,0,0"
                        TextWrapping="Wrap"/>
         </StackPanel>
 
@@ -63,11 +63,11 @@
                     Visibility="Collapsed" Click="OpenPage_Click"/>
             <Button x:Name="SkipButton" Content="跳过此版本" Padding="10,4" Margin="0,0,8,0"
                     Click="Skip_Click"/>
-            <Button x:Name="LaterButton" Content="暂不更新" Width="90" Margin="0,0,8,0"
+            <Button x:Name="LaterButton" Content="暂不更新" MinWidth="90" Margin="0,0,8,0"
                     IsCancel="True" Click="Later_Click"/>
-            <Button x:Name="UpdateButton" Content="下载更新" Width="90"
+            <Button x:Name="UpdateButton" Content="下载更新" MinWidth="90" Style="{StaticResource PrimaryButton}"
                     Click="Update_Click"/>
-            <Button x:Name="CancelDownloadButton" Content="取消下载" Width="90"
+            <Button x:Name="CancelDownloadButton" Content="取消下载" MinWidth="90"
                     Visibility="Collapsed" Click="CancelDownload_Click"/>
         </StackPanel>
     </Grid>

@@ -84,34 +84,18 @@ public partial class MainWindow : Window
         ExitProgressOverlay.Visibility = Visibility.Collapsed;
     }
 
-    private void ShowAbout_Click(object sender, RoutedEventArgs e)
-    {
-        var dlg = new AboutDialog { Owner = this };
-        dlg.ShowDialog();
-    }
-
     private void ShowFeedback_Click(object sender, RoutedEventArgs e) =>
         App.Services.GetRequiredService<FeedbackCoordinator>().Show(this);
 
-    /// <summary>
-    /// 状态栏"有新版本"角标。用启动检查时缓存的结果直接开窗，不重新联网。
-    /// </summary>
-    private async void ShowUpdate_Click(object sender, RoutedEventArgs e)
+    /// <summary>导航栏底部版本号：有更新时直接打开更新窗口（用启动检查缓存，不重新联网），否则打开“关于”。</summary>
+    private async void Version_Click(object sender, RoutedEventArgs e)
     {
         var coordinator = App.Services?.GetService<UpdateCoordinator>();
-        if (coordinator?.LastKnownUpdate is not { } info)
+        if (DataContext is MainViewModel { HasUpdate: true } && coordinator?.LastKnownUpdate is { } info)
         {
-            // 缓存意外丢失时退回"关于"窗口，那里有手动检查按钮
-            ShowAbout_Click(sender, e);
+            await coordinator.ShowUpdateDialogAsync(this, info);
             return;
         }
-
-        await coordinator.ShowUpdateDialogAsync(this, info);
-    }
-
-    private void RecordOrthoPoint_Click(object sender, RoutedEventArgs e)
-    {
-        if (DataContext is MainViewModel vm)
-            vm.DataBus.RaiseManualOrthoRecord();
+        new AboutDialog { Owner = this }.ShowDialog();
     }
 }

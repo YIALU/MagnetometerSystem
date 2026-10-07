@@ -22,5 +22,24 @@ public static class ChartFontHelper
         plot.Axes.Left.TickLabelStyle.FontName = DefaultCjkFont;
         plot.Axes.Bottom.TickLabelStyle.FontName = DefaultCjkFont;
         plot.Legend.FontName = DefaultCjkFont;
+        ApplyTheme(plot);
+    }
+
+    /// <summary>图表配色与界面令牌一致：浅色面板底、淡网格、墨色坐标轴。</summary>
+    public static void ApplyTheme(ScottPlot.Plot plot)
+    {
+        plot.FigureBackground.Color = ScottPlot.Color.FromHex("#FBFCFB");
+        plot.DataBackground.Color = ScottPlot.Colors.White;
+        plot.Axes.Color(ScottPlot.Color.FromHex("#66726E"));
+        plot.Grid.MajorLineColor = ScottPlot.Color.FromHex("#E4E9E6");
+        plot.Legend.BackgroundColor = ScottPlot.Color.FromHex("#FBFCFB").WithAlpha(.92);
+        plot.Legend.OutlineColor = ScottPlot.Color.FromHex("#D2D9D5");
+        plot.Legend.FontColor = ScottPlot.Color.FromHex("#1C2422");
+        plot.Legend.FontSize = 12;
+        plot.Legend.Alignment = ScottPlot.Alignment.UpperLeft;
+        plot.Axes.Left.Label.FontSize = 12;
+        plot.Axes.Bottom.Label.FontSize = 12;
+        plot.Axes.Left.Label.ForeColor = ScottPlot.Color.FromHex("#4B5753");
+        plot.Axes.Bottom.Label.ForeColor = ScottPlot.Color.FromHex("#4B5753");
     }
 }

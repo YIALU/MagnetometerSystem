@@ -139,8 +139,21 @@ public partial class ConnectionViewModel : ObservableObject
     [ObservableProperty]
     private ObservableCollection<string> _rawDataLines = new();
 
+    /// <summary>逐帧解析记录（最近 200 行）：通过 / 拒绝原因 / 丢弃字节。随接收状态一起节流刷新。</summary>
+    public ObservableCollection<ParseRecordRow> ParseRecords { get; } = new();
+
+    /// <summary>解析记录因界面来不及刷新而被丢弃的条数（解析器内部有界）。</summary>
+    [ObservableProperty] private long _droppedParseRecords;
+
+    /// <summary>断开时从解析器取出、尚未显示的记录；只在 _receiveGate 内访问。</summary>
+    private readonly List<ParseRecord> _pendingParseRecords = new();
+
     [ObservableProperty]
     private bool _showHex;
+
+    /// <summary>“原始报文”显示收到的数据块（true）还是逐帧解析记录（false，默认）。只影响显示。</summary>
+    [ObservableProperty]
+    private bool _showRawBlocks;
 
     // ---- 正交度校正 ----
 
@@ -374,10 +387,13 @@ public partial class ConnectionViewModel : ObservableObject
                 connection.ErrorOccurred -= OnErrorOccurred;
                 connection.ConnectionStateChanged -= OnConnectionStateChanged;
                 _connection = null;
+                // 断开前最后一批解析记录留给下一次界面刷新，不随解析器一起丢掉。
+                if (_parser is IParserDiagnostics { Records: { } log }) _pendingParseRecords.AddRange(log.Drain());
                 _parser?.Reset();
                 _parser = null;
                 _sensorAdapter = null;
             }
+            OnUi(FlushReceiveStatus);
             _dataBus.PublishConnectionChanged(null);
             await connection.DisposeAsync();
         }
@@ -454,6 +470,21 @@ public partial class ConnectionViewModel : ObservableObject
         {
             while (_rawDisplayQueue.Count > 0) RawDataLines.Add(_rawDisplayQueue.Dequeue());
             while (RawDataLines.Count > MaxRawDataLines) RawDataLines.RemoveAt(0);
+            IEnumerable<ParseRecord> records = _pendingParseRecords.ToArray();
+            _pendingParseRecords.Clear();
+            if (_parser is IParserDiagnostics { Records: { } log })
+            {
+                records = records.Concat(log.Drain());
+                DroppedParseRecords = log.DroppedCount;
+            }
+            foreach (var record in records)
+            {
+                if (ParseRecords.Count > 0 && ParseRecords[^1].CanMerge(record))
+                    ParseRecords[^1] = ParseRecords[^1].Merge(record);
+                else
+                    ParseRecords.Add(new ParseRecordRow(record));
+            }
+            while (ParseRecords.Count > MaxRawDataLines) ParseRecords.RemoveAt(0);
             ReceivedByteCount = _receivedBytes;
             ParsedReadingCount = _parsedCount;
             ParseErrorCount = _parseErrors;
@@ -696,10 +727,73 @@ public partial class ConnectionViewModel : ObservableObject
         }
     }
 
+    // ---- 解析测试：不连接设备，用当前协议解析样例数据 ----
+
+    [ObservableProperty] private string _parseTestInput = "";
+    [ObservableProperty] private ParseTestInputKind _parseTestKind = ParseTestInputKind.Hex;
+    [ObservableProperty] private ParseTestResult? _parseTestResult;
+    [ObservableProperty] private string _parseTestMessage = "粘贴一段设备输出，用当前协议试解析。不连接设备，也不写入任何会话。";
+    [ObservableProperty] private bool _parseTestIsError;
+    [ObservableProperty] private IReadOnlyList<ParseTestRow> _parseTestRows = [];
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasParseTestRecords))]
+    private IReadOnlyList<ParseRecordRow> _parseTestRecords = [];
+
+    public bool HasParseTestRecords => ParseTestRecords.Count > 0;
+
+    public ParseTestInputKind[] ParseTestKinds { get; } = Enum.GetValues<ParseTestInputKind>();
+
+    [RelayCommand]
+    private void RunParseTest()
+    {
+        try
+        {
+            var bytes = ProtocolParseTester.ReadInput(ParseTestInput, ParseTestKind);
+            if (bytes.Length == 0) { ShowParseTest(null, "请先粘贴要测试的数据。", true); return; }
+            SyncSegmentsToConfig();
+            var result = ProtocolParseTester.Run(ProtocolConfig, bytes);
+            var names = result.ChannelNames;
+            var units = result.ChannelUnits;
+            ParseTestRows = result.Frames.Select(f => new ParseTestRow(f.Index, string.Join("    ",
+                f.Values.Select((v, i) => $"{names.ElementAtOrDefault(i) ?? $"CH{i}"} = {v:G9}{(string.IsNullOrEmpty(units.ElementAtOrDefault(i)) ? "" : " " + units[i])}")))).ToArray();
+            var summary = result.Frames.Count == 0
+                ? "没有解出完整的帧。检查帧头、长度、校验和数据类型是否与设备一致。"
+                : result.RejectedCount > 0
+                    ? $"解出 {result.Frames.Count} 帧；另有 {result.RejectedCount} 处数据被拒绝并重新同步，原因见下方。"
+                    : $"解出 {result.Frames.Count} 帧，没有被拒绝的数据。";
+            ShowParseTest(result, summary, result.Frames.Count == 0);
+        }
+        catch (Exception ex) when (ex is FormatException or ArgumentException or InvalidOperationException)
+        {
+            ShowParseTest(null, "无法测试：" + ex.Message, true);
+        }
+    }
+
+    private void ShowParseTest(ParseTestResult? result, string message, bool error)
+    {
+        ParseTestResult = result;
+        ParseTestRecords = result?.Records.Select(r => new ParseRecordRow(r)).ToArray() ?? [];
+        if (result == null) ParseTestRows = [];
+        ParseTestMessage = message;
+        ParseTestIsError = error;
+    }
+
+    /// <summary>把最近收到的原始数据块填入测试框，按当前显示格式（HEX / 文本）。</summary>
+    [RelayCommand]
+    private void FillParseTestFromRecent()
+    {
+        if (RawDataLines.Count == 0) { ShowParseTest(null, "还没有收到数据。连接设备后，原始数据块会出现在采集页的「原始报文」中。", true); return; }
+        ParseTestKind = ShowHex ? ParseTestInputKind.Hex : ParseTestInputKind.Text;
+        var recent = RawDataLines.Skip(Math.Max(0, RawDataLines.Count - 40));
+        ParseTestInput = ShowHex ? string.Join(" ", recent) : string.Concat(recent);
+        RunParseTest();
+    }
+
     [RelayCommand]
     private void ClearRawData()
     {
         RawDataLines.Clear();
+        ParseRecords.Clear();
     }
 
     [RelayCommand]
@@ -816,4 +910,40 @@ public partial class ConnectionViewModel : ObservableObject
             }
         }
     }
+}
+
+/// <summary>解析测试的一帧显示行。</summary>
+public sealed record ParseTestRow(int Index, string Text);
+
+/// <summary>“原始报文”中的一条解析记录：时间、字节数、开头字节和结论。连续通过的帧合并为一行。</summary>
+public sealed record ParseRecordRow(ParseRecord Record)
+{
+    public string TimeText => Record.FrameCount > 1 || Record.LastTime - Record.FirstTime > TimeSpan.FromMilliseconds(500)
+        ? $"{Record.FirstTime:HH:mm:ss.fff} – {Record.LastTime:HH:mm:ss.fff}"
+        : Record.FirstTime.ToString("HH:mm:ss.fff");
+
+    public string SizeText => Record.Outcome == ParseOutcome.Accepted && Record.FrameCount > 1
+        ? $"{Record.FrameCount:N0} 帧 · {Record.ByteCount:N0} B"
+        : $"{Record.ByteCount:N0} B";
+
+    public string StatusText => Record.Outcome switch
+    {
+        ParseOutcome.Accepted => Record.FrameCount > 1 ? $"✓ 连续 {Record.FrameCount:N0} 帧通过 · {Record.Detail}" : $"✓ 通过 · {Record.Detail}",
+        ParseOutcome.Rejected => $"✗ {Record.Detail}，已重新同步",
+        _ => $"⚠ {Record.Detail} {Record.ByteCount:N0} 字节",
+    };
+
+    /// <summary>ok / err / warn，供界面着色。</summary>
+    public string Level => Record.Outcome switch { ParseOutcome.Accepted => "ok", ParseOutcome.Rejected => "err", _ => "warn" };
+
+    /// <summary>同一结论、同一说明的相邻记录合并（跨越两次刷新的连续通过帧或连续丢弃）。</summary>
+    public bool CanMerge(ParseRecord next) => Record.Outcome != ParseOutcome.Rejected
+        && next.Outcome == Record.Outcome && next.Detail == Record.Detail;
+
+    public ParseRecordRow Merge(ParseRecord next) => new(Record with
+    {
+        LastTime = next.LastTime,
+        FrameCount = Record.FrameCount + next.FrameCount,
+        ByteCount = Record.ByteCount + next.ByteCount,
+    });
 }

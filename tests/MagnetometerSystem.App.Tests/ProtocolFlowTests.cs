@@ -230,11 +230,22 @@ public class ProtocolFlowTests
             await peer.GetStream().WriteAsync("ck\n"u8.ToArray());
             await send.WaitAsync(TimeSpan.FromSeconds(3));
             await WaitForAsync(() => vm.ResponseStatus.Contains("收到设备 ACK"));
+            // 收发记录：发送行只声称“已写出”；分两段到达的 ACK 在第二段判定为 ACK。
+            await WaitForAsync(() => vm.TrafficEntries.Count(e => e.Kind == TrafficKind.Rx) == 2);
+            var tx = Assert.Single(vm.TrafficEntries, e => e.Kind == TrafficKind.Tx);
+            Assert.Equal($"已写出 {expected.Length} 字节", tx.Result);
+            Assert.Equal(command.Name, tx.Command);
+            var rx = vm.TrafficEntries.Where(e => e.Kind == TrafficKind.Rx).ToArray();
+            Assert.Equal("尚未匹配应答", rx[0].Result);
+            Assert.StartsWith("设备返回 ACK", rx[1].Result);
+            Assert.Equal("ok", rx[1].Level);
+            Assert.True(vm.TrafficEntries.IndexOf(tx) < vm.TrafficEntries.IndexOf(rx[0]));
             await connection.DisconnectAsync();
             await WpfTestHost.PumpAsync();
             Assert.False(vm.IsConnected);
             await vm.SendSelectedCommandCommand.ExecuteAsync(null);
             Assert.Contains("写出失败", vm.WriteStatus);
+            await WaitForAsync(() => vm.TrafficEntries.Any(e => e.Kind == TrafficKind.Note && e.Level == "err"));
         }
         finally { bus.PublishConnectionChanged(null); listener.Stop(); }
     });
@@ -388,6 +399,14 @@ public class ProtocolFlowTests
             await WaitForAsync(() => vm.ResponseStatus.Contains("超时"));
             await send.WaitAsync(TimeSpan.FromSeconds(3));
             Assert.Contains("执行结果未知", vm.ResponseStatus);
+            // 无关遥测不能被记成应答；超时说明区分“收到了数据但未配置预期应答”。
+            await WaitForAsync(() => vm.TrafficEntries.Any(e => e.Kind == TrafficKind.Note));
+            Assert.Equal("未配置预期应答", vm.TrafficEntries.First(e => e.Kind == TrafficKind.Rx).Result);
+            var note = vm.TrafficEntries.First(e => e.Kind == TrafficKind.Note);
+            Assert.StartsWith("未配置预期应答", note.Result);
+            Assert.Equal("warn", note.Level);
+            Assert.Equal("自由发送", note.Command);
+            Assert.DoesNotContain(vm.TrafficEntries, e => e.Level == "ok");
             vm.FreeIsHexMode = true;
             Assert.Equal("None", vm.FreeLineEnding);
             vm.FreeCommandText = "01 02";

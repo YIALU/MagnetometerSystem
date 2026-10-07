@@ -51,6 +51,8 @@ dotnet test MagnetometerSystem.sln -c Debug --collect:"XPlat Code Coverage" --re
 - `RealtimeWorkspaceTests` / `WorkspaceLayoutTests`：实际 WPF 工作台、单图温度轴、原始值统计、通道重排、65 通道、折叠/专注状态恢复和控件绑定。`ShutdownUpdateTests` 验证更新与正常关闭前等待尾批和设置保存、取消更新、真实 SQLite 写入失败阻止安装及显式重试；安装器与这组测试的连接使用替身，不执行真实安装。
 - `MultiPlatformUpdateServiceTests`：真实更新解析、下载与文件校验调用链，使用隔离 HttpMessageHandler 和临时目录验证双平台版本不同步、单平台失败、指定平台、同版本镜像切换、取消和坏校验；不是外网下载证据。`UpdateSourceUiTests` 使用真实临时 SQLite 和 WPF 控件验证平台偏好持久化、下载选择、两项目链接；真实安装升级仍需人工验收。
 - `CtmbsAcquisitionFlowTests`：真实 TCP 夹入状态/参数响应、坏长度头和合法推送，仅合法测量入库与绘图。`VariableLengthSegmentParserTests` 覆盖保留区、未映射尾部、动态校验和帧尾；`ZdzUnitAxesTests` / `UnitWorkflowTests` 覆盖各单位轴范围、回放单位、计算单位及非法来源。
+- 界面重设计后新增（见 [交接](ui-redesign/交接.md)）：`NativeWorkspace…` 打开真实主窗口，切换全部页面、校正页三个页签和向导四步并断言无绑定错误；`DisconnectKeepsLastCurveVisible…` 经真实 TCP 连接 → 收帧 → 断开，验证未启用校正时曲线也有数据、断开后空状态不遮住曲线；`RawFramesDockShowsPerFrameResults…` 经真实 TCP 发送噪声、正确帧和坏校验帧，验证“原始报文”逐帧记录（通过 / XOR 校验失败及两个值 / 重新同步丢弃字节）和“收发”行；`DraggingOnPlot…` 验证拖动选区间、区间统计使用原始值、十字准线读数；`CalibrationWizardTests` 用总线读数走完正交度向导采集 → 计算 → 保存 → 配置库，覆盖手动 48 点的记录 / 撤销 / 清空 / 链路条记录，并用一个确定性用例防止校正采集在接收锁内同步等待界面线程（该用例在旧写法下会超时）；`AnalysisViewModelTests` 用真实临时 SQLite 的 65 分钟会话验证分块边界去重、原始值优先、闭区间时间段、空段 / 非法段提示、CSV 转义与精度、按块取消；`DialogRenderTests` 逐个打开六个对话框并检查绑定。`ProtocolFlowTests` 的两个命令用例同时断言结构化收发记录。Core 的 `ParseRecordLogTests` 覆盖三类解析器的逐帧记录、合并与有界缓冲。
+- `AnalysisPerformanceTests`：只在设置 `MAGNETOMETER_TEST_PERF=1` 时运行，生成约百万条读数的临时库并记录分析耗时与内存（结果见下方记录），默认跳过。
 
 这些条目表示测试代码的覆盖范围。最近一次完整运行结果见下面的日期记录；实体串口、真实设备 ACK/执行结果与长时间稳定性，在没有对应运行记录时一律视为未验证。
 
@@ -127,6 +129,35 @@ CTMBS 通用重复长度封装中的合法状态/参数响应及多组 dat+5 响
 
 串口仍是环境跳过；未运行真实安装器、实体设备或长时间吞吐验收。便携 ZIP 另用 `build.ps1` 的实际 `Compress-Archive` 命令进行临时目录归档，检查可执行文件与 `portable.marker` 位于 ZIP 根目录并保留子目录；该检查不是一次正式发布。
 
+## 2026-10-07 验证记录（界面重设计并入 v0.5.2）
+
+环境为 Windows 本机，工作树 `MagnetometerSystem-0.5.2`（分支 `codex/ui-redesign`，基于 `origin/master` v0.5.2，改动未提交），Debug 构建。`dotnet build MagnetometerSystem.sln -c Debug` 0 错误（只有原有 `NU1701`），`dotnet test MagnetometerSystem.sln -c Debug --no-build`：
+
+| 项目 | 通过 | 跳过 | 失败 |
+| --- | ---: | ---: | ---: |
+| Core | 430 | 1 | 0 |
+| Infrastructure | 134 | 0 | 0 |
+| Feedback.Server | 11 | 0 | 0 |
+| App | 121 | 2 | 0 |
+| 合计 | **696** | **3** | **0** |
+
+跳过项：两个串口测试（未设端口变量）与 `AnalysisPerformanceTests`。`WpfTestHost` 现在打开 WPF 绑定跟踪（未附加调试器时默认关闭），各测试“无绑定错误”的断言此前实际上收不到任何输出；打开后全部通过。
+
+虚拟串口：本机 ELTIMA Virtual Serial Port 的 COM1 ↔ COM2，115200 8N1。设 `MAGNETOMETER_TEST_RX_PORT=COM2`、`MAGNETOMETER_TEST_TX_PORT=COM1` 后，`OptionalSerialLoopbackTests` 与 `OptionalSerialChainTests` 均通过（后者见上文“可选串口与设备验收”）；链路条、原始报文与数据页截图经目视检查。这是虚拟串口业务链路，**不是实体适配器或真实数采卡验证**；数采卡的 CRC 参数仍待固件确认，内置预设因此仍默认禁止采集。没有手动运行程序逐项操作。
+
+## 2026-10-07 验证记录（界面重设计续做，旧基线）
+
+环境为 Windows 本机、当前工作区修改（未提交）、Debug 构建。运行 `dotnet build MagnetometerSystem.sln -c Debug`（0 错误，只有原有 `NU1701` 警告）后执行 `dotnet test MagnetometerSystem.sln -c Debug --no-build`：
+
+| 项目 | 通过 | 跳过 | 失败 |
+| --- | ---: | ---: | ---: |
+| Core | 314 | 1 | 0 |
+| Infrastructure | 65 | 0 | 0 |
+| App | 33 | 1 | 0 |
+| 合计 | **412** | **2** | **0** |
+
+跳过项：`OptionalSerialLoopbackTests`（未配置互连串口）与 `AnalysisPerformanceTests`（可选性能实测，需 `MAGNETOMETER_TEST_PERF=1`；单独运行一次通过，数值见[需求池 REQ-005](需求池.md)）。本轮没有保存 TRX；界面截图来自 `MAGNETOMETER_TEST_SCREENSHOTS` 输出并经目视检查，没有手动运行程序逐项操作，没有串口或真实设备验证。
+
 ## 核心业务验收矩阵
 
 | 场景 | 操作与断言 | 首选验证层 |
@@ -144,7 +175,7 @@ CTMBS 通用重复长度封装中的合法状态/参数响应及多组 dat+5 响
 | 校正保护原始值 | 用已知非单位矩阵产生不同结果，验证校正前数值仍可查询并导出；额外通道如温度不被三轴算法改变 | Core + SQLite + CSV |
 | 显示处理与保存隔离 | 暂停显示、滤波、显示偏移、清图、降采样、折叠和切页，数据库仍按原始数值记录 | 业务链路 + UI |
 | 单图/多图 | 选中磁场与温度；单图只有一个绘图区且温度右轴，多图按通道绘制 | Windows WPF |
-| 折叠/专注 | 各辅助面板独立开合；小窗口展开多个面板后可滚动访问；专注模式增大曲线，退出恢复开合及输入，连接/保存状态仍可见 | Windows WPF |
+| 折叠/专注 | 右侧任务面板与底部停靠区独立开合，停靠区高度可拖动；专注模式增大曲线，退出恢复开合及输入，链路条的连接/保存状态仍可见 | Windows WPF |
 | 分析功能 | 滚动统计/区间、计算通道、单位与索引、图形选择和导出保持一致 | Core + UI |
 | 历史回放 | 加载指定会话、暂停/定位/倍速/切页；通道与单位从会话恢复，温度轴正确；实时连接存在时禁止回放，回放仅发布显示流 | 业务链路 + UI |
 | CSV 一致性 | 与数据库逐条对账；验证通道顺序、时间筛选、逗号/引号名称、小数精度和不同系统区域设置 | SQLite + CSV |
@@ -154,6 +185,26 @@ CTMBS 通用重复长度封装中的合法状态/参数响应及多组 dat+5 响
 | 旧库保护 | 识别旧固定列表并保留 legacy 表、会话计数和迁移提示；未转换数据不得显示为空库成功 | SQLite |
 
 矩阵是验收要求。某行存在单元测试，并不意味着该行所有层次都已覆盖；报告必须给出实际执行层次。
+
+### 界面验收（2026-10 重设计后）
+
+以下需要在 Windows 上 `dotnet run` 后手动操作，自动测试只覆盖其中的绑定和 ViewModel 逻辑。记录时写明结果、日期和环境；没有记录的视为未验证。
+
+| 场景 | 操作与断言 | 状态 |
+| --- | --- | --- |
+| 链路条计数 | 串口真实设备连接后，接收 / 解析 / 保存三段各自增长，实测频率与设备输出一致；断开后事件出现“会话已结束，尾批已提交”，数据页条数一致 | 未执行 |
+| TCP 断线重连 | 重连期间链路条显示“连接中断”，数据页回放按钮禁用并说明原因；重连后计数继续 | 未执行 |
+| 保存失败横幅 | 用其他程序独占锁住数据库：出现红色横幅、待写条数不清零；“重试写入”恢复后横幅消失，事件记“保存已恢复”，无重复或丢失 | 未执行 |
+| 显示操作不影响保存 | 暂停、折叠侧栏 / 停靠区、专注、切页、显示偏移、滤波前后，保存条数与设备发送数一致 | 未执行 |
+| 断开后曲线保留 | 停止采集后曲线仍在，空状态只在清空曲线或从未采集时出现 | 业务链路通过（TCP），UI 未手动检查 |
+| 原始报文逐帧记录 | 改坏设备一帧的校验字节（或用 TCP 工具发送），看到“✗ 校验失败：计算 xx，帧内 yy，已重新同步”和随后的“⚠ 丢弃 N 字节” | 业务链路通过（TCP），未用真实设备 |
+| 解析测试 | 粘贴真实设备的一段 HEX 输出，结果与实时解析一致；“解析过程”列出拒绝原因 | 未执行 |
+| 曲线拖动选区间 / 十字准线 | 左键拖动后右侧“区间”页显示统计；悬停时读数为原始值；滚轮仍缩放时间窗口 | ViewModel 通过，鼠标操作未手动检查 |
+| 收发记录 | 发送有应答的命令：发送行“已写出 N 字节”，应答行“应答匹配，x ms”；无应答时出现超时说明 | 业务链路通过（TCP 对端模拟），未用真实设备 |
+| 正交度手动 48 点 | 在任意页面用链路条“记录当前点”，向导里的格子与计数同步；撤销 / 清空后原始 CSV 追加注释行 | ViewModel 通过，未用真实设备 |
+| 数据页导出 | 只勾部分通道，CSV 列名、单位、精度正确；旧格式会话显示“需迁移”且不能回放 / 导出 | 未执行 |
+| 分析页 | 已知漂移的长会话，漂移速率与预期一致；取消可用；导出 CSV 首行带时间段与设置 | ViewModel 通过（临时 SQLite），UI 未手动检查 |
+| 最小窗口 | 1100×680 下各页没有被截断或重叠的控件（含对话框） | 测试截图检查，未手动检查 |
 
 写库失败后保留的是进程内批次，可在修复后重试；未提交队列不保证断电或强杀恢复。对这类故障需要持久化恢复日志的场景，必须另行设计并验证，不能根据正常停止测试推断已有保证。
 
@@ -184,6 +235,12 @@ dotnet test tests/MagnetometerSystem.Core.Tests/MagnetometerSystem.Core.Tests.cs
 ```
 
 端口变量只指向本轮验收用的互连端口，不应指向正在进行正式采集的设备。该测试验证 `SerialPort` 传输；App + SQLite + 导出的完整串口流程还需按下列步骤核对。
+
+同样的两个变量也启用 App 层的 `OptionalSerialChainTests`（RX 为上位机端，TX 为模拟设备端）：先确认内置“磁梯度数采卡-pt (仅磁场6通道)”在 CRC 未配置时拒绝连接、不打开串口、不建会话；再把 CRC 占位段换成校验段（测试取 CRC-16/MODBUS，从“信息ID”段算起，低字节在前——这是测试假设，不是已确认的固件参数），从 TX 口随机切块发送 400 个有效 101 字节帧并混入噪声、半帧和坏 CRC 帧，经真实 `ConnectionViewModel` 断言解析数、接收字节数、逐帧解析记录、图表最新值、断开后 SQLite 中每个原始值与通道名/单位，以及数据页显示的条数：
+
+```powershell
+dotnet test tests/MagnetometerSystem.App.Tests/MagnetometerSystem.App.Tests.csproj -c Debug --filter FullyQualifiedName~OptionalSerialChainTests
+```
 
 仓库已有 `magnetometer_test.py` 可用来发送示例流；需要 Python 和 `pyserial`：
 

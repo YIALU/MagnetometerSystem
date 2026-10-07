@@ -1,10 +1,21 @@
 using System.Collections.ObjectModel;
+using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using MagnetometerSystem.Core.Calibration;
 using MagnetometerSystem.Core.Models;
 
 namespace MagnetometerSystem.App.ViewModels;
+
+/// <summary>偏移 / 增益表格的一行：按通道序号填写，文本在保存时统一校验。</summary>
+public partial class CalibrationChannelRow : ObservableObject
+{
+    public int Index { get; init; }
+    public string Name => $"CH{Index}";
+
+    [ObservableProperty] private string _offset = "0";
+    [ObservableProperty] private string _gain = "1";
+}
 
 /// <summary>
 /// 传感器校准 ViewModel — 管理硬铁/软铁校准参数（偏移 + 增益）
@@ -16,6 +27,8 @@ public partial class SensorCalibrationViewModel : ObservableObject
     public SensorCalibrationViewModel(ICalibrationRepository calibrationRepository)
     {
         _calibrationRepository = calibrationRepository;
+        Channels.CollectionChanged += (_, _) => RemoveLastChannelCommand.NotifyCanExecuteChanged();
+        ResetChannels(3);
     }
 
     private bool _isLoaded;
@@ -31,6 +44,7 @@ public partial class SensorCalibrationViewModel : ObservableObject
     public ObservableCollection<CalibrationParams> Profiles { get; } = new();
 
     [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(DeleteProfileCommand))]
     private CalibrationParams? _selectedProfile;
 
     public SensorType[] SensorTypes { get; } = Enum.GetValues<SensorType>();
@@ -41,7 +55,7 @@ public partial class SensorCalibrationViewModel : ObservableObject
     private string _editName = string.Empty;
 
     [ObservableProperty]
-    private SensorType _editSensorType;
+    private SensorType _editSensorType = SensorType.TriaxialFluxgate;
 
     [ObservableProperty]
     private string _editSensorSerial = string.Empty;
@@ -49,11 +63,8 @@ public partial class SensorCalibrationViewModel : ObservableObject
     [ObservableProperty]
     private string _editNotes = string.Empty;
 
-    [ObservableProperty]
-    private string _editOffsetValues = "0, 0, 0";
-
-    [ObservableProperty]
-    private string _editGainValues = "1, 1, 1";
+    /// <summary>按通道填写的偏移与增益。</summary>
+    public ObservableCollection<CalibrationChannelRow> Channels { get; } = new();
 
     [ObservableProperty]
     private string _statusMessage = string.Empty;
@@ -90,8 +101,7 @@ public partial class SensorCalibrationViewModel : ObservableObject
         EditSensorType = SensorType.TriaxialFluxgate;
         EditSensorSerial = string.Empty;
         EditNotes = string.Empty;
-        EditOffsetValues = "0, 0, 0";
-        EditGainValues = "1, 1, 1";
+        ResetChannels(3);
         SetStatus("已创建新配置，请编辑后保存");
     }
 
@@ -104,9 +114,25 @@ public partial class SensorCalibrationViewModel : ObservableObject
         EditSensorType = SelectedProfile.SensorType;
         EditSensorSerial = SelectedProfile.SensorSerial ?? string.Empty;
         EditNotes = SelectedProfile.Notes ?? string.Empty;
-        EditOffsetValues = string.Join(", ", SelectedProfile.OffsetValues.Select(v => v.ToString("G")));
-        EditGainValues = string.Join(", ", SelectedProfile.GainValues.Select(v => v.ToString("G")));
+        var count = Math.Max(SelectedProfile.OffsetValues.Length, SelectedProfile.GainValues.Length);
+        ResetChannels(count);
+        for (int i = 0; i < count; i++)
+        {
+            Channels[i].Offset = i < SelectedProfile.OffsetValues.Length ? SelectedProfile.OffsetValues[i].ToString("G", CultureInfo.InvariantCulture) : "0";
+            Channels[i].Gain = i < SelectedProfile.GainValues.Length ? SelectedProfile.GainValues[i].ToString("G", CultureInfo.InvariantCulture) : "1";
+        }
         SetStatus($"已加载: {SelectedProfile.Name}");
+    }
+
+    [RelayCommand]
+    private void AddChannel() => Channels.Add(new CalibrationChannelRow { Index = Channels.Count });
+
+    private bool CanRemoveChannel() => Channels.Count > 1;
+
+    [RelayCommand(CanExecute = nameof(CanRemoveChannel))]
+    private void RemoveLastChannel()
+    {
+        if (Channels.Count > 1) Channels.RemoveAt(Channels.Count - 1);
     }
 
     [RelayCommand]
@@ -118,17 +144,24 @@ public partial class SensorCalibrationViewModel : ObservableObject
             return;
         }
 
-        try
+        var offsets = new double[Channels.Count];
+        var gains = new double[Channels.Count];
+        foreach (var row in Channels)
         {
-            var offsets = ParseDoubleArray(EditOffsetValues);
-            var gains = ParseDoubleArray(EditGainValues);
-
-            if (offsets == null || gains == null)
+            if (!TryParse(row.Offset, out offsets[row.Index]))
             {
-                SetStatus("偏移量或增益值格式无效，请使用逗号分隔的数字", isError: true);
+                SetStatus($"{row.Name} 的偏移不是有效数字", isError: true);
                 return;
             }
+            if (!TryParse(row.Gain, out gains[row.Index]))
+            {
+                SetStatus($"{row.Name} 的增益不是有效数字", isError: true);
+                return;
+            }
+        }
 
+        try
+        {
             var profile = SelectedProfile ?? new CalibrationParams();
             profile.Name = EditName;
             profile.SensorType = EditSensorType;
@@ -147,7 +180,7 @@ public partial class SensorCalibrationViewModel : ObservableObject
         }
     }
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(HasSelectedProfile))]
     private async Task DeleteProfileAsync()
     {
         if (SelectedProfile == null) return;
@@ -174,28 +207,17 @@ public partial class SensorCalibrationViewModel : ObservableObject
         }
     }
 
-    private static double[]? ParseDoubleArray(string input)
+    private bool HasSelectedProfile() => SelectedProfile != null;
+
+    private void ResetChannels(int count)
     {
-        if (string.IsNullOrWhiteSpace(input)) return null;
-
-        var parts = input.Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries);
-        var values = new List<double>();
-
-        foreach (var part in parts)
-        {
-            if (double.TryParse(part.Trim(), System.Globalization.NumberStyles.Float,
-                System.Globalization.CultureInfo.InvariantCulture, out double val))
-            {
-                values.Add(val);
-            }
-            else
-            {
-                return null;
-            }
-        }
-
-        return values.ToArray();
+        Channels.Clear();
+        for (int i = 0; i < Math.Max(1, count); i++)
+            Channels.Add(new CalibrationChannelRow { Index = i });
     }
+
+    private static bool TryParse(string text, out double value) =>
+        double.TryParse(text?.Trim().Replace('−', '-'), NumberStyles.Float, CultureInfo.InvariantCulture, out value) && double.IsFinite(value);
 
     private void SetStatus(string message, bool isError = false)
     {

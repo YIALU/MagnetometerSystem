@@ -1,0 +1,94 @@
+<UserControl x:Class="MagnetometerSystem.App.Views.CalibrationLibraryView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- 配置库：管理已保存的正交度配置。DataContext = OrthogonalityCalibrationViewModel。 -->
+    <UserControl.Resources>
+        <Style x:Key="MatrixBox" TargetType="Border">
+            <Setter Property="Background" Value="{DynamicResource Panel2Brush}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource LineBrush}"/>
+            <Setter Property="BorderThickness" Value="2,0,2,0"/>
+            <Setter Property="CornerRadius" Value="{DynamicResource ControlRadius}"/>
+            <Setter Property="Padding" Value="14,8"/>
+            <Setter Property="HorizontalAlignment" Value="Left"/>
+        </Style>
+        <DataTemplate x:Key="NumberCell">
+            <TextBlock Text="{Binding StringFormat=G7}" FontFamily="{DynamicResource MonoFont}" FontSize="12.5" Margin="0,2,18,2"/>
+        </DataTemplate>
+        <ItemsPanelTemplate x:Key="ThreeColumns">
+            <UniformGrid Columns="3"/>
+        </ItemsPanelTemplate>
+        <Style x:Key="NumberColumn" TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="{DynamicResource MonoFont}"/>
+            <Setter Property="HorizontalAlignment" Value="Right"/>
+        </Style>
+    </UserControl.Resources>
+
+    <DockPanel>
+        <Border DockPanel.Dock="Top" Style="{StaticResource PanelHeader}">
+            <DockPanel>
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button Content="刷新" Style="{StaticResource SmallButton}" Command="{Binding LoadSavedProfilesCommand}" Margin="0,0,6,0"/>
+                    <Button Content="导出 JSON" Style="{StaticResource SmallButton}" Command="{Binding ExportSelectedProfileJsonCommand}" Margin="0,0,6,0"
+                            ToolTip="导出选中配置的全部字段"/>
+                    <Button Content="导出 CSV" Style="{StaticResource SmallButton}" Command="{Binding ExportSelectedProfileCsvCommand}" Margin="0,0,6,0"
+                            ToolTip="导出偏移与矩阵元素"/>
+                    <Button Content="使用说明" Style="{StaticResource SmallButton}" Command="{Binding ShowProfileUsageHelpCommand}" Margin="0,0,6,0"
+                            ToolTip="如何手动用这组参数计算校正结果"/>
+                    <Button Content="删除…" Style="{StaticResource SmallButton}" Foreground="{DynamicResource ErrBrush}" Command="{Binding DeleteSavedProfileCommand}"/>
+                </StackPanel>
+                <TextBlock VerticalAlignment="Center">
+                    <Run Text="已保存的正交度配置" FontSize="14" FontWeight="SemiBold"/>
+                    <Run Text="　在采集页右侧「校正」或数据页回放中选用" FontSize="12" Foreground="{DynamicResource MutedBrush}"/>
+                </TextBlock>
+            </DockPanel>
+        </Border>
+
+        <!-- 选中配置的参数 -->
+        <Border DockPanel.Dock="Bottom" BorderBrush="{DynamicResource Line2Brush}" BorderThickness="0,1,0,0" Padding="14,12"
+                Visibility="{Binding SelectedSavedProfile, Converter={StaticResource NullToCollapsed}}">
+            <WrapPanel>
+                <StackPanel Margin="0,0,28,0">
+                    <TextBlock Text="补偿矩阵 M" Style="{StaticResource FieldLabel}"/>
+                    <Border Style="{StaticResource MatrixBox}">
+                        <ItemsControl ItemsSource="{Binding SelectedSavedProfile.CompensationMatrix}" ItemTemplate="{StaticResource NumberCell}"
+                                      ItemsPanel="{StaticResource ThreeColumns}" Focusable="False"/>
+                    </Border>
+                </StackPanel>
+                <StackPanel Margin="0,0,28,0">
+                    <TextBlock Style="{StaticResource FieldLabel}"><Run Text="偏移 O（"/><Run Text="{Binding SelectedSavedProfile.UnitDisplay, Mode=OneWay}"/><Run Text="）"/></TextBlock>
+                    <Border Style="{StaticResource MatrixBox}">
+                        <ItemsControl ItemsSource="{Binding SelectedSavedProfile.Offset}" ItemTemplate="{StaticResource NumberCell}"
+                                      ItemsPanel="{StaticResource ThreeColumns}" Focusable="False"/>
+                    </Border>
+                    <TextBlock Style="{StaticResource Hint}" Margin="0,8,0,0" Text="B改正 = M ×（B原始 − O）"/>
+                </StackPanel>
+                <StackPanel MaxWidth="360">
+                    <TextBlock Text="备注" Style="{StaticResource FieldLabel}"/>
+                    <TextBlock Text="{Binding SelectedSavedProfile.Notes, TargetNullValue=（无）}" TextWrapping="Wrap"/>
+                </StackPanel>
+            </WrapPanel>
+        </Border>
+
+        <Border DockPanel.Dock="Bottom" Padding="14,6" Visibility="{Binding LibraryStatus, Converter={StaticResource NullToCollapsed}}">
+            <TextBlock Text="{Binding LibraryStatus}" Style="{StaticResource Hint}"/>
+        </Border>
+
+        <Grid>
+            <DataGrid ItemsSource="{Binding SavedProfiles}" SelectedItem="{Binding SelectedSavedProfile}" BorderThickness="0"
+                      AutoGenerateColumns="False" CanUserAddRows="False" IsReadOnly="True" SelectionMode="Single">
+                <DataGrid.Columns>
+                    <DataGridTextColumn Header="名称" Binding="{Binding Name}" Width="*" MinWidth="180"/>
+                    <DataGridTextColumn Header="序列号" Binding="{Binding SensorSerial}" Width="130"/>
+                    <DataGridTextColumn Header="单位" Binding="{Binding UnitDisplay}" Width="60"/>
+                    <DataGridTextColumn Header="创建时间" Binding="{Binding CreatedAt, StringFormat=yyyy-MM-dd HH:mm}" Width="140"/>
+                    <DataGridTextColumn Header="样本" Binding="{Binding SampleCount}" Width="70" ElementStyle="{StaticResource NumberColumn}"/>
+                    <DataGridTextColumn Header="残差均值" Binding="{Binding ResidualMean, StringFormat=G6}" Width="110" ElementStyle="{StaticResource NumberColumn}"/>
+                    <DataGridTextColumn Header="残差标准差" Binding="{Binding ResidualStd, StringFormat=G6}" Width="120" ElementStyle="{StaticResource NumberColumn}"/>
+                </DataGrid.Columns>
+            </DataGrid>
+            <TextBlock Style="{StaticResource Hint}" HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="13"
+                       Text="还没有保存的正交度配置。在「正交度校正」完成计算后保存。"
+                       Visibility="{Binding SavedProfiles.Count, Converter={StaticResource ZeroToVisible}}"/>
+        </Grid>
+    </DockPanel>
+</UserControl>

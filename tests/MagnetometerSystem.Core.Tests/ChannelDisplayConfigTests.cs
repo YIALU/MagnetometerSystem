@@ -5,11 +5,13 @@ namespace MagnetometerSystem.Core.Tests;
 public class ChannelDisplayConfigTests
 {
     [Fact]
-    public void PresetColors_CoverTwentyOneChannelsWithoutRepeat()
+    public void PresetColors_AreTheEightValidatedColors()
     {
-        // 磁梯度数采卡-pt 是 21 通道。默认色按 index % Length 回绕，
-        // 调色板短于通道数就会出现同色曲线（原来 8 色时 CH0/CH8/CH16 撞色）。
-        Assert.True(ChannelDisplayConfig.PresetColors.Length >= 21);
+        // 默认色与界面色块一致：只用经色觉辨识校验的 8 色。
+        Assert.Equal(
+            ["#FF2A78D6", "#FFEB6834", "#FF1BAF7A", "#FFEDA100",
+             "#FFE87BA4", "#FF008300", "#FF4A3AA7", "#FFE34948"],
+            ChannelDisplayConfig.PresetColors);
     }
 
     [Fact]
@@ -35,17 +37,7 @@ public class ChannelDisplayConfigTests
     }
 
     [Fact]
-    public void PresetColors_FirstEightUnchanged()
-    {
-        // 扩容不得打乱既有顺序：已保存的用户配置和既有截图依赖前 8 个色值。
-        Assert.Equal(
-            ["#FF0000FF", "#FFFF0000", "#FF008000", "#FFFF8C00",
-             "#FF800080", "#FF00FFFF", "#FFFF00FF", "#FFB8860B"],
-            ChannelDisplayConfig.PresetColors.Take(8));
-    }
-
-    [Fact]
-    public void CreateDefaults_AssignsDistinctColorsToAllZdzChannels()
+    public void CreateDefaults_CyclesTheEightColorsAcrossAllZdzChannels()
     {
         var protocol = ProtocolConfig.CreateZdzC08();
 
@@ -54,7 +46,10 @@ public class ChannelDisplayConfigTests
             [.. protocol.DerivedChannelNames]);
 
         Assert.Equal(21, configs.Length);
-        Assert.Equal(21, configs.Select(c => c.ColorHex).Distinct().Count());
+        // 前 8 个通道颜色互不相同；之后按 8 色回绕，靠通道名区分。
+        Assert.Equal(8, configs.Take(8).Select(c => c.ColorHex).Distinct().Count());
+        Assert.Equal(configs[0].ColorHex, configs[8].ColorHex);
+        Assert.Equal(configs[4].ColorHex, configs[20].ColorHex);
         Assert.Equal("X1", configs[0].Name);
         Assert.Equal("入水深度", configs[20].Name);
         Assert.All(configs, c => Assert.True(c.Visible));

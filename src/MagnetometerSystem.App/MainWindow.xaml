@@ -8,196 +8,279 @@
         xmlns:vm="clr-namespace:MagnetometerSystem.App.ViewModels"
         xmlns:converters="clr-namespace:MagnetometerSystem.App.Converters"
         mc:Ignorable="d"
-        Title="磁力仪数据采集与分析系统" Height="900" Width="1440" MinWidth="1000" MinHeight="650"
+        Title="磁力仪数据采集与分析系统" Height="920" Width="1440" MinWidth="1100" MinHeight="680"
         WindowStartupLocation="CenterScreen" Icon="Assets/Magnetometer.ico">
     <Window.Resources>
         <converters:InverseBoolToVisibilityConverter x:Key="InverseBoolToVisibilityConverter"/>
         <BooleanToVisibilityConverter x:Key="BoolToVisibilityConverter"/>
+
+        <!-- 导航图标（24×24 线框） -->
+        <Geometry x:Key="IconWorkspace">M2,12 L6,12 L9,4 L13,20 L16,9 L18,12 L22,12</Geometry>
+        <Geometry x:Key="IconConnection">M9,3 L9,8 M15,3 L15,8 M6,8 L18,8 L18,12 A6,6 0 0 1 6,12 Z M12,18 L12,22</Geometry>
+        <Geometry x:Key="IconCommands">M3,5 L21,5 L21,19 L3,19 Z M7,10 L10,12.5 L7,15 M12,15 L17,15</Geometry>
+        <Geometry x:Key="IconData">M4,6 A8,3 0 1 0 20,6 A8,3 0 1 0 4,6 M4,6 L4,18 A8,3 0 0 0 20,18 L20,6 M4,12 A8,3 0 0 0 20,12</Geometry>
+        <Geometry x:Key="IconAnalysis">M4,20 L20,20 M6,16 L10,10 L14,13 L19,5 M6,4 L6,20</Geometry>
+        <Geometry x:Key="IconCalibration">M12,3 A9,9 0 1 0 12.01,3 M15.5,8.5 L13.5,13.5 L8.5,15.5 L10.5,10.5 Z</Geometry>
+        <Geometry x:Key="IconSettings">M4,7 L14,7 M18,7 L20,7 M4,17 L6,17 M10,17 L20,17 M16,5 A2,2 0 1 0 16.01,5 M8,15 A2,2 0 1 0 8.01,15</Geometry>
+
+        <!-- 链路条的段间箭头 -->
+        <DataTemplate x:Key="StageArrow">
+            <Canvas Width="44" Height="12" VerticalAlignment="Center">
+                <Line X1="0" Y1="6" X2="42" Y2="6" Stroke="#56665F" StrokeThickness="1"/>
+                <Polyline Points="37,2 42,6 37,10" Stroke="#56665F" StrokeThickness="1"/>
+            </Canvas>
+        </DataTemplate>
     </Window.Resources>
+
     <Grid>
-    <DockPanel>
-        <!-- 底部状态栏 -->
-        <StatusBar DockPanel.Dock="Bottom" Height="28">
-            <StatusBarItem>
-                <StackPanel Orientation="Horizontal">
-                    <Ellipse Width="10" Height="10" Margin="0,0,5,0">
-                        <Ellipse.Style>
-                            <Style TargetType="Ellipse">
-                                <Setter Property="Fill" Value="Gray"/>
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding ConnectionVM.IsConnected}" Value="True">
-                                        <Setter Property="Fill" Value="Green"/>
-                                    </DataTrigger>
-                                </Style.Triggers>
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="72"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <!-- ===== 导航栏 ===== -->
+            <DockPanel Grid.RowSpan="3" Background="{DynamicResource GraphiteBrush}">
+                <StackPanel DockPanel.Dock="Bottom" Margin="0,0,0,6">
+                    <RadioButton Style="{StaticResource RailItem}" Content="设置" Tag="{StaticResource IconSettings}" GroupName="Nav"
+                                 IsChecked="{Binding CurrentPage, Converter={StaticResource EnumToBool}, ConverterParameter=Settings}"/>
+                    <!-- 栏宽只有 72 px：只显示版本号，完整版本（含提交）放在提示里 -->
+                    <Button x:Name="VersionButton" Click="Version_Click" Background="Transparent" BorderThickness="0"
+                            Foreground="{DynamicResource GMutedBrush}" MinHeight="26" Padding="0" Margin="0,4,0,0">
+                        <Button.ToolTip>
+                            <TextBlock><Run Text="{x:Static local:AppVersion.Display}"/><LineBreak/><Run Text="点击查看版本信息与更新"/></TextBlock>
+                        </Button.ToolTip>
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock FontSize="11"><Run Text="v"/><Run Text="{x:Static local:AppVersion.Number}"/></TextBlock>
+                            <Ellipse Width="6" Height="6" Fill="{DynamicResource WarnOnDarkBrush}" Margin="4,1,0,0" VerticalAlignment="Center"
+                                     Visibility="{Binding HasUpdate, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                        </StackPanel>
+                    </Button>
+                    <Button x:Name="FeedbackButton" Click="ShowFeedback_Click" Background="Transparent" BorderThickness="0"
+                            Foreground="{DynamicResource GMutedBrush}" MinHeight="22" Padding="0" Margin="0,0,0,2" Cursor="Hand"
+                            ToolTip="反馈与建议">
+                        <TextBlock Text="反馈" FontSize="11" TextDecorations="Underline"/>
+                    </Button>
+                </StackPanel>
+                <StackPanel Margin="0,8,0,0">
+                    <RadioButton Style="{StaticResource RailItem}" Content="采集" Tag="{StaticResource IconWorkspace}" GroupName="Nav"
+                                 IsChecked="{Binding CurrentPage, Converter={StaticResource EnumToBool}, ConverterParameter=Workspace}"/>
+                    <RadioButton Style="{StaticResource RailItem}" Content="连接" Tag="{StaticResource IconConnection}" GroupName="Nav"
+                                 IsChecked="{Binding CurrentPage, Converter={StaticResource EnumToBool}, ConverterParameter=Connection}"/>
+                    <RadioButton Style="{StaticResource RailItem}" Content="命令" Tag="{StaticResource IconCommands}" GroupName="Nav"
+                                 IsChecked="{Binding CurrentPage, Converter={StaticResource EnumToBool}, ConverterParameter=Commands}"/>
+                    <RadioButton Style="{StaticResource RailItem}" Content="数据" Tag="{StaticResource IconData}" GroupName="Nav"
+                                 IsChecked="{Binding CurrentPage, Converter={StaticResource EnumToBool}, ConverterParameter=Data}"/>
+                    <RadioButton Style="{StaticResource RailItem}" Content="分析" Tag="{StaticResource IconAnalysis}" GroupName="Nav"
+                                 IsChecked="{Binding CurrentPage, Converter={StaticResource EnumToBool}, ConverterParameter=Analysis}"/>
+                    <Border Margin="12,10,12,2" BorderBrush="#3A4844" BorderThickness="0,1,0,0" Padding="0,6,0,0">
+                        <TextBlock Text="扩展" FontSize="11" Foreground="#7D8E88" HorizontalAlignment="Center"/>
+                    </Border>
+                    <RadioButton Style="{StaticResource RailItem}" Content="校正" Tag="{StaticResource IconCalibration}" GroupName="Nav"
+                                 IsChecked="{Binding CurrentPage, Converter={StaticResource EnumToBool}, ConverterParameter=Calibration}"/>
+                </StackPanel>
+            </DockPanel>
+
+            <!-- ===== 数据链路条：连接状态 + 接收 → 解析 → 保存 ===== -->
+            <Border Grid.Column="1" Background="{DynamicResource GraphiteBrush}" BorderBrush="#121A18" BorderThickness="0,0,0,1"
+                    MinHeight="70" TextElement.Foreground="{DynamicResource GInkBrush}">
+                <DockPanel>
+                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0,16,0">
+                        <!-- 手动正交度采集进行中：任何页面都能记录当前点 -->
+                        <Border Visibility="{Binding ManualOrthoState.IsActive, Converter={StaticResource BoolToVisibilityConverter}}"
+                                BorderBrush="#3F5C8F" BorderThickness="1" CornerRadius="4" Padding="10,4" Margin="0,0,12,0">
+                            <StackPanel Orientation="Horizontal">
+                                <StackPanel VerticalAlignment="Center" Margin="0,0,10,0">
+                                    <TextBlock FontSize="12" Foreground="{DynamicResource AccentOnDarkBrush}">
+                                        <Run Text="正交度手动采集 "/><Run Text="{Binding ManualOrthoState.PointsRecorded, Mode=OneWay}" FontWeight="SemiBold"/><Run Text=" / 48"/>
+                                    </TextBlock>
+                                    <TextBlock Text="{Binding ManualOrthoState.StatusMessage}" FontSize="11" Foreground="{DynamicResource GMutedBrush}"
+                                               MaxWidth="220" TextTrimming="CharacterEllipsis" ToolTip="{Binding ManualOrthoState.StatusMessage}"/>
+                                </StackPanel>
+                                <Button Content="记录当前点" Style="{StaticResource PrimaryButton}" MinHeight="28"
+                                        IsEnabled="{Binding ManualOrthoState.HasEnoughBuffer}" Command="{Binding RecordOrthoPointCommand}"/>
+                            </StackPanel>
+                        </Border>
+                        <Button Command="{Binding ConnectionVM.ConnectCommand}" Content="{Binding ToggleAcquisitionText}" MinWidth="128">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource PrimaryButton}">
+                                    <Setter Property="MinHeight" Value="34"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsLinkActive}" Value="True">
+                                            <Setter Property="Background" Value="Transparent"/>
+                                            <Setter Property="BorderBrush" Value="#56665F"/>
+                                            <Setter Property="Foreground" Value="{DynamicResource GInkBrush}"/>
+                                            <Setter Property="FontWeight" Value="Normal"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                        </Button>
+                    </StackPanel>
+
+                    <!-- 连接状态 -->
+                    <Border DockPanel.Dock="Left" Width="260" Padding="16,10" BorderBrush="{DynamicResource GraphiteLineBrush}" BorderThickness="0,0,1,0">
+                        <StackPanel VerticalAlignment="Center">
+                            <StackPanel Orientation="Horizontal">
+                                <Ellipse Width="9" Height="9" VerticalAlignment="Center" Margin="0,0,8,0">
+                                    <Ellipse.Style>
+                                        <Style TargetType="Ellipse">
+                                            <Setter Property="Fill" Value="#6F807A"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding LinkState}" Value="Acquiring"><Setter Property="Fill" Value="{DynamicResource RecBrush}"/></DataTrigger>
+                                                <DataTrigger Binding="{Binding LinkState}" Value="Interrupted"><Setter Property="Fill" Value="{DynamicResource WarnOnDarkBrush}"/></DataTrigger>
+                                                <DataTrigger Binding="{Binding LinkState}" Value="Connecting"><Setter Property="Fill" Value="{DynamicResource AccentOnDarkBrush}"/></DataTrigger>
+                                                <DataTrigger Binding="{Binding LinkState}" Value="Stopping"><Setter Property="Fill" Value="{DynamicResource AccentOnDarkBrush}"/></DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Ellipse.Style>
+                                </Ellipse>
+                                <TextBlock Text="{Binding LinkTitle}" FontSize="14" FontWeight="SemiBold"/>
+                                <TextBlock Text="{Binding ElapsedText}" FontFamily="{DynamicResource MonoFont}" Margin="10,1,0,0" VerticalAlignment="Center"/>
+                            </StackPanel>
+                            <TextBlock Text="{Binding PortSummary}" FontSize="12" Foreground="{DynamicResource GMutedBrush}" Margin="17,3,0,0" TextTrimming="CharacterEllipsis"/>
+                            <TextBlock Text="{Binding ProtocolSummary}" FontSize="12" Foreground="{DynamicResource GMutedBrush}" Margin="17,1,0,0"
+                                       TextTrimming="CharacterEllipsis" ToolTip="{Binding ProtocolSummary}"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 三段计数 -->
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="8,0,0,0">
+                        <StackPanel.Resources>
+                            <Style x:Key="StageLabel" TargetType="TextBlock">
+                                <Setter Property="FontSize" Value="12"/>
+                                <Setter Property="Foreground" Value="{DynamicResource GMutedBrush}"/>
+                                <Setter Property="VerticalAlignment" Value="Center"/>
                             </Style>
-                        </Ellipse.Style>
-                    </Ellipse>
-                    <TextBlock Text="{Binding ConnectionStatus}"/>
-                </StackPanel>
-            </StatusBarItem>
-            <Separator/>
-            <StatusBarItem>
-                <TextBlock>
-                    <Run Text="协议: "/>
-                    <Run Text="{Binding ProtocolInfo, Mode=OneWay}"/>
-                </TextBlock>
-            </StatusBarItem>
-            <Separator/>
-            <StatusBarItem>
-                <TextBlock>
-                    <Run Text="采样率: "/>
-                    <Run Text="{Binding SampleRateInfo, Mode=OneWay}"/>
-                </TextBlock>
-            </StatusBarItem>
-            <Separator/>
-            <StatusBarItem>
-                <TextBlock>
-                    <Run Text="数据点: "/>
-                    <Run Text="{Binding DataCount, Mode=OneWay}"/>
-                </TextBlock>
-            </StatusBarItem>
-            <StatusBarItem HorizontalAlignment="Right">
-                <StackPanel Orientation="Horizontal">
-                    <Button x:Name="UpdateBadgeButton" Click="ShowUpdate_Click"
-                            BorderThickness="0" Background="Transparent" Padding="8,0"
-                            Cursor="Hand"
-                            ToolTip="点击查看新版本详情"
-                            Visibility="{Binding HasUpdate, Converter={StaticResource BoolToVisibilityConverter}}">
-                        <TextBlock Foreground="#E67E22" FontWeight="Bold">
-                            <Run Text="● 有新版本 v"/><Run Text="{Binding AvailableUpdateVersion, Mode=OneWay}"/>
-                        </TextBlock>
-                    </Button>
-                    <Button x:Name="AboutButton" Click="ShowAbout_Click"
-                            BorderThickness="0" Background="Transparent" Padding="8,0"
-                            Cursor="Hand"
-                            ToolTip="点击查看详细版本信息">
-                        <TextBlock>
-                            <Run Text="版本 "/>
-                            <Run Text="{x:Static local:AppVersion.Display}" Foreground="#0078D4"/>
-                        </TextBlock>
-                    </Button>
-                    <Button Content="反馈与建议" Click="ShowFeedback_Click" BorderThickness="0"
-                            Background="Transparent" Padding="8,0" Cursor="Hand"/>
-                </StackPanel>
-            </StatusBarItem>
-        </StatusBar>
+                            <Style x:Key="StageValue" TargetType="TextBlock">
+                                <Setter Property="FontFamily" Value="{DynamicResource MonoFont}"/>
+                                <Setter Property="FontSize" Value="19"/>
+                                <Setter Property="FontWeight" Value="SemiBold"/>
+                                <Setter Property="Foreground" Value="White"/>
+                            </Style>
+                            <Style x:Key="StageSub" TargetType="TextBlock">
+                                <Setter Property="FontSize" Value="11.5"/>
+                                <Setter Property="Foreground" Value="{DynamicResource GMutedBrush}"/>
+                            </Style>
+                        </StackPanel.Resources>
 
-        <!-- 左侧导航栏 -->
-        <Border DockPanel.Dock="Left" Width="160" Background="#F0F0F0" BorderBrush="#D0D0D0" BorderThickness="0,0,1,0">
-            <StackPanel Margin="5">
-                <TextBlock Text="功能导航" FontWeight="Bold" FontSize="14" Margin="5,10,5,15" HorizontalAlignment="Center"/>
-
-                <!-- 录制状态卡片 -->
-                <Border Visibility="{Binding SessionListVM.IsRecording, Converter={StaticResource BoolToVisibilityConverter}}"
-                        Background="#FFEBEE" BorderBrush="#E57373" BorderThickness="1"
-                        CornerRadius="4" Padding="8" Margin="3,0,3,8">
-                    <StackPanel>
-                        <StackPanel Orientation="Horizontal" Margin="0,0,0,3">
-                            <Ellipse Width="8" Height="8" Fill="#E53935" Margin="0,0,5,0" VerticalAlignment="Center"/>
-                            <TextBlock Text="录制中" Foreground="#C62828" FontWeight="Bold" FontSize="11"/>
+                        <!-- 接收 -->
+                        <StackPanel Margin="10,0" MinWidth="120">
+                            <TextBlock Text="接收" Style="{StaticResource StageLabel}" Height="19"/>
+                            <TextBlock><Run Text="{Binding ReceivedBytesText, Mode=OneWay}" FontFamily="{DynamicResource MonoFont}" FontSize="19" FontWeight="SemiBold" Foreground="White"/><Run Text=" "/><Run Text="{Binding ReceivedBytesUnit, Mode=OneWay}" FontSize="11.5" Foreground="{DynamicResource GMutedBrush}"/></TextBlock>
+                            <TextBlock Text="{Binding ReceiveRateText}" Style="{StaticResource StageSub}" FontFamily="{DynamicResource MonoFont}"/>
                         </StackPanel>
-                        <TextBlock Text="{Binding ActiveSessionName}" Foreground="#B71C1C" FontSize="10" TextWrapping="Wrap"/>
-                        <TextBlock Foreground="#B71C1C" FontSize="10">
-                            <Run Text="{Binding DataCount, Mode=OneWay}"/>
-                            <Run Text=" 条"/>
-                        </TextBlock>
-                    </StackPanel>
-                </Border>
+                        <ContentControl ContentTemplate="{StaticResource StageArrow}" Margin="2,0"/>
 
-                <!-- 手动正交度采集卡片（蓝色） -->
-                <Border Visibility="{Binding ManualOrthoState.IsActive, Converter={StaticResource BoolToVisibilityConverter}}"
-                        Background="#E3F2FD" BorderBrush="#1976D2" BorderThickness="1"
-                        CornerRadius="4" Padding="8" Margin="3,0,3,8">
-                    <StackPanel>
-                        <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
-                            <Ellipse Width="8" Height="8" Fill="#1976D2" Margin="0,0,5,0" VerticalAlignment="Center"/>
-                            <TextBlock Text="手动正交度采集" Foreground="#0D47A1" FontWeight="Bold" FontSize="11"/>
+                        <!-- 解析 -->
+                        <StackPanel Margin="10,0" MinWidth="160">
+                            <StackPanel Orientation="Horizontal" Height="19">
+                                <TextBlock Text="解析" Style="{StaticResource StageLabel}"/>
+                                <Button Command="{Binding ShowRawFramesCommand}" Margin="8,0,0,0" Padding="6,0" MinHeight="17" Height="17"
+                                        Background="#4A3F1E" BorderThickness="0" ToolTip="查看原始报文中的解析失败与重新同步"
+                                        Visibility="{Binding ConnectionVM.ParseErrorCount, Converter={StaticResource NonZeroToVisibility}}">
+                                    <TextBlock FontSize="11" Foreground="{DynamicResource WarnOnDarkBrush}"><Run Text="异常 "/><Run Text="{Binding ConnectionVM.ParseErrorCount, Mode=OneWay, StringFormat=N0}"/></TextBlock>
+                                </Button>
+                            </StackPanel>
+                            <TextBlock><Run Text="{Binding ConnectionVM.ParsedReadingCount, Mode=OneWay, StringFormat=N0}" FontFamily="{DynamicResource MonoFont}" FontSize="19" FontWeight="SemiBold" Foreground="White"/><Run Text=" 帧" FontSize="11.5" Foreground="{DynamicResource GMutedBrush}"/></TextBlock>
+                            <TextBlock Style="{StaticResource StageSub}"><Run Text="实测 "/><Run Text="{Binding MeasuredRateText, Mode=OneWay}" FontFamily="{DynamicResource MonoFont}" Foreground="{DynamicResource GInkBrush}"/><Run Text="　标称 "/><Run Text="{Binding NominalRateText, Mode=OneWay}" FontFamily="{DynamicResource MonoFont}"/></TextBlock>
                         </StackPanel>
-                        <TextBlock Foreground="#0D47A1" FontSize="10">
-                            <Run Text="已保存 "/>
-                            <Run Text="{Binding ManualOrthoState.PointsRecorded, Mode=OneWay}"/>
-                            <Run Text=" / 48 点"/>
-                        </TextBlock>
-                        <TextBlock Foreground="#0D47A1" FontSize="9" TextWrapping="Wrap"
-                                   Text="{Binding ManualOrthoState.RawFilePath, Mode=OneWay}"
-                                   ToolTip="{Binding ManualOrthoState.RawFilePath, Mode=OneWay}"/>
-                        <Button Content="● 记录当前点" Margin="0,4,0,2" Padding="6,4"
-                                Background="#1976D2" Foreground="White" FontWeight="Bold"
-                                IsEnabled="{Binding ManualOrthoState.HasEnoughBuffer}"
-                                Click="RecordOrthoPoint_Click"/>
-                        <TextBlock Text="{Binding ManualOrthoState.StatusMessage, Mode=OneWay}"
-                                   Foreground="#0D47A1" FontSize="9" TextWrapping="Wrap" Margin="0,3,0,0"/>
-                    </StackPanel>
-                </Border>
+                        <ContentControl ContentTemplate="{StaticResource StageArrow}" Margin="2,0"/>
 
-                <Button Content="采集工作台" Margin="3" Padding="8,6" HorizontalContentAlignment="Left"
-                        Command="{Binding NavigateToRealtimeChartCommand}"/>
-                <Button Content="连接与协议" Margin="3" Padding="8,6" HorizontalContentAlignment="Left"
-                        Command="{Binding NavigateToConnectionCommand}"/>
-                <Button Content="设备命令" Margin="3" Padding="8,6" HorizontalContentAlignment="Left"
-                        Command="{Binding NavigateToDeviceCommandCommand}"/>
-                <Button Content="数据管理" Margin="3" Padding="8,6" HorizontalContentAlignment="Left"
-                        Command="{Binding NavigateToSessionListCommand}"/>
-                <Button Content="历史回放" Margin="3" Padding="8,6" HorizontalContentAlignment="Left"
-                        Command="{Binding NavigateToHistoryPlaybackCommand}"/>
-                <TextBlock Text="扩展功能 · 按需使用" Margin="10,20,3,6" Foreground="#617086" FontSize="11"/>
-                <Button Content="正交度校正" Margin="3" Padding="8,6" HorizontalContentAlignment="Left"
-                        Command="{Binding NavigateToOrthogonalityCalibrationCommand}"/>
-                <Button Content="传感器校准" Margin="3" Padding="8,6" HorizontalContentAlignment="Left"
-                        Command="{Binding NavigateToSensorCalibrationCommand}"/>
-                <Button Content="系统设置" Margin="3" Padding="8,6" HorizontalContentAlignment="Left"
-                        Command="{Binding NavigateToSettingsCommand}"/>
+                        <!-- 保存 -->
+                        <StackPanel Margin="10,0" MinWidth="170">
+                            <StackPanel Orientation="Horizontal" Height="19">
+                                <TextBlock Text="保存" Style="{StaticResource StageLabel}"/>
+                                <Border Margin="8,0,0,0" Padding="6,0" CornerRadius="3" VerticalAlignment="Center">
+                                    <Border.Style>
+                                        <Style TargetType="Border">
+                                            <Setter Property="Background" Value="#2E3D38"/>
+                                            <Setter Property="TextElement.Foreground" Value="{DynamicResource GMutedBrush}"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding SessionListVM.IsRecording}" Value="True">
+                                                    <Setter Property="Background" Value="#1F3F2E"/>
+                                                    <Setter Property="TextElement.Foreground" Value="{DynamicResource OkOnDarkBrush}"/>
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding HasStorageError}" Value="True">
+                                                    <Setter Property="Background" Value="#4A2420"/>
+                                                    <Setter Property="TextElement.Foreground" Value="{DynamicResource ErrOnDarkBrush}"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Style>
+                                    <TextBlock Text="{Binding SaveStateText}" FontSize="11"/>
+                                </Border>
+                            </StackPanel>
+                            <TextBlock><Run Text="{Binding SessionListVM.SavedReadingCount, Mode=OneWay, StringFormat=N0}" FontFamily="{DynamicResource MonoFont}" FontSize="19" FontWeight="SemiBold" Foreground="White"/><Run Text=" 已提交" FontSize="11.5" Foreground="{DynamicResource GMutedBrush}"/></TextBlock>
+                            <TextBlock Style="{StaticResource StageSub}" TextTrimming="CharacterEllipsis" MaxWidth="260"><Run Text="待写 "/><Run Text="{Binding SessionListVM.PendingReadingCount, Mode=OneWay, StringFormat=N0}" FontFamily="{DynamicResource MonoFont}" Foreground="{DynamicResource GInkBrush}"/><Run Text="　"/><Run Text="{Binding SaveSubText, Mode=OneWay}"/></TextBlock>
+                        </StackPanel>
+                    </StackPanel>
+                </DockPanel>
+            </Border>
+
+            <!-- ===== 保存失败横幅：不能清空待写批次后继续显示成功 ===== -->
+            <Border Grid.Column="1" Grid.Row="1" Background="{DynamicResource ErrSoftBrush}" BorderBrush="#EFC2BC" BorderThickness="0,0,0,1"
+                    Padding="16,8" Visibility="{Binding HasStorageError, Converter={StaticResource BoolToVisibilityConverter}}">
+                <DockPanel>
+                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Button Content="重试写入" Style="{StaticResource PrimaryButton}" Command="{Binding SessionListVM.RetryStorageCommand}" Margin="8,0,0,0"/>
+                        <Button Content="打开日志目录" Command="{Binding OpenLogDirectoryCommand}" Margin="8,0,0,0"/>
+                    </StackPanel>
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock Foreground="{DynamicResource ErrBrush}" FontWeight="SemiBold">
+                            <Run Text="保存失败，"/><Run Text="{Binding SessionListVM.PendingReadingCount, Mode=OneWay, StringFormat=N0}"/><Run Text=" 条读数仍在内存中等待写入。采集和显示继续进行。"/>
+                        </TextBlock>
+                        <TextBlock Text="{Binding SessionListVM.StorageError}" Foreground="{DynamicResource ErrBrush}" FontSize="12" TextWrapping="Wrap" Margin="0,2,0,0"/>
+                    </StackPanel>
+                </DockPanel>
+            </Border>
+
+            <!-- ===== 页面 ===== -->
+            <ContentControl Grid.Column="1" Grid.Row="2" Content="{Binding CurrentView}" Focusable="False">
+                <ContentControl.Resources>
+                    <DataTemplate DataType="{x:Type vm:MainViewModel}">
+                        <views:AcquisitionWorkspaceView/>
+                    </DataTemplate>
+                    <DataTemplate DataType="{x:Type vm:ConnectionViewModel}">
+                        <views:ConnectionView/>
+                    </DataTemplate>
+                    <DataTemplate DataType="{x:Type vm:DataPageViewModel}">
+                        <views:DataPageView/>
+                    </DataTemplate>
+                    <DataTemplate DataType="{x:Type vm:AnalysisViewModel}">
+                        <views:AnalysisView/>
+                    </DataTemplate>
+                    <DataTemplate DataType="{x:Type vm:CalibrationPage}">
+                        <views:CalibrationPageView/>
+                    </DataTemplate>
+                    <DataTemplate DataType="{x:Type vm:SettingsViewModel}">
+                        <views:SettingsView/>
+                    </DataTemplate>
+                    <DataTemplate DataType="{x:Type vm:DeviceCommandViewModel}">
+                        <views:DeviceCommandView/>
+                    </DataTemplate>
+                </ContentControl.Resources>
+            </ContentControl>
+        </Grid>
+
+        <!-- 初始化加载遮罩 -->
+        <Grid Visibility="{Binding IsInitialized, Converter={StaticResource InverseBoolToVisibilityConverter}}"
+              Background="#88000000" Panel.ZIndex="100">
+            <TextBlock Text="正在初始化…" Foreground="White" FontSize="16" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+        </Grid>
+        <!-- 退出时等待保存的遮罩 -->
+        <Grid x:Name="ExitProgressOverlay" Visibility="Collapsed" Background="{DynamicResource PanelBrush}" Opacity="0.96" Panel.ZIndex="101">
+            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="420" Margin="24">
+                <TextBlock Text="正在保存，请稍候…" FontSize="18" FontWeight="SemiBold" HorizontalAlignment="Center"/>
+                <TextBlock Text="正在结束采集并保存数据和设置，完成后将关闭程序。"
+                           TextWrapping="Wrap" TextAlignment="Center" Margin="0,12,0,12"/>
+                <ProgressBar IsIndeterminate="True" Height="6" Foreground="{DynamicResource AccentBrush}"/>
             </StackPanel>
-        </Border>
-
-        <!-- 主内容区 -->
-        <ContentControl Content="{Binding CurrentView}">
-            <ContentControl.Resources>
-                <DataTemplate DataType="{x:Type vm:MainViewModel}">
-                    <views:AcquisitionWorkspaceView/>
-                </DataTemplate>
-                <DataTemplate DataType="{x:Type vm:ConnectionViewModel}">
-                    <views:ConnectionView/>
-                </DataTemplate>
-                <DataTemplate DataType="{x:Type vm:RealtimeChartViewModel}">
-                    <views:RealtimeChartView/>
-                </DataTemplate>
-                <DataTemplate DataType="{x:Type vm:SessionListViewModel}">
-                    <views:SessionListView/>
-                </DataTemplate>
-                <DataTemplate DataType="{x:Type vm:HistoryPlaybackViewModel}">
-                    <views:HistoryPlaybackView/>
-                </DataTemplate>
-                <DataTemplate DataType="{x:Type vm:OrthogonalityCalibrationViewModel}">
-                    <views:OrthogonalityCalibrationView/>
-                </DataTemplate>
-                <DataTemplate DataType="{x:Type vm:SensorCalibrationViewModel}">
-                    <views:SensorCalibrationView/>
-                </DataTemplate>
-                <DataTemplate DataType="{x:Type vm:SettingsViewModel}">
-                    <views:SettingsView/>
-                </DataTemplate>
-                <DataTemplate DataType="{x:Type vm:DeviceCommandViewModel}">
-                    <views:DeviceCommandView/>
-                </DataTemplate>
-            </ContentControl.Resources>
-        </ContentControl>
-    </DockPanel>
-
-    <!-- 初始化加载遮罩 -->
-    <Grid Visibility="{Binding IsInitialized, Converter={StaticResource InverseBoolToVisibilityConverter}}"
-          Background="#88000000" Panel.ZIndex="100">
-        <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
-            <TextBlock Text="正在初始化..." Foreground="White" FontSize="16" HorizontalAlignment="Center"/>
-        </StackPanel>
-    </Grid>
-    <Grid x:Name="ExitProgressOverlay" Visibility="Collapsed" Background="#EFFFFFFF" Panel.ZIndex="101">
-        <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="420" Margin="24">
-            <TextBlock Text="正在保存，请稍候…" FontSize="18" FontWeight="SemiBold" HorizontalAlignment="Center"/>
-            <TextBlock Text="正在结束采集并保存数据和设置，完成后将关闭程序。"
-                       TextWrapping="Wrap" TextAlignment="Center" Margin="0,12,0,12"/>
-            <ProgressBar IsIndeterminate="True" Height="6"/>
-        </StackPanel>
-    </Grid>
+        </Grid>
     </Grid>
 </Window>

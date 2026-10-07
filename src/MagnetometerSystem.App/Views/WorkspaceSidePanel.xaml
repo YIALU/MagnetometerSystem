@@ -1,0 +1,374 @@
+<UserControl x:Class="MagnetometerSystem.App.Views.WorkspaceSidePanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:core="clr-namespace:MagnetometerSystem.Core.Models;assembly=MagnetometerSystem.Core"
+             xmlns:vm="clr-namespace:MagnetometerSystem.App.ViewModels">
+    <!-- 工作台右侧面板。DataContext = MainViewModel；图表相关内容使用 RealtimeChartVM。 -->
+    <UserControl.Resources>
+        <Style x:Key="SideScroll" TargetType="ScrollViewer">
+            <Setter Property="VerticalScrollBarVisibility" Value="Auto"/>
+            <Setter Property="HorizontalScrollBarVisibility" Value="Disabled"/>
+            <Setter Property="Padding" Value="0,0,0,12"/>
+        </Style>
+        <Style x:Key="SideSection" TargetType="StackPanel">
+            <Setter Property="Margin" Value="14,12,14,0"/>
+        </Style>
+        <Style x:Key="StatCell" TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="{DynamicResource MonoFont}"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="HorizontalAlignment" Value="Right"/>
+        </Style>
+    </UserControl.Resources>
+
+    <DockPanel>
+        <!-- 页签 -->
+        <Border DockPanel.Dock="Top" BorderBrush="{DynamicResource Line2Brush}" BorderThickness="0,0,0,1" Padding="14,0,6,0">
+            <DockPanel>
+                <Button DockPanel.Dock="Right" Content="收起" Style="{StaticResource SmallGhostButton}" Command="{Binding WorkspaceLayout.ToggleSidePanelCommand}"
+                        VerticalAlignment="Center" ToolTip="收起右侧面板，曲线占满宽度"/>
+                <StackPanel Orientation="Horizontal">
+                    <RadioButton Style="{StaticResource TabRadio}" Content="通道" Margin="0,0,14,0"
+                                 IsChecked="{Binding WorkspaceLayout.SideTab, Converter={StaticResource ValueEquals}, ConverterParameter=0}"/>
+                    <RadioButton Style="{StaticResource TabRadio}" Content="统计" Margin="0,0,14,0"
+                                 IsChecked="{Binding WorkspaceLayout.SideTab, Converter={StaticResource ValueEquals}, ConverterParameter=1}"/>
+                    <RadioButton Style="{StaticResource TabRadio}" Content="区间" Margin="0,0,14,0"
+                                 IsChecked="{Binding WorkspaceLayout.SideTab, Converter={StaticResource ValueEquals}, ConverterParameter=2}"/>
+                    <RadioButton Style="{StaticResource TabRadio}" Content="滤波" Margin="0,0,14,0"
+                                 IsChecked="{Binding WorkspaceLayout.SideTab, Converter={StaticResource ValueEquals}, ConverterParameter=3}"/>
+                    <RadioButton Style="{StaticResource TabRadio}" Content="校正" Margin="0,0,14,0"
+                                 IsChecked="{Binding WorkspaceLayout.SideTab, Converter={StaticResource ValueEquals}, ConverterParameter=4}"/>
+                </StackPanel>
+            </DockPanel>
+        </Border>
+
+        <Grid>
+            <!-- ===== 通道 ===== -->
+            <ScrollViewer Style="{StaticResource SideScroll}" DataContext="{Binding RealtimeChartVM}"
+                          Visibility="{Binding DataContext.WorkspaceLayout.SideTab, RelativeSource={RelativeSource AncestorType=UserControl}, Converter={StaticResource DockTabVisible}, ConverterParameter=0}">
+                <StackPanel>
+                    <DockPanel Margin="14,12,14,6">
+                        <TextBlock Text="{Binding ChannelConfigs.Count, StringFormat='协议通道 {0}'}" Style="{StaticResource SectionTitle}" Margin="0"/>
+                    </DockPanel>
+                    <TextBlock Style="{StaticResource Hint}" Margin="14,0,14,8"
+                               Text="名称、单位和数量来自当前协议。勾选控制是否绘制，不影响保存。"
+                               Visibility="{Binding ChannelConfigs.Count, Converter={StaticResource NonZeroToVisibility}}"/>
+                    <TextBlock Style="{StaticResource Hint}" Margin="14,0,14,8"
+                               Text="开始采集后按协议列出通道。"
+                               Visibility="{Binding ChannelConfigs.Count, Converter={StaticResource ZeroToVisible}}"/>
+
+                    <ItemsControl ItemsSource="{Binding ChannelConfigs}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate DataType="{x:Type core:ChannelDisplayConfig}">
+                                <Border BorderBrush="{DynamicResource Line2Brush}" BorderThickness="0,1,0,0">
+                                    <StackPanel>
+                                        <DockPanel Margin="10,0,6,0" Height="38">
+                                            <CheckBox DockPanel.Dock="Left" IsChecked="{Binding Visible}" VerticalAlignment="Center" ToolTip="在曲线中显示"/>
+                                            <Border DockPanel.Dock="Left" Width="10" Height="10" CornerRadius="2" Margin="8,0,8,0" VerticalAlignment="Center"
+                                                    Background="{Binding ColorHex, Converter={StaticResource HexToBrush}}"/>
+                                            <ToggleButton x:Name="Expand" DockPanel.Dock="Right" Width="24" Height="24" Background="Transparent" BorderThickness="0"
+                                                          Cursor="Hand" ToolTip="颜色、显示偏移、顺序" VerticalAlignment="Center">
+                                                <Path Data="M2,4 L6,8 L10,4" Stroke="{DynamicResource Ink2Brush}" StrokeThickness="1.4" Width="12" Height="12"/>
+                                            </ToggleButton>
+                                            <!-- LatestValue 已带单位 -->
+                                            <TextBlock DockPanel.Dock="Right" Text="{Binding LatestValue}" FontFamily="{DynamicResource MonoFont}" FontSize="12" Margin="4,0,2,0"
+                                                       VerticalAlignment="Center" HorizontalAlignment="Right" Foreground="{DynamicResource Ink2Brush}" MaxWidth="180"
+                                                       TextTrimming="CharacterEllipsis" ToolTip="最新原始值（不含显示偏移）"/>
+                                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                                        </DockPanel>
+                                        <StackPanel Margin="38,0,12,12" Visibility="{Binding IsChecked, ElementName=Expand, Converter={StaticResource BoolToVis}}">
+                                            <TextBlock Text="颜色" Style="{StaticResource FieldLabel}"/>
+                                            <ListBox ItemsSource="{x:Static vm:RealtimeChartViewModel.ChannelSwatches}" SelectedItem="{Binding ColorHex}"
+                                                     ItemContainerStyle="{StaticResource SwatchItem}" BorderThickness="0" Background="Transparent" Margin="0,0,0,6"
+                                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                                                <ListBox.ItemsPanel>
+                                                    <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
+                                                </ListBox.ItemsPanel>
+                                            </ListBox>
+                                            <TextBlock Text="显示偏移" Style="{StaticResource FieldLabel}"/>
+                                            <DockPanel>
+                                                <Button DockPanel.Dock="Right" Content="清除" Style="{StaticResource SmallGhostButton}"
+                                                        Command="{Binding DataContext.ClearChannelOffsetCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                        CommandParameter="{Binding ChannelIndex}"/>
+                                                <Button DockPanel.Dock="Right" Content="按均值归零" Style="{StaticResource SmallButton}" Margin="6,0,0,0"
+                                                        ToolTip="把显示偏移设为当前缓冲均值的相反数，使曲线移到 0 附近"
+                                                        Command="{Binding DataContext.AutoOffsetChannelCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                        CommandParameter="{Binding ChannelIndex}"/>
+                                                <TextBlock DockPanel.Dock="Right" Text="{Binding Unit}" Foreground="{DynamicResource MutedBrush}" VerticalAlignment="Center" Margin="6,0,0,0"/>
+                                                <TextBox Style="{StaticResource MonoTextBox}" Text="{Binding DisplayOffset, UpdateSourceTrigger=LostFocus}" TextAlignment="Right"/>
+                                            </DockPanel>
+                                            <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                                <Button Content="上移" Style="{StaticResource SmallButton}" Margin="0,0,6,0"
+                                                        Command="{Binding DataContext.MoveChannelUpCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}" CommandParameter="{Binding}"/>
+                                                <Button Content="下移" Style="{StaticResource SmallButton}"
+                                                        Command="{Binding DataContext.MoveChannelDownCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}" CommandParameter="{Binding}"/>
+                                                <TextBlock Style="{StaticResource Hint}" Text="只改变显示顺序" VerticalAlignment="Center" Margin="10,0,0,0"/>
+                                            </StackPanel>
+                                        </StackPanel>
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <!-- 计算通道 -->
+                    <Border BorderBrush="{DynamicResource Line2Brush}" BorderThickness="0,1,0,0" Padding="14,14,14,0">
+                        <StackPanel>
+                            <TextBlock Text="{Binding ComputedChannels.Count, StringFormat='计算通道 {0}'}" Style="{StaticResource SectionTitle}"/>
+                            <ItemsControl ItemsSource="{Binding ComputedChannels}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate DataType="{x:Type core:ComputedChannelDefinition}">
+                                        <Border BorderBrush="{DynamicResource Line2Brush}" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,0,0,8" Background="{DynamicResource PanelBrush}">
+                                            <StackPanel>
+                                                <DockPanel>
+                                                    <CheckBox DockPanel.Dock="Left" IsChecked="{Binding Enabled}" VerticalAlignment="Center" ToolTip="在曲线中显示"/>
+                                                    <Border DockPanel.Dock="Left" Width="10" Height="10" CornerRadius="2" Margin="8,0" VerticalAlignment="Center"
+                                                            Background="{Binding ColorHex, Converter={StaticResource HexToBrush}}"/>
+                                                    <Button DockPanel.Dock="Right" Content="删除" Style="{StaticResource SmallGhostButton}" Foreground="{DynamicResource ErrBrush}"
+                                                            Command="{Binding DataContext.RemoveComputedChannelCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                            CommandParameter="{Binding}"/>
+                                                    <TextBox DockPanel.Dock="Right" Width="56" Text="{Binding Unit, UpdateSourceTrigger=LostFocus}" ToolTip="按公式含义填写单位；修改标签不会换算数值，只决定使用哪条纵轴" Margin="6,0,0,0"/>
+                                                    <TextBox Text="{Binding Name, UpdateSourceTrigger=LostFocus}" FontWeight="SemiBold"/>
+                                                </DockPanel>
+                                                <TextBlock Text="公式" Style="{StaticResource FieldLabel}" Margin="0,8,0,4"/>
+                                                <TextBox Style="{StaticResource MonoTextBox}" FontSize="12" Text="{Binding Formula, UpdateSourceTrigger=LostFocus}"
+                                                         ToolTip="变量 CH0、CH1…（按协议通道序号）；运算 + - * / sqrt abs pow"/>
+                                                <TextBlock Text="显示偏移" Style="{StaticResource FieldLabel}" Margin="0,8,0,4"/>
+                                                <DockPanel>
+                                                    <Button DockPanel.Dock="Right" Content="按均值归零" Style="{StaticResource SmallButton}" Margin="6,0,0,0"
+                                                            Command="{Binding DataContext.AutoOffsetComputedChannelCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                            CommandParameter="{Binding}"/>
+                                                    <TextBox Style="{StaticResource MonoTextBox}" Text="{Binding DisplayOffset, UpdateSourceTrigger=LostFocus}" TextAlignment="Right"/>
+                                                </DockPanel>
+                                                <ListBox ItemsSource="{x:Static vm:RealtimeChartViewModel.ChannelSwatches}" SelectedItem="{Binding ColorHex}" Margin="0,8,0,0"
+                                                         ItemContainerStyle="{StaticResource SwatchItem}" BorderThickness="0" Background="Transparent"
+                                                         ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                                                    <ListBox.ItemsPanel>
+                                                        <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
+                                                    </ListBox.ItemsPanel>
+                                                </ListBox>
+                                            </StackPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+
+                            <WrapPanel>
+                                <Button Content="+ 总场" Style="{StaticResource SmallButton}" Margin="0,0,6,6" Command="{Binding StartAddTotalFieldCommand}"
+                                        ToolTip="选择三个相同磁场单位的通道，计算 sqrt(a²+b²+c²)"/>
+                                <Button Content="+ 梯度" Style="{StaticResource SmallButton}" Margin="0,0,6,6" Command="{Binding StartAddGradientCommand}"
+                                        ToolTip="两个来源之差除以基线距离"/>
+                                <Button Content="+ 公式" Style="{StaticResource SmallButton}" Margin="0,0,6,6" Command="{Binding AddComputedChannelCommand}"/>
+                            </WrapPanel>
+
+                            <!-- 总场向导 -->
+                            <Border Style="{StaticResource Callout}" Margin="0,4,0,0" Visibility="{Binding IsAddingTotalField, Converter={StaticResource BoolToVis}}">
+                                <StackPanel>
+                                    <TextBlock Text="总场 = sqrt(A² + B² + C²)" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="22"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions><RowDefinition/><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
+                                        <TextBlock Text="A" VerticalAlignment="Center"/>
+                                        <ComboBox Grid.Column="1" ItemsSource="{Binding WizardRawSources}" SelectedIndex="{Binding WizardSourceA}" DisplayMemberPath="Label" Margin="0,0,0,4"/>
+                                        <TextBlock Grid.Row="1" Text="B" VerticalAlignment="Center"/>
+                                        <ComboBox Grid.Row="1" Grid.Column="1" ItemsSource="{Binding WizardRawSources}" SelectedIndex="{Binding WizardSourceB}" DisplayMemberPath="Label" Margin="0,0,0,4"/>
+                                        <TextBlock Grid.Row="2" Text="C" VerticalAlignment="Center"/>
+                                        <ComboBox Grid.Row="2" Grid.Column="1" ItemsSource="{Binding WizardRawSources}" SelectedIndex="{Binding WizardSourceC}" DisplayMemberPath="Label"/>
+                                    </Grid>
+                                    <TextBlock Text="{Binding ComputationError}" Foreground="{DynamicResource ErrBrush}" TextWrapping="Wrap" Margin="0,6,0,0"
+                                               Visibility="{Binding ComputationError, Converter={StaticResource NullToCollapsed}}"/>
+                                    <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                        <Button Content="添加" Style="{StaticResource PrimaryButton}" Command="{Binding ConfirmAddTotalFieldCommand}" Margin="0,0,6,0"/>
+                                        <Button Content="取消" Command="{Binding CancelAddWizardCommand}"/>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- 梯度向导 -->
+                            <Border Style="{StaticResource Callout}" Margin="0,4,0,0" Visibility="{Binding IsAddingGradient, Converter={StaticResource BoolToVis}}">
+                                <StackPanel>
+                                    <TextBlock Text="梯度 = (A − B) / 基线距离" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="22"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
+                                        <TextBlock Text="A" VerticalAlignment="Center"/>
+                                        <ComboBox Grid.Column="1" ItemsSource="{Binding WizardGradientSources}" SelectedIndex="{Binding WizardSourceA}" DisplayMemberPath="Label" Margin="0,0,0,4"/>
+                                        <TextBlock Grid.Row="1" Text="B" VerticalAlignment="Center"/>
+                                        <ComboBox Grid.Row="1" Grid.Column="1" ItemsSource="{Binding WizardGradientSources}" SelectedIndex="{Binding WizardSourceB}" DisplayMemberPath="Label"/>
+                                    </Grid>
+                                    <DockPanel Margin="0,6,0,0">
+                                        <TextBlock DockPanel.Dock="Right" Text="m" VerticalAlignment="Center" Margin="6,0,0,0"/>
+                                        <TextBlock DockPanel.Dock="Left" Text="基线距离" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                        <TextBox Style="{StaticResource MonoTextBox}" Text="{Binding GradientBaselineDistance, UpdateSourceTrigger=PropertyChanged}"/>
+                                    </DockPanel>
+                                    <TextBlock Text="{Binding ComputationError}" Foreground="{DynamicResource ErrBrush}" TextWrapping="Wrap" Margin="0,6,0,0"
+                                               Visibility="{Binding ComputationError, Converter={StaticResource NullToCollapsed}}"/>
+                                    <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                        <Button Content="添加" Style="{StaticResource PrimaryButton}" Command="{Binding ConfirmAddGradientCommand}" Margin="0,0,6,0"/>
+                                        <Button Content="取消" Command="{Binding CancelAddWizardCommand}"/>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
+                            <TextBlock Style="{StaticResource Hint}" Margin="0,6,0,0"
+                                       Text="显示偏移只移动曲线位置；保存、统计与区间分析都使用原始读数。"/>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
+
+            <!-- ===== 统计 ===== -->
+            <ScrollViewer Style="{StaticResource SideScroll}" DataContext="{Binding RealtimeChartVM}"
+                          Visibility="{Binding DataContext.WorkspaceLayout.SideTab, RelativeSource={RelativeSource AncestorType=UserControl}, Converter={StaticResource DockTabVisible}, ConverterParameter=1}">
+                <StackPanel Style="{StaticResource SideSection}">
+                    <DockPanel Margin="0,0,0,8">
+                        <TextBlock DockPanel.Dock="Right" Text="s" VerticalAlignment="Center" Margin="6,0,0,0" Foreground="{DynamicResource MutedBrush}"/>
+                        <TextBox DockPanel.Dock="Right" Width="64" Style="{StaticResource MonoTextBox}" TextAlignment="Right"
+                                 Text="{Binding StatisticsConfig.WindowSeconds, UpdateSourceTrigger=LostFocus}" ToolTip="0 表示使用曲线时间窗口"/>
+                        <TextBlock Text="最近窗口" VerticalAlignment="Center"/>
+                    </DockPanel>
+                    <WrapPanel Margin="0,0,0,10">
+                        <CheckBox Content="均值" IsChecked="{Binding StatisticsConfig.ShowMean}" Margin="0,0,12,6"/>
+                        <CheckBox Content="标准差" IsChecked="{Binding StatisticsConfig.ShowStdDev}" Margin="0,0,12,6"/>
+                        <CheckBox Content="峰峰值" IsChecked="{Binding StatisticsConfig.ShowPeakToPeak}" Margin="0,0,12,6"/>
+                        <CheckBox Content="RMS" IsChecked="{Binding StatisticsConfig.ShowRms}" Margin="0,0,12,6"/>
+                        <CheckBox Content="最小" IsChecked="{Binding StatisticsConfig.ShowMin}" Margin="0,0,12,6"/>
+                        <CheckBox Content="最大" IsChecked="{Binding StatisticsConfig.ShowMax}" Margin="0,0,12,6"/>
+                    </WrapPanel>
+
+                    <ItemsControl ItemsSource="{Binding StatisticsRows}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate DataType="{x:Type vm:LiveStatisticsRow}">
+                                <Border BorderBrush="{DynamicResource Line2Brush}" BorderThickness="0,0,0,1" Padding="0,8">
+                                    <StackPanel>
+                                        <DockPanel Margin="0,0,0,4">
+                                            <TextBlock DockPanel.Dock="Right" Style="{StaticResource Hint}" Text="{Binding Count, StringFormat={}{0:N0} 点}"/>
+                                            <TextBlock FontWeight="SemiBold"><Run Text="{Binding Name, Mode=OneWay}"/><Run Text="  "/><Run Text="{Binding Unit, Mode=OneWay}" FontWeight="Normal" Foreground="{DynamicResource MutedBrush}"/></TextBlock>
+                                        </DockPanel>
+                                        <UniformGrid Columns="2">
+                                            <DockPanel Margin="0,0,12,2" Visibility="{Binding DataContext.StatisticsConfig.ShowMean, RelativeSource={RelativeSource AncestorType=ItemsControl}, Converter={StaticResource BoolToVis}}">
+                                                <TextBlock Text="均值" Style="{StaticResource Hint}"/><TextBlock Style="{StaticResource StatCell}" Text="{Binding Stats.Mean, StringFormat={}{0:F3}}"/>
+                                            </DockPanel>
+                                            <DockPanel Margin="0,0,12,2" Visibility="{Binding DataContext.StatisticsConfig.ShowStdDev, RelativeSource={RelativeSource AncestorType=ItemsControl}, Converter={StaticResource BoolToVis}}">
+                                                <TextBlock Text="标准差" Style="{StaticResource Hint}"/><TextBlock Style="{StaticResource StatCell}" Text="{Binding Stats.StdDev, StringFormat={}{0:F3}}"/>
+                                            </DockPanel>
+                                            <DockPanel Margin="0,0,12,2" Visibility="{Binding DataContext.StatisticsConfig.ShowPeakToPeak, RelativeSource={RelativeSource AncestorType=ItemsControl}, Converter={StaticResource BoolToVis}}">
+                                                <TextBlock Text="峰峰值" Style="{StaticResource Hint}"/><TextBlock Style="{StaticResource StatCell}" Text="{Binding Stats.PeakToPeak, StringFormat={}{0:F3}}"/>
+                                            </DockPanel>
+                                            <DockPanel Margin="0,0,12,2" Visibility="{Binding DataContext.StatisticsConfig.ShowRms, RelativeSource={RelativeSource AncestorType=ItemsControl}, Converter={StaticResource BoolToVis}}">
+                                                <TextBlock Text="RMS" Style="{StaticResource Hint}"/><TextBlock Style="{StaticResource StatCell}" Text="{Binding Stats.Rms, StringFormat={}{0:F3}}"/>
+                                            </DockPanel>
+                                            <DockPanel Margin="0,0,12,2" Visibility="{Binding DataContext.StatisticsConfig.ShowMin, RelativeSource={RelativeSource AncestorType=ItemsControl}, Converter={StaticResource BoolToVis}}">
+                                                <TextBlock Text="最小" Style="{StaticResource Hint}"/><TextBlock Style="{StaticResource StatCell}" Text="{Binding Stats.Min, StringFormat={}{0:F3}}"/>
+                                            </DockPanel>
+                                            <DockPanel Margin="0,0,12,2" Visibility="{Binding DataContext.StatisticsConfig.ShowMax, RelativeSource={RelativeSource AncestorType=ItemsControl}, Converter={StaticResource BoolToVis}}">
+                                                <TextBlock Text="最大" Style="{StaticResource Hint}"/><TextBlock Style="{StaticResource StatCell}" Text="{Binding Stats.Max, StringFormat={}{0:F3}}"/>
+                                            </DockPanel>
+                                        </UniformGrid>
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <TextBlock Style="{StaticResource Hint}" Text="采集开始后显示。" Visibility="{Binding StatisticsRows.Count, Converter={StaticResource ZeroToVisible}}"/>
+                    <TextBlock Style="{StaticResource Hint}" Margin="0,10,0,0"
+                               Text="统计使用原始读数，不含显示偏移和滤波；暂停显示时统计也随曲线冻结。长时段的噪声与漂移请用「分析」页。"/>
+                </StackPanel>
+            </ScrollViewer>
+
+            <!-- ===== 区间 ===== -->
+            <ScrollViewer Style="{StaticResource SideScroll}" DataContext="{Binding RealtimeChartVM}"
+                          Visibility="{Binding DataContext.WorkspaceLayout.SideTab, RelativeSource={RelativeSource AncestorType=UserControl}, Converter={StaticResource DockTabVisible}, ConverterParameter=2}">
+                <StackPanel Style="{StaticResource SideSection}">
+                    <TextBlock Style="{StaticResource Hint}" Margin="0,0,0,10"
+                               Text="在曲线上按住左键拖动即可选取一段，也可以直接填写起止秒数（采集开始后的秒数）。计算原始读数的统计量，并可导出这一段数据。"/>
+                    <Grid Margin="0,0,0,10">
+                        <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="10"/><ColumnDefinition/></Grid.ColumnDefinitions>
+                        <StackPanel>
+                            <TextBlock Text="起点 (s)" Style="{StaticResource FieldLabel}"/>
+                            <TextBox Style="{StaticResource MonoTextBox}" Text="{Binding IntervalStartInput, UpdateSourceTrigger=PropertyChanged}"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="2">
+                            <TextBlock Text="终点 (s)" Style="{StaticResource FieldLabel}"/>
+                            <TextBox Style="{StaticResource MonoTextBox}" Text="{Binding IntervalEndInput, UpdateSourceTrigger=PropertyChanged}"/>
+                        </StackPanel>
+                    </Grid>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                        <Button Content="计算" Style="{StaticResource PrimaryButton}" Command="{Binding ApplyIntervalSelectionCommand}" Margin="0,0,6,0"/>
+                        <Button Content="导出这一段" Command="{Binding ExportIntervalCommand}" Margin="0,0,6,0"/>
+                        <Button Content="清除" Style="{StaticResource GhostButton}" Command="{Binding ClearIntervalSelectionCommand}"/>
+                    </StackPanel>
+                    <StackPanel Visibility="{Binding IntervalStatistics, Converter={StaticResource NullToCollapsed}}">
+                        <TextBlock Margin="0,0,0,6" Foreground="{DynamicResource Ink2Brush}">
+                            <Run Text="{Binding IntervalStatistics.SampleCount, Mode=OneWay, StringFormat={}{0:N0} 点}"/><Run Text="，时长 "/><Run Text="{Binding CurrentInterval.Duration, Mode=OneWay, StringFormat={}{0:0.###} s}"/>
+                        </TextBlock>
+                        <ItemsControl ItemsSource="{Binding IntervalStatistics.ChannelStats}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate DataType="{x:Type core:StatisticsResultItem}">
+                                    <Border BorderBrush="{DynamicResource Line2Brush}" BorderThickness="0,0,0,1" Padding="0,6">
+                                        <StackPanel>
+                                            <TextBlock Text="{Binding ChannelName}" FontWeight="SemiBold" Margin="0,0,0,2"/>
+                                            <UniformGrid Columns="2">
+                                                <DockPanel Margin="0,0,12,1"><TextBlock Text="均值" Style="{StaticResource Hint}"/><TextBlock Style="{StaticResource StatCell}" Text="{Binding Mean, StringFormat={}{0:F3}}"/></DockPanel>
+                                                <DockPanel Margin="0,0,12,1"><TextBlock Text="标准差" Style="{StaticResource Hint}"/><TextBlock Style="{StaticResource StatCell}" Text="{Binding StdDev, StringFormat={}{0:F3}}"/></DockPanel>
+                                                <DockPanel Margin="0,0,12,1"><TextBlock Text="最小" Style="{StaticResource Hint}"/><TextBlock Style="{StaticResource StatCell}" Text="{Binding Min, StringFormat={}{0:F3}}"/></DockPanel>
+                                                <DockPanel Margin="0,0,12,1"><TextBlock Text="最大" Style="{StaticResource Hint}"/><TextBlock Style="{StaticResource StatCell}" Text="{Binding Max, StringFormat={}{0:F3}}"/></DockPanel>
+                                                <DockPanel Margin="0,0,12,1"><TextBlock Text="峰峰值" Style="{StaticResource Hint}"/><TextBlock Style="{StaticResource StatCell}" Text="{Binding PeakToPeak, StringFormat={}{0:F3}}"/></DockPanel>
+                                                <DockPanel Margin="0,0,12,1"><TextBlock Text="RMS" Style="{StaticResource Hint}"/><TextBlock Style="{StaticResource StatCell}" Text="{Binding Rms, StringFormat={}{0:F3}}"/></DockPanel>
+                                            </UniformGrid>
+                                        </StackPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                    <TextBlock Text="所选区间内没有数据。" Foreground="{DynamicResource WarnBrush}" Margin="0,8,0,0"
+                               Visibility="{Binding IntervalStatistics.SampleCount, Converter={StaticResource ZeroToVisible}, FallbackValue=Collapsed}"/>
+                    <TextBlock Style="{StaticResource Hint}" Margin="0,10,0,0" Text="区间只能覆盖曲线缓冲中的数据（每通道最近 100,000 点）；完整会话请在「分析」页选择时间段。"/>
+                </StackPanel>
+            </ScrollViewer>
+
+            <!-- ===== 滤波 ===== -->
+            <ScrollViewer Style="{StaticResource SideScroll}" DataContext="{Binding RealtimeChartVM}"
+                          Visibility="{Binding DataContext.WorkspaceLayout.SideTab, RelativeSource={RelativeSource AncestorType=UserControl}, Converter={StaticResource DockTabVisible}, ConverterParameter=3}">
+                <StackPanel Style="{StaticResource SideSection}">
+                    <CheckBox Style="{StaticResource Switch}" Content="对曲线应用滤波" IsChecked="{Binding IsFilterEnabled}" Margin="0,0,0,14"/>
+                    <StackPanel IsEnabled="{Binding IsFilterEnabled}">
+                        <TextBlock Text="类型" Style="{StaticResource FieldLabel}"/>
+                        <ComboBox ItemsSource="{Binding FilterTypes}" SelectedItem="{Binding SelectedFilterType}" ItemTemplate="{StaticResource EnumItemTemplate}" Margin="0,0,0,10"/>
+                        <TextBlock Text="窗口（点数）" Style="{StaticResource FieldLabel}"/>
+                        <TextBox Style="{StaticResource MonoTextBox}" Text="{Binding FilterWindowSize, UpdateSourceTrigger=LostFocus}"/>
+                    </StackPanel>
+                    <Border Style="{StaticResource Callout}" Margin="0,14,0,0">
+                        <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Ink2Brush}"
+                                   Text="滤波只作用于曲线显示。保存、统计、区间分析和导出始终使用原始读数。"/>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
+
+            <!-- ===== 校正 ===== -->
+            <ScrollViewer Style="{StaticResource SideScroll}" DataContext="{Binding ConnectionVM}"
+                          Visibility="{Binding DataContext.WorkspaceLayout.SideTab, RelativeSource={RelativeSource AncestorType=UserControl}, Converter={StaticResource DockTabVisible}, ConverterParameter=4}">
+                <StackPanel Style="{StaticResource SideSection}">
+                    <CheckBox Style="{StaticResource Switch}" Content="曲线显示正交度校正值" IsChecked="{Binding IsOrthogonalityCorrectionEnabled}" Margin="0,0,0,14"/>
+                    <TextBlock Text="第一组参数" Style="{StaticResource FieldLabel}"/>
+                    <ComboBox ItemsSource="{Binding AvailableOrthogonalityProfiles}" SelectedItem="{Binding ActiveOrthogonalityProfile}" DisplayMemberPath="Name" Margin="0,0,0,8"/>
+                    <TextBlock Text="第一组三轴通道序号" Style="{StaticResource FieldLabel}"/>
+                    <TextBox Style="{StaticResource MonoTextBox}" Text="{Binding FirstOrthogonalityChannelsText, UpdateSourceTrigger=LostFocus}" Margin="0,0,0,12"
+                             ToolTip="三个从 0 开始的通道序号，例如 0,1,2；必须是相同磁场单位的通道"/>
+                    <TextBlock Text="第二组参数（可选）" Style="{StaticResource FieldLabel}"/>
+                    <ComboBox ItemsSource="{Binding AvailableOrthogonalityProfiles}" SelectedItem="{Binding SecondOrthogonalityProfile}" DisplayMemberPath="Name" Margin="0,0,0,8"/>
+                    <TextBlock Text="第二组三轴通道序号" Style="{StaticResource FieldLabel}"/>
+                    <TextBox Style="{StaticResource MonoTextBox}" Text="{Binding SecondOrthogonalityChannelsText, UpdateSourceTrigger=LostFocus}" Margin="0,0,0,10"/>
+                    <StackPanel Orientation="Horizontal">
+                        <Button Content="刷新参数列表" Command="{Binding LoadOrthogonalityProfilesCommand}" Margin="0,0,6,0"/>
+                        <Button Content="去校正页" Style="{StaticResource GhostButton}"
+                                Command="{Binding DataContext.NavigateToOrthogonalityCalibrationCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"/>
+                    </StackPanel>
+                    <Border Style="{StaticResource Callout}" Margin="0,14,0,0">
+                        <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource Ink2Brush}"
+                                   Text="校正只生成曲线显示值；原始读数照常保存，统计仍用原始值。校正失败时曲线保持原值并在事件中提示。"/>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
+    </DockPanel>
+</UserControl>

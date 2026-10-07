@@ -11,6 +11,9 @@ public class DatabaseInitializer
 {
     private readonly string _dbPath;
 
+    /// <summary>数据库文件的完整路径（设置页只读显示）。</summary>
+    public string DatabasePath => _dbPath;
+
     public string ConnectionString => new SqliteConnectionStringBuilder
     {
         DataSource = _dbPath,

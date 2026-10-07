@@ -1,71 +1,71 @@
+using System.Diagnostics;
+using System.IO;
 using CommunityToolkit.Mvvm.ComponentModel;
 using Serilog;
 using CommunityToolkit.Mvvm.Input;
 using MagnetometerSystem.App.Services;
 using MagnetometerSystem.Core.Services;
 using MagnetometerSystem.Infrastructure.Configuration;
+using MagnetometerSystem.Infrastructure.Database;
 
 namespace MagnetometerSystem.App.ViewModels;
 
 /// <summary>
-/// 系统设置 ViewModel — 暴露 AppSettings 所有字段进行编辑
+/// 系统设置 ViewModel。只放真正生效的设置：
+/// 连接参数在“连接”页编辑并在退出时记住；采集后一律自动保存原始数据，因此没有开关。
 /// </summary>
 public partial class SettingsViewModel : ObservableObject
 {
     private readonly IAppConfigService _configService;
     private readonly UpdateCoordinator _updateCoordinator;
 
-    public SettingsViewModel(IAppConfigService configService, UpdateCoordinator updateCoordinator)
+    public SettingsViewModel(IAppConfigService configService, UpdateCoordinator updateCoordinator, DatabaseInitializer? database = null)
     {
         _configService = configService;
         _updateCoordinator = updateCoordinator;
+        DatabasePath = database?.DatabasePath ?? "";
     }
 
     private bool _isLoaded;
     public async Task EnsureLoadedAsync()
     {
         if (_isLoaded) return;
-        _isLoaded = true;
         await LoadSettingsAsync();
+        _isLoaded = true;
     }
 
-    // ---- 连接设置 ----
+    // ---- 存储与日志（只读显示） ----
 
-    [ObservableProperty]
-    private string _defaultPortName = "COM1";
+    /// <summary>采集数据所在的 SQLite 数据库文件。</summary>
+    public string DatabasePath { get; }
 
-    [ObservableProperty]
-    private int _defaultBaudRate = 115200;
+    public string LogDirectory => GlobalErrorHandler.LogDirectory ?? "";
 
-    public int[] BaudRates { get; } = [9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600];
+    [RelayCommand]
+    private void OpenDatabaseFolder() => OpenFolder(Path.GetDirectoryName(DatabasePath));
 
-    [ObservableProperty]
-    private string _defaultIpAddress = "192.168.1.100";
+    [RelayCommand]
+    private void OpenLogFolder() => OpenFolder(LogDirectory);
 
-    [ObservableProperty]
-    private int _defaultPort = 5000;
+    private void OpenFolder(string? dir)
+    {
+        if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir))
+        {
+            StatusMessage = "文件夹不存在";
+            IsStatusError = true;
+            return;
+        }
+        try { Process.Start(new ProcessStartInfo { FileName = dir, UseShellExecute = true }); }
+        catch (Exception ex) { StatusMessage = $"无法打开文件夹: {ex.Message}"; IsStatusError = true; }
+    }
 
-    // ---- 存储设置 ----
+    // ---- 图表 ----
 
-    [ObservableProperty]
-    private string _dataStoragePath = string.Empty;
-
-    [ObservableProperty]
-    private bool _autoSaveEnabled = true;
-
-    // ---- 图表设置 ----
-
+    /// <summary>绘图刷新率：只决定曲线多久重绘一次。修改后立即作用于曲线，并随设置保存。</summary>
     [ObservableProperty]
     private int _chartRefreshRate = 30;
 
     public int[] RefreshRateOptions { get; } = [10, 15, 20, 30, 60];
-
-    // ---- UI 设置 ----
-
-    [ObservableProperty]
-    private string _themeName = "Default";
-
-    public string[] ThemeOptions { get; } = ["Default", "Dark", "Light"];
 
     // ---- 更新设置 ----
 
@@ -112,15 +112,7 @@ public partial class SettingsViewModel : ObservableObject
         try
         {
             var settings = await _configService.LoadSettingsAsync();
-
-            DefaultPortName = settings.DefaultPortName ?? "COM1";
-            DefaultBaudRate = settings.DefaultBaudRate;
-            DefaultIpAddress = settings.DefaultIpAddress ?? "192.168.1.100";
-            DefaultPort = settings.DefaultPort;
-            DataStoragePath = settings.DataStoragePath;
-            AutoSaveEnabled = settings.AutoSaveEnabled;
-            ChartRefreshRate = settings.ChartRefreshRate;
-            ThemeName = settings.ThemeName;
+            if (settings.ChartRefreshRate > 0) ChartRefreshRate = settings.ChartRefreshRate;
 
             _suppressUpdatePreferenceWrite = true;
             try
@@ -133,7 +125,7 @@ public partial class SettingsViewModel : ObservableObject
                 _suppressUpdatePreferenceWrite = false;
             }
 
-            StatusMessage = "设置已加载";
+            StatusMessage = "";
             IsStatusError = false;
         }
         catch (Exception ex)
@@ -150,17 +142,9 @@ public partial class SettingsViewModel : ObservableObject
         try
         {
             var settings = await _configService.LoadSettingsAsync();
-            settings.DefaultPortName = DefaultPortName;
-            settings.DefaultBaudRate = DefaultBaudRate;
-            settings.DefaultIpAddress = DefaultIpAddress;
-            settings.DefaultPort = DefaultPort;
-            settings.DataStoragePath = DataStoragePath;
-            settings.AutoSaveEnabled = AutoSaveEnabled;
             settings.ChartRefreshRate = ChartRefreshRate;
-            settings.ThemeName = ThemeName;
-
             await _configService.SaveSettingsAsync(settings);
-            StatusMessage = "设置已保存（部分设置需重启生效）";
+            StatusMessage = "已保存";
             IsStatusError = false;
         }
         catch (Exception ex)
@@ -171,20 +155,18 @@ public partial class SettingsViewModel : ObservableObject
         }
     }
 
+    partial void OnChartRefreshRateChanged(int value)
+    {
+        if (_isLoaded) _ = SaveSettingsAsync();
+    }
+
     [RelayCommand]
     private void ResetToDefaults()
     {
-        DefaultPortName = "COM1";
-        DefaultBaudRate = 115200;
-        DefaultIpAddress = "192.168.1.100";
-        DefaultPort = 5000;
-        DataStoragePath = string.Empty;
-        AutoSaveEnabled = true;
         ChartRefreshRate = 30;
-        ThemeName = "Default";
-        AutoCheckUpdateEnabled = true;   // 这一项即时保存，不等"保存"按钮
+        AutoCheckUpdateEnabled = true;   // 这一项即时保存
         UpdateSource = UpdateSource.Automatic;
-        StatusMessage = "已恢复默认值（需点击保存生效）";
+        StatusMessage = "已恢复默认值";
         IsStatusError = false;
     }
 }

@@ -70,12 +70,23 @@ public partial class SessionListViewModel : ObservableObject
     public ObservableCollection<SessionInfo> Sessions { get; }
     public ICollectionView SessionsView { get; }
 
+    /// <summary>列表为空时的说明：还没有会话，或筛选后没有匹配项。</summary>
+    public string EmptyListHint => Sessions.Count == 0
+        ? "还没有会话。连接设备后会自动创建并保存。"
+        : "没有符合搜索或日期条件的会话。";
+
     // ---- 选中项 ----
     [ObservableProperty]
     private SessionInfo? _selectedSession;
 
     partial void OnSelectedSessionChanged(SessionInfo? value)
     {
+        // 列表刷新换成同一会话的新对象时保留已选的改正版本，只重新读取。
+        if (value != null && value.Id == _correctionVersionSessionId)
+        {
+            _ = RefreshCorrectionVersionsAsync();
+            return;
+        }
         AvailableCorrectionVersions.Clear();
         SelectedCorrectionVersion = null;
         _correctionVersionSessionId = null;
@@ -178,6 +189,7 @@ public partial class SessionListViewModel : ObservableObject
         SessionsView.Filter = FilterSession;
         SessionsView.SortDescriptions.Add(
             new SortDescription(nameof(SessionInfo.StartedAt), ListSortDirection.Descending));
+        Sessions.CollectionChanged += (_, _) => OnPropertyChanged(nameof(EmptyListHint));
 
         // 订阅采集事件。
         // 会话创建走 AcquisitionStarting（连接打开前 await 完成），保证第一条数据到达时
@@ -429,10 +441,18 @@ public partial class SessionListViewModel : ObservableObject
 
             OnUi(() =>
             {
-                Sessions.Clear();
+                // 先加入新列表并按 Id 改选，再移除旧项：直接 Clear 会让列表把选中项置空，
+                // 开始/结束采集或点“刷新”后详情面板就会被清掉。
+                var previous = Sessions.ToList();
                 foreach (var session in sessions)
                 {
                     Sessions.Add(session);
+                }
+                if (SelectedSession is { } selected)
+                    SelectedSession = sessions.FirstOrDefault(s => s.Id == selected.Id);
+                foreach (var session in previous)
+                {
+                    Sessions.Remove(session);
                 }
                 SessionsView.Refresh();
             });
@@ -457,6 +477,8 @@ public partial class SessionListViewModel : ObservableObject
             await _storageService.UpdateSessionAsync(session.Id, newName, session.Notes);
             session.Name = newName;
             SessionsView.Refresh();
+            // SessionInfo 不发通知；重发选中项让详情面板刷新。
+            if (ReferenceEquals(session, SelectedSession)) OnPropertyChanged(nameof(SelectedSession));
         }
         catch (Exception ex)
         {
@@ -483,6 +505,7 @@ public partial class SessionListViewModel : ObservableObject
             await _storageService.UpdateSessionAsync(session.Id, session.Name, newNotes);
             session.Notes = newNotes;
             SessionsView.Refresh();
+            if (ReferenceEquals(session, SelectedSession)) OnPropertyChanged(nameof(SelectedSession));
         }
         catch (Exception ex)
         {
@@ -740,7 +763,7 @@ public partial class SessionListViewModel : ObservableObject
         // 日期范围
         if (FilterStartDate.HasValue && session.StartedAt < FilterStartDate.Value)
             return false;
-        if (FilterEndDate.HasValue && session.StartedAt > FilterEndDate.Value.AddDays(1))
+        if (FilterEndDate.HasValue && session.StartedAt >= FilterEndDate.Value.Date.AddDays(1))
             return false;
 
         // 传感器类型

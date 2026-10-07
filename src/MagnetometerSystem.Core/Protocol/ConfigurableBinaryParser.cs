@@ -12,7 +12,16 @@ public class ConfigurableBinaryParser : IDataParser, IParserDiagnostics
 {
     public long RejectedFrameCount { get; private set; }
     public string? LastError { get; private set; }
+    public ParseRecordLog Records { get; } = new();
     private readonly ByteRingBuffer _ringBuffer = new(131072);
+
+    // 一次 TryParse 尝试内的诊断：帧头前丢弃的字节、拒绝原因与候选帧字节、通过的整帧。
+    private int _noiseSkipped;
+    private string? _rejectReason;
+    private int _rejectLength;
+    private byte[]? _rejectBytes;
+    private byte[]? _acceptedFrame;
+    private const int MaxPreviewSource = 1024;
     private readonly ProtocolConfig _config;
     private readonly byte[] _headerBytes;
     private readonly byte[] _tailBytes;
@@ -91,6 +100,7 @@ public class ConfigurableBinaryParser : IDataParser, IParserDiagnostics
     {
         if (count > _ringBuffer.FreeSpace)
         {
+            Records.Skipped(_ringBuffer.Count, "接收缓冲区溢出，丢弃未成帧的数据");
             _ringBuffer.Clear();
             RejectedFrameCount++;
             LastError = "二进制接收缓冲区溢出，已丢弃不完整帧";
@@ -105,16 +115,53 @@ public class ConfigurableBinaryParser : IDataParser, IParserDiagnostics
         while (true)
         {
             var before = _ringBuffer.Count;
-            if (_useSegments ? TryParseSegments(out reading) : TryParseLegacy(out reading)) return true;
+            _noiseSkipped = 0;
+            _rejectReason = null;
+            _rejectBytes = _acceptedFrame = null;
+            var parsed = _useSegments ? TryParseSegments(out reading) : TryParseLegacy(out reading);
+            if (_noiseSkipped > 0) Records.Skipped(_noiseSkipped, "未对齐帧头，丢弃");
+            if (parsed)
+            {
+                Records.Accepted(_acceptedFrame!.Length, reading!.ChannelValues.Length, _acceptedFrame, hex: true);
+                return true;
+            }
             if (_ringBuffer.Count >= before) return false;
             RejectedFrameCount++;
-            LastError = "二进制帧长度、固定值、校验或数值无效，已重新同步";
+            if (_rejectReason is { } reason)
+            {
+                LastError = $"二进制帧{reason}，已重新同步";
+                Records.Rejected(_rejectLength, reason, _rejectBytes, hex: true);
+            }
+            else
+            {
+                LastError = "二进制帧头前有无法识别的字节，已丢弃并重新同步";
+            }
         }
     }
 
     public void Reset()
     {
         _ringBuffer.Clear();
+    }
+
+    /// <summary>整帧已读出但数值无效：整帧丢弃并记录原因。</summary>
+    private bool RejectConsumedFrame(byte[] frame, string reason)
+    {
+        _acceptedFrame = null;
+        _rejectReason = reason;
+        _rejectLength = frame.Length;
+        _rejectBytes = frame.Length <= MaxPreviewSource ? frame : frame[..MaxPreviewSource];
+        return false;
+    }
+
+    /// <summary>记录候选帧被拒绝的原因和开头的字节（在丢弃之前调用）。</summary>
+    private void Fail(string reason, int candidateLength)
+    {
+        _rejectReason = reason;
+        _rejectLength = candidateLength;
+        var n = Math.Min(Math.Min(candidateLength, _ringBuffer.Count), MaxPreviewSource);
+        _rejectBytes = new byte[n];
+        for (int i = 0; i < n; i++) _rejectBytes[i] = _ringBuffer.Peek(i);
     }
 
     // =====================================================================
@@ -161,6 +208,7 @@ public class ConfigurableBinaryParser : IDataParser, IParserDiagnostics
             frameLen = nonDataLen + dataLen;
             if (dataLen < _requiredPayloadLength || frameLen <= 0 || frameLen > _ringBuffer.Capacity)
             {
+                Fail($"长度字段为 {dataLen}，少于协议数据区所需的 {_requiredPayloadLength} 字节或超出缓冲", lengthPos + _lengthSegment.ByteCount);
                 _ringBuffer.Skip(1);
                 return false;
             }
@@ -191,6 +239,7 @@ public class ConfigurableBinaryParser : IDataParser, IParserDiagnostics
             {
                 if (_ringBuffer.Peek(tailOffset + i) != _tailBytes[i])
                 {
+                    Fail("帧尾不匹配", frameLen);
                     _ringBuffer.Skip(1);
                     return false;
                 }
@@ -203,6 +252,7 @@ public class ConfigurableBinaryParser : IDataParser, IParserDiagnostics
             int offset = GetSegmentOffset(configuredOffset, frameLen);
             if (offset < 0 || offset + expected.Length > frameLen)
             {
+                Fail($"固定值段超出帧长（帧内偏移 {offset}）", frameLen);
                 _ringBuffer.Skip(1);
                 return false;
             }
@@ -210,6 +260,7 @@ public class ConfigurableBinaryParser : IDataParser, IParserDiagnostics
             {
                 if (_ringBuffer.Peek(offset + i) != expected[i])
                 {
+                    Fail($"固定值不匹配（帧内偏移 {offset}）", frameLen);
                     _ringBuffer.Skip(1);
                     return false;
                 }
@@ -230,6 +281,7 @@ public class ConfigurableBinaryParser : IDataParser, IParserDiagnostics
             if (checksumStart < 0 || checksumStart > checksumPos
                 || checksumPos + _checksumSegment.ByteCount > frameLen)
             {
+                Fail("校验位置超出帧长", frameLen);
                 _ringBuffer.Skip(1);
                 return false;
             }
@@ -248,6 +300,7 @@ public class ConfigurableBinaryParser : IDataParser, IParserDiagnostics
                     : (ushort)(c0 | (c1 << 8));
                 if (computed != expected)
                 {
+                    Fail($"CRC-16 校验失败：计算 {computed:X4}，帧内 {expected:X4}", frameLen);
                     _ringBuffer.Skip(1);
                     return false;
                 }
@@ -268,6 +321,7 @@ public class ConfigurableBinaryParser : IDataParser, IParserDiagnostics
                 }
                 if (computed != expected)
                 {
+                    Fail($"{(_checksumSegment.ChecksumAlgorithm == ChecksumAlgorithm.Xor ? "XOR" : "累加和")} 校验失败：计算 {computed:X2}，帧内 {expected:X2}", frameLen);
                     _ringBuffer.Skip(1);
                     return false;
                 }
@@ -276,6 +330,7 @@ public class ConfigurableBinaryParser : IDataParser, IParserDiagnostics
 
         // 读取整帧
         var frame = _ringBuffer.ReadBytes(frameLen);
+        _acceptedFrame = frame;
 
         // 提取数据字段
         int maxChannel = _dataSegments.Count > 0
@@ -291,7 +346,7 @@ public class ConfigurableBinaryParser : IDataParser, IParserDiagnostics
 
             double rawValue = ReadSegmentValue(frame, fieldStart, seg);
             double finalValue = rawValue * seg.Scale + seg.Offset;
-            if (!double.IsFinite(finalValue)) return false;
+            if (!double.IsFinite(finalValue)) return RejectConsumedFrame(frame, $"通道 {seg.ChannelIndex} 的值不是有限数值");
 
             if (seg.ChannelIndex < values.Length)
                 values[seg.ChannelIndex] = finalValue;
@@ -373,6 +428,7 @@ public class ConfigurableBinaryParser : IDataParser, IParserDiagnostics
         int requiredData = _config.FieldMappings.Count == 0 ? 0 : _config.FieldMappings.Max(f => f.ByteOffset + f.ByteSize);
         if (frameLen <= 0 || frameLen > _ringBuffer.Capacity || dataLen < requiredData)
         {
+            Fail($"长度字段无效（数据区 {dataLen} 字节，至少需要 {requiredData}）", headerLen + lengthFieldLen);
             _ringBuffer.Skip(1);
             return false;
         }
@@ -385,6 +441,7 @@ public class ConfigurableBinaryParser : IDataParser, IParserDiagnostics
             {
                 if (_ringBuffer.Peek(frameLen - tailLen + i) != _tailBytes[i])
                 {
+                    Fail("帧尾不匹配", frameLen);
                     _ringBuffer.Skip(1);
                     return false;
                 }
@@ -410,6 +467,7 @@ public class ConfigurableBinaryParser : IDataParser, IParserDiagnostics
                     : (ushort)(c0 | (c1 << 8));
                 if (computed != expected)
                 {
+                    Fail($"CRC-16 校验失败：计算 {computed:X4}，帧内 {expected:X4}", frameLen);
                     _ringBuffer.Skip(1);
                     return false;
                 }
@@ -430,6 +488,7 @@ public class ConfigurableBinaryParser : IDataParser, IParserDiagnostics
                 }
                 if (computed != expected)
                 {
+                    Fail($"{(_config.Checksum == ChecksumType.Xor ? "XOR" : "累加和")} 校验失败：计算 {computed:X2}，帧内 {expected:X2}", frameLen);
                     _ringBuffer.Skip(1);
                     return false;
                 }
@@ -437,6 +496,7 @@ public class ConfigurableBinaryParser : IDataParser, IParserDiagnostics
         }
 
         var frame = _ringBuffer.ReadBytes(frameLen);
+        _acceptedFrame = frame;
 
         int dataStart = headerLen + lengthFieldLen;
         int maxChannelIndex = _config.FieldMappings.Count > 0
@@ -452,7 +512,7 @@ public class ConfigurableBinaryParser : IDataParser, IParserDiagnostics
 
             double rawValue = ReadFieldValue(frame, fieldStart, field);
             double finalValue = rawValue * field.Scale + field.Offset;
-            if (!double.IsFinite(finalValue)) return false;
+            if (!double.IsFinite(finalValue)) return RejectConsumedFrame(frame, $"通道 {field.ChannelIndex} 的值不是有限数值");
 
             if (field.ChannelIndex < values.Length)
                 values[field.ChannelIndex] = finalValue;
@@ -489,6 +549,7 @@ public class ConfigurableBinaryParser : IDataParser, IParserDiagnostics
             }
             if (match) return true;
             _ringBuffer.Skip(1);
+            _noiseSkipped++;
         }
         return false;
     }

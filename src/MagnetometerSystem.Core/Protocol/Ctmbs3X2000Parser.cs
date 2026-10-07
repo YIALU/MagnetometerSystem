@@ -17,6 +17,7 @@ public class Ctmbs3X2000Parser : IDataParser, IParserDiagnostics
 {
     public long RejectedFrameCount { get; private set; }
     public string? LastError { get; private set; }
+    public ParseRecordLog Records { get; } = new();
     private readonly ByteRingBuffer _ring = new(131072);
     private readonly TimeProvider _timeProvider;
     private DateTime _receivedAtUtc;
@@ -36,6 +37,7 @@ public class Ctmbs3X2000Parser : IDataParser, IParserDiagnostics
         _receivedAtUtc = _timeProvider.GetUtcNow().UtcDateTime;
         if (count > _ring.FreeSpace)
         {
+            Records.Skipped(_ring.Count, "接收缓冲区溢出，丢弃未成帧的数据");
             _ring.Clear();
             Reject("CTMBS 接收缓冲区溢出");
             if (count > _ring.Capacity) { offset += count - _ring.Capacity; count = _ring.Capacity; }
@@ -56,20 +58,30 @@ public class Ctmbs3X2000Parser : IDataParser, IParserDiagnostics
             if (dollar < 0)
             {
                 // 缓冲里没有帧起始：全部丢弃（每帧必以 '$' 开头，无残留半帧风险）
+                Records.Skipped(_ring.Count, "未找到帧起点 '$'，丢弃");
                 _ring.Skip(_ring.Count);
                 return false;
             }
             if (dollar > 0)
-                _ring.Skip(dollar); // 丢弃 '$' 之前的垃圾（仪器 ID 尾巴等）
+            {
+                Records.Skipped(dollar, "丢弃 '$' 之前的字节");
+                _ring.Skip(dollar);
+            } // 丢弃 '$' 之前的垃圾（仪器 ID 尾巴等）
 
             // '$' 之后至少要有 "L\n" + 帧体。先尝试识别简单响应。
             if (ConsumeSimpleResponse())
                 continue; // 跳过 $ack/$err 等，继续找下一帧
 
             var beforeLength = _ring.Count;
+            var lengthLine = PeekBytes(LineLength(32));
             if (!TryReadLength(out int len, out int digitCount))
             {
-                if (_ring.Count < beforeLength) { Reject("CTMBS 长度字段无效"); continue; }
+                if (_ring.Count < beforeLength)
+                {
+                    Reject("CTMBS 长度字段无效");
+                    Records.Rejected(lengthLine.Length, "长度字段无效", lengthLine, hex: false);
+                    continue;
+                }
                 return false;
             }
 
@@ -84,8 +96,10 @@ public class Ctmbs3X2000Parser : IDataParser, IParserDiagnostics
                 prefixMatches = _ring.Peek(bodyStart + i) == _ring.Peek(1 + i);
             if (!prefixMatches && !mayBeClockResponse)
             {
+                var head = PeekBytes(Math.Min(_ring.Count, bodyStart + digitCount));
                 _ring.Skip(1);
                 Reject("CTMBS 帧体重复长度无效");
+                Records.Rejected(head.Length, "帧体重复长度无效", head, hex: false);
                 continue;
             }
 
@@ -103,6 +117,8 @@ public class Ctmbs3X2000Parser : IDataParser, IParserDiagnostics
             }
             if (nextHeader >= 0)
             {
+                var broken = PeekBytes(nextHeader);
+                Records.Rejected(broken.Length, "帧长度与下一帧头冲突", broken, hex: false);
                 _ring.Skip(nextHeader);
                 Reject("CTMBS 帧长度与下一帧头冲突，已重新同步");
                 continue;
@@ -113,8 +129,20 @@ public class Ctmbs3X2000Parser : IDataParser, IParserDiagnostics
             // 取出完整帧（消费掉），解析 payload
             var frame = _ring.ReadBytes(frameSize);
             var kind = DecodePayload(frame, digitCount, len, out reading);
-            if (kind == PayloadKind.Measurement) return true;
-            if (kind == PayloadKind.Invalid) Reject("CTMBS 数据帧载荷或帧尾无效");
+            if (kind == PayloadKind.Measurement)
+            {
+                Records.Accepted(frame.Length, reading!.ChannelValues.Length, frame, hex: false);
+                return true;
+            }
+            if (kind == PayloadKind.Invalid)
+            {
+                Reject("CTMBS 数据帧载荷或帧尾无效");
+                Records.Rejected(frame.Length, "载荷或帧尾无效", frame, hex: false);
+            }
+            else
+            {
+                Records.Skipped(frame.Length, "设备带数据响应（非测量帧）");
+            }
             // 合法命令响应不产测量、不计解析错误，继续寻找下一帧。
         }
     }
@@ -138,6 +166,8 @@ public class Ctmbs3X2000Parser : IDataParser, IParserDiagnostics
         {
             if (_ring.Peek(i) == (byte)'$')
             {
+                var broken = PeekBytes(i);
+                Records.Rejected(broken.Length, "简单响应缺少结束符", broken, hex: false);
                 _ring.Skip(i);
                 Reject("CTMBS 简单响应缺少结束符，已重新同步");
                 return true;
@@ -145,13 +175,34 @@ public class Ctmbs3X2000Parser : IDataParser, IParserDiagnostics
             if (_ring.Peek(i) == (byte)'\n')
             {
                 var response = _ring.PeekString(i + 1);
+                var bytes = PeekBytes(i + 1);
                 _ring.Skip(i + 1);
+                if (response is ("$ack\n" or "$err\n" or "$start_push\n" or "$stop_push\n"))
+                    Records.Skipped(bytes.Length, "设备响应（$ack / $err 等，非数据帧）");
+                else
+                    Records.Rejected(bytes.Length, "未知简单响应", bytes, hex: false);
                 if (response is not ("$ack\n" or "$err\n" or "$start_push\n" or "$stop_push\n"))
                     Reject("CTMBS 未知简单响应，已重新同步");
                 return true;
             }
         }
         return false; // 不完整，等更多数据
+    }
+
+    /// <summary>预览用：从读指针起取 n 字节（不消费）。</summary>
+    private byte[] PeekBytes(int n)
+    {
+        n = Math.Clamp(n, 0, _ring.Count);
+        var bytes = new byte[n];
+        for (int i = 0; i < n; i++) bytes[i] = _ring.Peek(i);
+        return bytes;
+    }
+
+    /// <summary>从读指针到第一个换行（含）的长度，最多 max 字节。</summary>
+    private int LineLength(int max)
+    {
+        int nl = _ring.IndexOf((byte)'\n');
+        return Math.Min(nl < 0 ? _ring.Count : nl + 1, max);
     }
 
     // ---- 长度行 ----
