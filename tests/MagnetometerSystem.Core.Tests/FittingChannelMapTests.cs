@@ -35,6 +35,19 @@ public class FittingChannelMapTests
         Assert.Equal(expected, FittingChannelMap.Suggest(names, units, 1));
     }
 
+    [Theory]
+    [InlineData("Max", "May", "Maz")]
+    [InlineData("Xaxis", "Yaxis", "Zaxis")]
+    [InlineData("Lax", "Lay", "Laz")]
+    public void Suggest_LongerWordsEndingInAxisLettersAreNotAxes(string a, string b, string c)
+    {
+        // 多一个看不出轴的磁场通道，排除“按顺序”的兜底：名称不能被当作 X / Y / Z 组。
+        Assert.Null(FittingChannelMap.Suggest([a, b, c, "CH3"], ["nT", "nT", "nT", "nT"], 1));
+        // 单个前缀字母仍然识别（Bx / By / Bz 是常见命名）。
+        Assert.Equal(new[] { 0, 1, 2 }, FittingChannelMap.Suggest(["Bx", "By", "Bz", "CH3"], ["nT", "nT", "nT", "nT"], 1));
+        Assert.Equal(new[] { 0, 1, 2 }, FittingChannelMap.Suggest(["Hx1", "Hy1", "Hz1", "CH3"], ["nT", "nT", "nT", "nT"], 1));
+    }
+
     [Fact]
     public void Suggest_WithoutAxisNames_OnlyFillsInOrderWhenTheCountIsExact()
     {

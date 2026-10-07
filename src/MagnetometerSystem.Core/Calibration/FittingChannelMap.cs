@@ -67,9 +67,14 @@ public static class FittingChannelMap
             position = i;
         }
         if (position < 0) return null;
-        // 轴字母须独立于其他英文字母，避免把 “Max”“Lazy” 之类的名称当成轴。
-        bool LetterAt(int i) => i >= 0 && i < trimmed.Length && char.IsAsciiLetter(trimmed[i]);
-        if (LetterAt(position - 1) && LetterAt(position + 1)) return null;
+        // 轴字母所在的英文字母串只能是轴字母本身（X1、Mag_X、磁力仪X），或单个前缀字母加轴字母（Bx、Hx1）；
+        // “Max / May / Maz”“Xaxis”之类更长的单词不当成轴，免得把无关的列自动选作 X / Y / Z。
+        int runStart = position, runEnd = position + 1;
+        while (runStart > 0 && char.IsAsciiLetter(trimmed[runStart - 1])) runStart--;
+        while (runEnd < trimmed.Length && char.IsAsciiLetter(trimmed[runEnd])) runEnd++;
+        bool standalone = runEnd - runStart == 1;
+        bool prefixed = runEnd - runStart == 2 && position == runEnd - 1;
+        if (!standalone && !prefixed) return null;
         return ("XYZ".IndexOf(char.ToUpperInvariant(trimmed[position])),
                 (trimmed[..position] + trimmed[(position + 1)..]).ToUpperInvariant());
     }

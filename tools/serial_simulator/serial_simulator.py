@@ -638,7 +638,7 @@ class SignalGenerator:
             sensor = re.search(r"(\d+)", name)
             sensor_no = int(sensor.group(1)) if sensor else 1
             if name.startswith("Δ") and axis and f"{axis}1" in by_name and f"{axis}2" in by_name:
-                profile = ("delta", by_name[f"{axis}1"], by_name[f"{axis}2"])
+                profile = ("delta", by_name[f"{axis}1"], by_name[f"{axis}2"], 1.0 / NT_PER_UNIT.get(unit, 1.0))
             elif unit in ("°C", "℃") or "温度" in name:
                 profile = ("temperature", 25.0)
             elif unit == "°":
@@ -670,7 +670,7 @@ class SignalGenerator:
         return s
 
     def sample(self, t: float, s: SignalSettings) -> dict[int, float]:
-        gauss, values = self.rng.gauss, {}
+        gauss, values, nt = self.rng.gauss, {}, {}
         spike = 10.0 * max(s.amplitude, 100.0) if self.spike else 0.0
         self.spike = False
         omega = 2.0 * math.pi * s.frequency * t
@@ -682,8 +682,9 @@ class SignalGenerator:
                     swing = self.walk[index]
                 else:
                     swing = s.amplitude * self.wave(s.waveform, omega + profile[2])
-                # 先按 nT 计算，再换算到通道单位
-                values[index] = (profile[1] + swing + gauss(0.0, s.noise) + spike) * profile[3]
+                # 先按 nT 计算，再换算到通道单位；梯度通道用 nT 值相减后再换算到自己的单位
+                nt[index] = profile[1] + swing + gauss(0.0, s.noise) + spike
+                values[index] = nt[index] * profile[3]
             elif kind == "temperature":
                 values[index] = profile[1] + 0.5 * math.sin(2.0 * math.pi * t / 600.0) + gauss(0.0, 0.01)
             elif kind == "gps":
@@ -696,7 +697,10 @@ class SignalGenerator:
                 values[index] = profile[1] + 0.2 * math.sin(2.0 * math.pi * t / 30.0)
         for index, profile in self.profiles.items():
             if profile[0] == "delta":
-                values[index] = values.get(profile[1], 0.0) - values.get(profile[2], 0.0)
+                if profile[1] in nt and profile[2] in nt:
+                    values[index] = (nt[profile[1]] - nt[profile[2]]) * profile[3]
+                else:   # 分量不是磁场通道（单位未知）：按原值相减
+                    values[index] = values.get(profile[1], 0.0) - values.get(profile[2], 0.0)
         return values
 
 
