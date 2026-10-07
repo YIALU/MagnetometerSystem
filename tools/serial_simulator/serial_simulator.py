@@ -908,6 +908,8 @@ class SimulatorEngine:
             elif action == "spike":
                 self.source.generator.spike = True
             elif action == "protocol":
+                # 上位机仍按连接时的协议解析：换协议必须先停发，等上位机按新协议重连后经“开始”重新发送（含表头行）。
+                self.sending = False
                 stats = self.source.stats
                 stats.last_values = {}
                 self.source = FrameSource(argument, self.rng)
@@ -1338,11 +1340,12 @@ def run_gui(protocols: list[Protocol], load_errors: list[str]):
                 self.tree.insert("", "end", iid=str(c.index), values=(c.index, c.name, c.unit, ""))
             self.preview_label.configure(text="")
             if self.engine:
-                if self.protocol.error and self.sending:
-                    self.engine.request("stop")
-                    self.sending = False
+                was_sending = self.sending
+                self.sending = False   # 引擎处理“protocol”请求时同样停止发送
                 self.engine.request("protocol", self.protocol)
                 self._log(f"切换协议：{self.protocol.name}")
+                if was_sending:
+                    self._log("已停止发送：上位机仍按原协议解析。请在上位机按新协议重新连接，再点“开始发送”（会先发表头行）。", "warn")
             self._update_buttons()
 
         def _show_protocol_info(self):
