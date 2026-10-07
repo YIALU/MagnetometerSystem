@@ -71,11 +71,13 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
     public string[] FittingUnits { get; } = ["nT", "uT", "mT", "T"];
     public string CollectedUnit => _collectedUnit;
     public string ReferenceUnit => _collectedUnit.Length > 0 ? _collectedUnit : FittingUnit;
+    /// <summary>参考场强的单位文字（标题与输入框后缀共用）；单位未知时提示待定。</summary>
+    public string ReferenceUnitText => ReferenceUnit.Length > 0 ? ReferenceUnit : "单位待定";
     partial void OnFittingUnitChanged(string? oldValue, string newValue)
     {
         if (_collectedUnit.Length == 0 && OrthogonalityParams.CanonicalUnit(oldValue) != OrthogonalityParams.CanonicalUnit(newValue))
             ReferenceFieldStrength = null;
-        OnPropertyChanged(nameof(ReferenceUnit));
+        OnPropertyChanged(nameof(ReferenceUnit)); OnPropertyChanged(nameof(ReferenceUnitText));
     }
 
     /// <summary>换一批拟合数据：记录单位与通道数，清掉上一批的结果，旧批次的回调不能混入。</summary>
@@ -92,7 +94,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         SavedProfile = null;
         SavedSecondProfile = null;
         OnPropertyChanged(nameof(CollectedUnit));
-        OnPropertyChanged(nameof(ReferenceUnit));
+        OnPropertyChanged(nameof(ReferenceUnit)); OnPropertyChanged(nameof(ReferenceUnitText));
     }
 
     private static string SourceUnit(IReadOnlyList<string> units, int requiredChannels, int? channelCount = null)

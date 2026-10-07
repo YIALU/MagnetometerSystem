@@ -66,6 +66,13 @@ public class WorkspaceControlsTests
         finally { window.Close(); }
     });
 
+    [Theory]
+    [InlineData(59, "00:00:59")]
+    [InlineData(25 * 3600 + 3 * 60 + 12, "25:03:12")]   // 超过 24 小时不回绕
+    [InlineData(100 * 3600, "100:00:00")]
+    public void LinkTimerShowsTotalHours(int seconds, string expected) =>
+        Assert.Equal(expected, MagnetometerSystem.App.ViewModels.MainViewModel.FormatElapsed(TimeSpan.FromSeconds(seconds)));
+
     private sealed class CountingCollection : INotifyCollectionChanged, IEnumerable
     {
         private NotifyCollectionChangedEventHandler? _handlers;

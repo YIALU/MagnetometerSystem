@@ -198,11 +198,11 @@
                     <TextBlock Text="传感器序列号（可选）" Style="{StaticResource FieldLabel}"/>
                     <TextBox Text="{Binding SensorSerial, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,16"/>
 
-                    <TextBlock Style="{StaticResource FieldLabel}"><Run Text="参考场强（"/><Run Text="{Binding ReferenceUnit, Mode=OneWay, TargetNullValue=单位待定}"/><Run Text="，可选）"/></TextBlock>
+                    <TextBlock Style="{StaticResource FieldLabel}"><Run Text="参考场强（"/><Run Text="{Binding ReferenceUnitText, Mode=OneWay}"/><Run Text="，可选）"/></TextBlock>
                     <StackPanel Orientation="Horizontal">
                         <TextBox Width="140" Style="{StaticResource MonoTextBox}"
                                  Text="{Binding ReferenceFieldStrength, UpdateSourceTrigger=PropertyChanged, TargetNullValue=''}"/>
-                        <TextBlock Text="nT" Foreground="{DynamicResource MutedBrush}" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                        <TextBlock Text="{Binding ReferenceUnitText}" Foreground="{DynamicResource MutedBrush}" VerticalAlignment="Center" Margin="8,0,0,0"/>
                     </StackPanel>
                     <TextBlock Style="{StaticResource Hint}" Margin="0,4,0,0" Text="留空时按样本自动估算；数值须使用拟合数据的单位（50,000 nT = 50 uT）。"/>
                 </StackPanel>

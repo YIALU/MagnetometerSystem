@@ -355,8 +355,12 @@ public partial class MainViewModel : ObservableObject
         ReceiveRateText = $"{(bytes - _lastBytes) / seconds / 1024:0.0} kB/s";
         MeasuredRateText = LinkState == LinkState.Acquiring ? $"{(parsed - _lastParsed) / seconds:0.0} Hz" : "—";
         _lastBytes = bytes; _lastParsed = parsed; _lastSample = now;
-        ElapsedText = (now - _acquisitionStartedAt).ToString(@"hh\:mm\:ss");
+        // 按总小时显示，超过 24 小时的长时采集不会回绕到 00:00:00。
+        ElapsedText = FormatElapsed(now - _acquisitionStartedAt);
     }
+
+    internal static string FormatElapsed(TimeSpan elapsed) =>
+        $"{(int)elapsed.TotalHours:00}:{elapsed:mm\\:ss}";
 
     private bool _firstFrameLogged, _hadStorageError;
     private string? _lastSessionId;

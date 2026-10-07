@@ -161,6 +161,21 @@ public class OrthogonalityFittingLayoutTests
         });
 
     [Fact]
+    public Task ReferenceUnitTextFollowsTheFittingUnit() =>
+        WpfTestHost.RunAsync(async () =>
+        {
+            using var fixture = await Fixture.CreateAsync();
+            var vm = fixture.CreateVm(3);
+            Assert.Equal("单位待定", vm.ReferenceUnitText);
+            var changed = new List<string?>();
+            vm.PropertyChanged += (_, e) => changed.Add(e.PropertyName);
+            // 参考场强标题与输入框后缀都显示拟合数据单位，避免按 nT 输入 uT 数据。
+            vm.FittingUnit = "uT";
+            Assert.Equal("uT", vm.ReferenceUnitText);
+            Assert.Contains(nameof(vm.ReferenceUnitText), changed);
+        });
+
+    [Fact]
     public Task HistoricalImportFitsOriginalValuesOfCorrectedReadings() =>
         WpfTestHost.RunAsync(async () =>
         {
