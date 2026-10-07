@@ -68,24 +68,17 @@ public class OptionalSerialChainTests
         {
             window.Show(); await WpfTestHost.PumpAsync();
 
-            // A. 内置预设的 CRC 参数待固件确认：连接被拒绝，且不打开串口、不创建会话。
-            connection.ProtocolConfig = ProtocolConfig.CreateZdzC08MagneticOnly();
-            await connection.ConnectCommand.ExecuteAsync(null);
-            Assert.False(connection.IsConnected);
-            Assert.Contains("CRC 参数待确认", connection.LastError);
-            Assert.Null(bus.CurrentConnection);
-            Assert.Empty(await storage.GetSessionsAsync());
-            using (var probe = new SerialPort(rx)) { probe.Open(); probe.Close(); }
+            // A. 固件未启用 CRC：内置预设带有校验段但默认不比对，可以直接连接。
+            var builtIn = ProtocolConfig.CreateZdzC08MagneticOnly();
+            builtIn.Validate();
+            Assert.False(builtIn.Segments.Single(s => s.Type == SegmentType.Checksum).ChecksumEnabled);
 
-            // B. 用户按固件配置校验段后（此处取 CRC-16/MODBUS，从“信息ID”段算到校验段前，低字节在前）。
+            // B. 固件启用校验后，用户勾选“启用校验”（预置参数：CRC-16/MODBUS，从“信息ID”段算到校验段前，低字节在前）。
             var protocol = ProtocolConfig.CreateZdzC08MagneticOnly();
-            var crcIndex = protocol.Segments.FindIndex(s => s.Name.StartsWith("CRC"));
-            protocol.Segments[crcIndex] = new FrameSegment
-            {
-                Type = SegmentType.Checksum, Name = "CRC16", ChecksumAlgorithm = ChecksumAlgorithm.CRC16,
-                ByteCount = 2, Crc16Variant = Crc16Variant.Modbus, ChecksumStartIndex = 1,
-            };
-            protocol.ComputeSegmentOffsets();
+            var checksum = protocol.Segments.Single(s => s.Type == SegmentType.Checksum);
+            checksum.ChecksumEnabled = true;
+            Assert.Equal((ChecksumAlgorithm.CRC16, Crc16Variant.Modbus, 1, false),
+                (checksum.ChecksumAlgorithm, checksum.Crc16Variant, checksum.ChecksumStartIndex, checksum.ChecksumBigEndian));
             Assert.Equal(101, protocol.TotalFrameLength);
             connection.ProtocolConfig = protocol;
 

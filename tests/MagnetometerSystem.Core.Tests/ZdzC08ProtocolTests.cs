@@ -17,8 +17,8 @@ public class ZdzC08ProtocolTests
         "38 3F 57 77 B3 C1 F2 F7 67 3D 5B CD F5 BD C2 96 1C C1 60 D2 7C 3D FB 6E 99 3E " +
         "68 CA CB BB E0 2B 1D 47 EA 2B 1D 47 DA 2B 1D 47 DA 02 48 43 BD 67 33";
 
-    // 仅测试字段布局：文档 CRC 参数未知，使用明确的测试 CRC 重写校验字节。
-    // 这些测试不构成固件 CRC 参数或文档原始帧有效性的证明。
+    // 固件未启用 CRC：预设的校验段默认不比对。需要验证“启用校验”路径时，用明确的测试 CRC
+    // 重写校验字节并打开校验段；这不构成固件 CRC 参数的证明。
     private static byte[] SyntheticDocumentFrame() => WithTestChecksum(ProtocolConfig.HexToBytes(DocSampleHex));
 
     private static byte[] WithTestChecksum(byte[] frame)
@@ -31,8 +31,8 @@ public class ZdzC08ProtocolTests
 
     private static ProtocolConfig WithTestChecksum(ProtocolConfig config)
     {
-        var checksum = config.Segments.Single(s => s.Name.StartsWith("CRC"));
-        checksum.Type = SegmentType.Checksum;
+        var checksum = config.Segments.Single(s => s.Type == SegmentType.Checksum);
+        checksum.ChecksumEnabled = true;
         checksum.ChecksumAlgorithm = ChecksumAlgorithm.CRC16;
         checksum.Crc16Variant = Crc16Variant.Modbus;
         checksum.ChecksumStartIndex = 1;
@@ -81,12 +81,11 @@ public class ZdzC08ProtocolTests
     }
 
     [Fact]
-    public void Parse_OriginalDocumentSample_DecodesLayoutWithoutClaimingCrcValidation()
+    public void Parse_OriginalDocumentSample_AcceptedWhileChecksumDisabled()
     {
-        // 原始黄金帧不改写 CRC。这里只验证字段布局，不声称未知 CRC 参数已验证。
+        // 原始黄金帧不改写 CRC：固件未启用校验，内置预设不比对这两个字节，记录里注明未校验。
         var config = ProtocolConfig.CreateZdzC08();
-        Assert.Throws<ArgumentException>(config.Validate);
-        config.RequireChecksum = false;
+        config.Validate();
         var parser = new ConfigurableBinaryParser(config);
         var frame = ProtocolConfig.HexToBytes(DocSampleHex);
         Assert.Equal(new byte[] { 0xBD, 0x67 }, frame[98..100]);
@@ -117,6 +116,7 @@ public class ZdzC08ProtocolTests
         Assert.Equal(0.06172407, reading.ChannelValues[14], 6);    // 陀螺仪X
         Assert.Equal(40235.875, reading.ChannelValues[17], 3);     // 磁力仪X
         Assert.Equal(200.011139, reading.ChannelValues[20], 4);    // 入水深度
+        Assert.Contains(parser.Records.Drain(), r => r.Outcome == ParseOutcome.Accepted && r.Detail.Contains("校验未启用"));
     }
 
     [Fact]
@@ -272,7 +272,7 @@ public class ZdzC08ProtocolTests
     }
 
     [Fact]
-    public void Parse_OriginalDeviceRecord_DecodesLayoutWithoutClaimingCrcValidation()
+    public void Parse_OriginalDeviceRecord_AcceptedWhileChecksumDisabled()
     {
         // 第二个独立黄金样本：取自 ZDZ_C08 设备实测导出的 512B 存储包中的一条 101B 记录
         // （包内偏移 7）。与文档样本包不同源、数值量级也完全不同（个位数 nT vs 20000 nT），
@@ -283,10 +283,8 @@ public class ZdzC08ProtocolTests
             "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 " +
             "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 C6 48 33";
 
-        // 保留设备记录的 C6 48；此测试只验证载荷布局，不验证未知固件 CRC。
+        // 保留设备记录的 C6 48：与文档样本一样对不上任何 CRC，校验未启用时照常解析。
         var config = ProtocolConfig.CreateZdzC08();
-        Assert.Throws<ArgumentException>(config.Validate);
-        config.RequireChecksum = false;
         var parser = new ConfigurableBinaryParser(config);
         var frame = ProtocolConfig.HexToBytes(realRecordHex);
         Assert.Equal(new byte[] { 0xC6, 0x48 }, frame[98..100]);
@@ -322,10 +320,13 @@ public class ZdzC08ProtocolTests
         Assert.True(infoId.ValidateFixedValue);
         Assert.Equal("AD00", infoId.FixedHexValue);
 
-        // 反序列化后的配置解析同一样本包，结果应完全一致
-        Assert.True(restored.RequireChecksum);
+        // 校验段及其“未启用”状态必须穿过序列化
+        Assert.False(restored.RequireChecksum);
         Assert.Equal(original.DerivedChannelUnits, restored.DerivedChannelUnits);
-        Assert.Throws<ArgumentException>(() => new ConfigurableBinaryParser(restored));
+        var checksum = restored.Segments.Single(s => s.Type == SegmentType.Checksum);
+        Assert.False(checksum.ChecksumEnabled);
+        Assert.Equal(ChecksumAlgorithm.CRC16, checksum.ChecksumAlgorithm);
+        Assert.Equal(98, checksum.ComputedOffset);
         var parser = new ConfigurableBinaryParser(WithTestChecksum(restored));
         var frame = SyntheticDocumentFrame();
         parser.Feed(frame, 0, frame.Length);
@@ -336,16 +337,96 @@ public class ZdzC08ProtocolTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void Config_UnconfirmedChecksumBlocksDefaultAndPersistedPresets(bool magneticOnly)
+    public void Config_ChecksumFieldPresentButDisabled_AnyCrcBytesAccepted(bool magneticOnly)
     {
         var config = magneticOnly ? ProtocolConfig.CreateZdzC08MagneticOnly() : ProtocolConfig.CreateZdzC08();
-        Assert.True(config.RequireChecksum);
-        Assert.Contains("CRC 参数待确认", Assert.Throws<ArgumentException>(config.Validate).Message);
-        Assert.Contains("CRC 参数待确认", Assert.Throws<ArgumentException>(() => new ConfigurableBinaryParser(config)).Message);
+        Assert.False(config.RequireChecksum);
+        config.Validate();
+        var checksum = config.Segments.Single(s => s.Type == SegmentType.Checksum);
+        Assert.False(checksum.ChecksumEnabled);
+        Assert.Equal((98, 2, 1), (checksum.ComputedOffset, checksum.ByteCount, checksum.ChecksumStartIndex));
+
+        var parser = new ConfigurableBinaryParser(config);
+        foreach (var crc in new byte[][] { [0x00, 0x00], [0xFF, 0xFF], [0xBD, 0x67] })
+        {
+            var frame = ProtocolConfig.HexToBytes(DocSampleHex);
+            crc.CopyTo(frame, 98);
+            parser.Feed(frame, 0, frame.Length);
+            Assert.True(parser.TryParse(out var reading));
+            Assert.Equal(magneticOnly ? 6 : 21, reading!.ChannelValues.Length);
+        }
+        Assert.Equal(0, parser.RejectedFrameCount);
+    }
+
+    [Fact]
+    public void Config_ChecksumEnabled_VerifiesCrcAgain()
+    {
+        var parser = new ConfigurableBinaryParser(WithTestChecksum(ProtocolConfig.CreateZdzC08()));
+        var original = ProtocolConfig.HexToBytes(DocSampleHex);   // BD 67 不是测试 CRC
+        var valid = SyntheticDocumentFrame();
+        parser.Feed(original, 0, original.Length);
+        parser.Feed(valid, 0, valid.Length);
+
+        Assert.True(parser.TryParse(out var reading));
+        Assert.Equal(20001.185547, reading!.ChannelValues[0], 4);
+        Assert.False(parser.TryParse(out _));
+        Assert.Equal(1, parser.RejectedFrameCount);
+        Assert.DoesNotContain(parser.Records.Drain(), r => r.Detail.Contains("校验未启用"));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void FromJson_SavedCopyWithOldPlaceholder_MigratesToDisabledChecksum(bool magneticOnly)
+    {
+        // v0.5.3 及以前保存的副本：CRC 字节是名为“CRC参数待确认…”的占位段，并强制要求校验。
+        var old = magneticOnly ? ProtocolConfig.CreateZdzC08MagneticOnly() : ProtocolConfig.CreateZdzC08();
+        var index = old.Segments.FindIndex(s => s.Type == SegmentType.Checksum);
+        old.Segments[index] = new FrameSegment { Type = SegmentType.Padding, Name = "CRC参数待确认（请配置校验段）", ByteCount = 2 };
+        old.RequireChecksum = true;
+        old.Notes = "数采卡。CRC 参数待固件确认，默认禁止采集；请删除 CRC 占位段，在帧尾前添加校验段并配置确认的参数。";
+
+        var migrated = ProtocolConfig.FromJson(old.ToJson())!;
+
+        Assert.False(migrated.RequireChecksum);
+        var checksum = migrated.Segments[index];
+        Assert.Equal(SegmentType.Checksum, checksum.Type);
+        Assert.False(checksum.ChecksumEnabled);
+        Assert.Equal(101, migrated.TotalFrameLength);
+        Assert.DoesNotContain("默认禁止采集", migrated.Notes);
+        migrated.Validate();
+        var parser = new ConfigurableBinaryParser(migrated);
+        var frame = ProtocolConfig.HexToBytes(DocSampleHex);
+        parser.Feed(frame, 0, frame.Length);
+        Assert.True(parser.TryParse(out _));
+    }
+
+    [Fact]
+    public void FromJson_RequiredChecksumWithoutKnownPlaceholder_StillBlocked()
+    {
+        // 迁移只认旧预设的占位段；用户自己要求校验却没有校验段的协议照旧拒绝连接。
+        var config = ProtocolConfig.CreateZdzC08();
+        config.Segments.RemoveAll(s => s.Type == SegmentType.Checksum);
+        config.Segments.Insert(config.Segments.Count - 1, new FrameSegment { Type = SegmentType.Padding, Name = "保留", ByteCount = 2 });
+        config.RequireChecksum = true;
+
         var restored = ProtocolConfig.FromJson(config.ToJson())!;
-        Assert.Throws<ArgumentException>(restored.Validate);
-        Assert.Throws<ArgumentException>(() => new ConfigurableBinaryParser(restored));
-        WithTestChecksum(restored).Validate();
+
+        Assert.True(restored.RequireChecksum);
+        Assert.Contains("CRC 参数待确认", Assert.Throws<ArgumentException>(restored.Validate).Message);
+    }
+
+    [Fact]
+    public void FromJson_ChecksumWithoutEnabledField_StaysEnabled()
+    {
+        // 加入开关之前保存的协议没有 ChecksumEnabled 字段，必须保持原来的校验行为。
+        var json = ProtocolConfig.CreateCct5Gradiometer().ToJson();
+        var withoutField = System.Text.RegularExpressions.Regex.Replace(json, @"\s*""ChecksumEnabled"":\s*(true|false),", "");
+        Assert.DoesNotContain("ChecksumEnabled", withoutField);
+
+        var restored = ProtocolConfig.FromJson(withoutField)!;
+
+        Assert.True(restored.Segments.Single(s => s.Type == SegmentType.Checksum).ChecksumEnabled);
     }
 
     [Theory]
@@ -383,10 +464,13 @@ public class ZdzC08ProtocolTests
     [Fact]
     public void Config_RequiredChecksumRejectsInvalidRangeOrWidth()
     {
+        // 内置预设不再强制校验；用户协议仍可声明“必须校验”，范围或宽度无效时拒绝。
         var config = WithTestChecksum(ProtocolConfig.CreateZdzC08());
+        config.RequireChecksum = true;
         var checksum = config.Segments.Single(s => s.Type == SegmentType.Checksum);
         checksum.ChecksumStartIndex = config.Segments.IndexOf(checksum);
         Assert.Throws<ArgumentException>(() => new ConfigurableBinaryParser(config));
+        Assert.Throws<ArgumentException>(config.Validate);
         checksum.ChecksumStartIndex = 1;
         checksum.ByteCount = 1;
         Assert.Throws<ArgumentException>(() => new ConfigurableBinaryParser(config));

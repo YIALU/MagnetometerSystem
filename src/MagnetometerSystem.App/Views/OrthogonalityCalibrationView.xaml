@@ -228,6 +228,56 @@
                             </StackPanel>
                         </Border>
 
+                        <!-- 拟合通道：协议决定通道顺序，按名称自动识别 X / Y / Z，可以改 -->
+                        <StackPanel Margin="0,0,0,14" Visibility="{Binding ShowsFittingChannels, Converter={StaticResource BoolToVis}}">
+                            <DockPanel Margin="0,0,0,6">
+                                <Button DockPanel.Dock="Right" Content="自动识别" Style="{StaticResource SmallGhostButton}" Command="{Binding SuggestFittingChannelsCommand}"
+                                        IsEnabled="{Binding IsCollecting, Converter={StaticResource InverseBool}}" ToolTip="按通道名称（如 X1 / Y1 / Z1）重新匹配"/>
+                                <TextBlock Text="拟合通道" Style="{StaticResource FieldLabel}" Margin="0" VerticalAlignment="Center"/>
+                            </DockPanel>
+                            <Grid IsEnabled="{Binding IsCollecting, Converter={StaticResource InverseBool}}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="44"/><ColumnDefinition/><ColumnDefinition/><ColumnDefinition/>
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                                <TextBlock Grid.Column="1" Text="X" HorizontalAlignment="Center" Foreground="{DynamicResource MutedBrush}" Margin="6,0,0,2"/>
+                                <TextBlock Grid.Column="2" Text="Y" HorizontalAlignment="Center" Foreground="{DynamicResource MutedBrush}" Margin="6,0,0,2"/>
+                                <TextBlock Grid.Column="3" Text="Z" HorizontalAlignment="Center" Foreground="{DynamicResource MutedBrush}" Margin="6,0,0,2"/>
+                                <TextBlock Grid.Row="1" Text="探头 1" VerticalAlignment="Center" Foreground="{DynamicResource Ink2Brush}"/>
+                                <ComboBox Grid.Row="1" Grid.Column="1" Margin="6,0,0,0" ItemsSource="{Binding FittingChannelOptions}" DisplayMemberPath="Label"
+                                          SelectedValuePath="Index" SelectedValue="{Binding FitX1}" ToolTip="{Binding SelectedItem.Label, RelativeSource={RelativeSource Self}}"/>
+                                <ComboBox Grid.Row="1" Grid.Column="2" Margin="6,0,0,0" ItemsSource="{Binding FittingChannelOptions}" DisplayMemberPath="Label"
+                                          SelectedValuePath="Index" SelectedValue="{Binding FitY1}" ToolTip="{Binding SelectedItem.Label, RelativeSource={RelativeSource Self}}"/>
+                                <ComboBox Grid.Row="1" Grid.Column="3" Margin="6,0,0,0" ItemsSource="{Binding FittingChannelOptions}" DisplayMemberPath="Label"
+                                          SelectedValuePath="Index" SelectedValue="{Binding FitZ1}" ToolTip="{Binding SelectedItem.Label, RelativeSource={RelativeSource Self}}"/>
+                            </Grid>
+                            <Grid Margin="0,6,0,0" IsEnabled="{Binding IsCollecting, Converter={StaticResource InverseBool}}"
+                                  Visibility="{Binding IsDualSensor, Converter={StaticResource BoolToVis}}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="44"/><ColumnDefinition/><ColumnDefinition/><ColumnDefinition/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="探头 2" VerticalAlignment="Center" Foreground="{DynamicResource Ink2Brush}"/>
+                                <ComboBox Grid.Column="1" Margin="6,0,0,0" ItemsSource="{Binding FittingChannelOptions}" DisplayMemberPath="Label"
+                                          SelectedValuePath="Index" SelectedValue="{Binding FitX2}" ToolTip="{Binding SelectedItem.Label, RelativeSource={RelativeSource Self}}"/>
+                                <ComboBox Grid.Column="2" Margin="6,0,0,0" ItemsSource="{Binding FittingChannelOptions}" DisplayMemberPath="Label"
+                                          SelectedValuePath="Index" SelectedValue="{Binding FitY2}" ToolTip="{Binding SelectedItem.Label, RelativeSource={RelativeSource Self}}"/>
+                                <ComboBox Grid.Column="3" Margin="6,0,0,0" ItemsSource="{Binding FittingChannelOptions}" DisplayMemberPath="Label"
+                                          SelectedValuePath="Index" SelectedValue="{Binding FitZ2}" ToolTip="{Binding SelectedItem.Label, RelativeSource={RelativeSource Self}}"/>
+                            </Grid>
+                            <TextBlock Text="{Binding FittingChannelHint}" TextWrapping="Wrap" FontSize="12" Margin="0,6,0,0">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Foreground" Value="{DynamicResource MutedBrush}"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsFittingChannelValid}" Value="False">
+                                                <Setter Property="Foreground" Value="{DynamicResource WarnBrush}"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                        </StackPanel>
+
                         <!-- 实时数据 -->
                         <StackPanel Visibility="{Binding DataSource, Converter={StaticResource DockTabVisible}, ConverterParameter=Live}">
                             <Border Style="{StaticResource WarnCallout}" Margin="0,0,0,12"
@@ -326,7 +376,7 @@
                         <!-- 已保存会话 -->
                         <StackPanel Visibility="{Binding DataSource, Converter={StaticResource DockTabVisible}, ConverterParameter=Session}">
                             <TextBlock Style="{StaticResource Hint}"
-                                       Text="从数据库选一个已保存的会话，取通道 0、1、2（双三轴另取 3、4、5）作为样本。只读取，不修改会话。"/>
+                                       Text="从数据库选一个已保存的会话，按上面的“拟合通道”取样本（拟合用校正前的原始值）。只读取，不修改会话。"/>
                             <Button Content="选择会话…" Style="{StaticResource PrimaryButton}" Command="{Binding LoadFromSessionCommand}"
                                     HorizontalAlignment="Left" Margin="0,10,0,0"/>
                         </StackPanel>

@@ -236,13 +236,15 @@ dotnet test tests/MagnetometerSystem.Core.Tests/MagnetometerSystem.Core.Tests.cs
 
 端口变量只指向本轮验收用的互连端口，不应指向正在进行正式采集的设备。该测试验证 `SerialPort` 传输；App + SQLite + 导出的完整串口流程还需按下列步骤核对。
 
-同样的两个变量也启用 App 层的 `OptionalSerialChainTests`（RX 为上位机端，TX 为模拟设备端）：先确认内置“磁梯度数采卡-pt (仅磁场6通道)”在 CRC 未配置时拒绝连接、不打开串口、不建会话；再把 CRC 占位段换成校验段（测试取 CRC-16/MODBUS，从“信息ID”段算起，低字节在前——这是测试假设，不是已确认的固件参数），从 TX 口随机切块发送 400 个有效 101 字节帧并混入噪声、半帧和坏 CRC 帧，经真实 `ConnectionViewModel` 断言解析数、接收字节数、逐帧解析记录、图表最新值、断开后 SQLite 中每个原始值与通道名/单位，以及数据页显示的条数：
+同样的两个变量也启用 App 层的 `OptionalSerialChainTests`（RX 为上位机端，TX 为模拟设备端）：先确认内置“磁梯度数采卡-pt (仅磁场6通道)”的校验段默认不启用（固件未计算 CRC），可以直接连接；再勾选“启用校验”（预置 CRC-16/MODBUS，从“信息ID”段算起，低字节在前——这是测试假设，不是已确认的固件参数），从 TX 口随机切块发送 400 个有效 101 字节帧并混入噪声、半帧和坏 CRC 帧，经真实 `ConnectionViewModel` 断言解析数、接收字节数、逐帧解析记录、图表最新值、断开后 SQLite 中每个原始值与通道名/单位，以及数据页显示的条数：
 
 ```powershell
 dotnet test tests/MagnetometerSystem.App.Tests/MagnetometerSystem.App.Tests.csproj -c Debug --filter FullyQualifiedName~OptionalSerialChainTests
 ```
 
-仓库已有 `magnetometer_test.py` 可用来发送示例流；需要 Python 和 `pyserial`：
+手动联调推荐用 `tools/serial_simulator/` 的窗口程序（Python + `pyserial`）。它按上位机协议配置生成帧，配置可以来自内置预设、上位机已保存的协议或导出的 JSON；帧率、波形和噪声可调，能注入噪声字节、坏校验、截断帧，以及粘包和分包写入，并显示上位机发来的命令字节。用法见该目录的 README。它同样只是人工联调工具。
+
+旧脚本 `magnetometer_test.py` 也能发送示例流；需要 Python 和 `pyserial`：
 
 ```powershell
 python -m pip install pyserial

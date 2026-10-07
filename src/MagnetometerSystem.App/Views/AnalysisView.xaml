@@ -128,15 +128,18 @@
             </DockPanel>
         </Border>
 
-        <!-- ===== 结果 ===== -->
-        <Grid Grid.Column="2">
+        <!-- ===== 结果 =====
+             结果表按行数自适应，最高占右侧 55%，再多的通道在表内滚动；曲线至少保留其余空间。
+             上限必须加在面板上：Auto 行不限制子元素的测量高度，行上的 MaxHeight 只会截断内容而不会出现滚动条。 -->
+        <Grid x:Name="ResultsColumn" Grid.Column="2">
             <Grid.RowDefinitions>
-                <RowDefinition Height="Auto" MaxHeight="300"/>
+                <RowDefinition Height="Auto"/>
                 <RowDefinition Height="12"/>
-                <RowDefinition Height="*"/>
+                <RowDefinition Height="*" MinHeight="200"/>
             </Grid.RowDefinitions>
 
-            <Border Style="{StaticResource Panel}">
+            <Border Style="{StaticResource Panel}"
+                    MaxHeight="{Binding ActualHeight, ElementName=ResultsColumn, Converter={StaticResource Ratio}, ConverterParameter=0.55}">
                 <DockPanel>
                     <Border DockPanel.Dock="Top" Style="{StaticResource PanelHeader}">
                         <DockPanel VerticalAlignment="Center">

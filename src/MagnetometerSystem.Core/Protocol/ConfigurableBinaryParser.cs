@@ -31,6 +31,8 @@ public class ConfigurableBinaryParser : IDataParser, IParserDiagnostics
     private readonly List<FrameSegment> _dataSegments = [];
     private readonly FrameSegment? _lengthSegment;
     private readonly FrameSegment? _checksumSegment;
+    /// <summary>帧里有校验字段但未启用：照常占位，不比对；通过的帧在解析记录中注明。</summary>
+    private readonly string? _acceptedNote;
     private readonly int _segmentFrameLength;
     private readonly int _payloadStart;
     private readonly int _payloadEnd;
@@ -60,7 +62,9 @@ public class ConfigurableBinaryParser : IDataParser, IParserDiagnostics
                 : [];
 
             _lengthSegment = config.Segments.FirstOrDefault(s => s.Type == SegmentType.LengthField);
-            _checksumSegment = config.Segments.FirstOrDefault(s => s.Type == SegmentType.Checksum);
+            var checksum = config.Segments.FirstOrDefault(s => s.Type == SegmentType.Checksum);
+            _checksumSegment = checksum is { ChecksumEnabled: true } ? checksum : null;
+            if (checksum is { ChecksumEnabled: false }) _acceptedNote = "校验未启用";
             _dataSegments = config.Segments.Where(s => s.Type == SegmentType.DataField).ToList();
             _segmentFrameLength = config.TotalFrameLength;
             if (_lengthSegment != null)
@@ -122,7 +126,7 @@ public class ConfigurableBinaryParser : IDataParser, IParserDiagnostics
             if (_noiseSkipped > 0) Records.Skipped(_noiseSkipped, "未对齐帧头，丢弃");
             if (parsed)
             {
-                Records.Accepted(_acceptedFrame!.Length, reading!.ChannelValues.Length, _acceptedFrame, hex: true);
+                Records.Accepted(_acceptedFrame!.Length, reading!.ChannelValues.Length, _acceptedFrame, hex: true, _acceptedNote);
                 return true;
             }
             if (_ringBuffer.Count >= before) return false;

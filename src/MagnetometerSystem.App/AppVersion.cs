@@ -27,8 +27,11 @@ public static class AppVersion
     public static string? Commit { get; } =
         _full.Contains('+') ? _full.Split('+', 2)[1] : null;
 
-    /// <summary>UI 显示用：v0.1.0 (163dfb8)</summary>
-    public static string Display =>
+    /// <summary>UI 显示用：v0.1.0。提交号只在“关于”窗口单独列出。</summary>
+    public static string Display => $"v{Number}";
+
+    /// <summary>诊断用（匿名反馈等）：v0.1.0 (163dfb8)，带提交号便于定位构建。</summary>
+    public static string DiagnosticVersion =>
         Commit is null ? $"v{Number}" : $"v{Number} ({Commit})";
 
     /// <summary>

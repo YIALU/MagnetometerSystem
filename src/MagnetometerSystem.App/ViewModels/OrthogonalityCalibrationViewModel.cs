@@ -20,6 +20,9 @@ public enum CalibrationCollectionMode { Continuous, Manual48 }
 /// <summary>第 2 步的数据来源：实时读数、外部文件或已保存会话。</summary>
 public enum CalibrationDataSource { Live, File, Session }
 
+/// <summary>“拟合通道”下拉框的一项：协议或会话中的通道索引与显示文字。</summary>
+public sealed record FittingChannelOption(int Index, string Label);
+
 /// <summary>结果页一组三轴的显示数据：评级、矩阵、偏移、残差和可视化用的样本。数值单位与拟合数据一致。</summary>
 public sealed class OrthoGroupResult(OrthogonalityResult result, double[,] rawData, double[,] correctedData)
 {
@@ -66,6 +69,12 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
     private int _collectedChannelCount;
     private long _collectedGeneration;
 
+    // 实时采集开始时冻结：所选通道索引（X、Y、Z[、X2、Y2、Z2]）、显示名称，以及当时的协议通道布局。
+    private int[] _collectedMap = [];
+    private string[] _collectedLabels = [];
+    private IReadOnlyList<string> _collectedLayoutNames = [];
+    private IReadOnlyList<string> _collectedLayoutUnits = [];
+
     /// <summary>导入 CSV 时数值的磁场单位（不自动猜测或换算）；实时采集与会话导入按协议通道单位自动设置。</summary>
     [ObservableProperty] private string _fittingUnit = "";
     public string[] FittingUnits { get; } = ["nT", "uT", "mT", "T"];
@@ -97,14 +106,123 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         OnPropertyChanged(nameof(ReferenceUnit)); OnPropertyChanged(nameof(ReferenceUnitText));
     }
 
-    private static string SourceUnit(IReadOnlyList<string> units, int requiredChannels, int? channelCount = null)
+    // ========== 拟合通道 ==========
+    // 协议决定通道顺序、名称和单位：拟合用哪几个通道由用户在第 2 步选定（按名称自动建议），不取前缀。
+
+    /// <summary>当前来源（实时连接或所选会话）的通道。</summary>
+    public ObservableCollection<FittingChannelOption> FittingChannelOptions { get; } = new();
+
+    [ObservableProperty] private int _fitX1 = -1;
+    [ObservableProperty] private int _fitY1 = -1;
+    [ObservableProperty] private int _fitZ1 = -1;
+    [ObservableProperty] private int _fitX2 = -1;
+    [ObservableProperty] private int _fitY2 = -1;
+    [ObservableProperty] private int _fitZ2 = -1;
+
+    /// <summary>所选通道的单位，或尚不能开始的原因。</summary>
+    [ObservableProperty] private string _fittingChannelHint = "";
+    [ObservableProperty] private bool _isFittingChannelValid;
+
+    /// <summary>导入文件有自己的列映射，不显示通道选择。</summary>
+    public bool ShowsFittingChannels => DataSource != CalibrationDataSource.File;
+
+    /// <summary>当前在通道选项中显示的会话（来源为“已保存会话”时）。</summary>
+    private SessionInfo? _loadedSession;
+    private bool _applyingSuggestion;
+    private int _sessionLoadVersion;
+
+    private int FittingGroups => SelectedSensorType == SensorType.DualTriaxialFluxgate ? 2 : 1;
+
+    private int[] SelectedFittingMap() => FittingGroups == 2
+        ? [FitX1, FitY1, FitZ1, FitX2, FitY2, FitZ2]
+        : [FitX1, FitY1, FitZ1];
+
+    private (IReadOnlyList<string> Names, IReadOnlyList<string> Units) FittingSourceLayout() => DataSource switch
     {
-        if (units.Count != requiredChannels || (channelCount.HasValue && channelCount.Value != requiredChannels))
-            throw new ArgumentException($"当前拟合模式要求恰好 {requiredChannels} 个磁场通道，且读数与单位元数据一致。其他布局请按格式说明整理为明确三轴 CSV。");
-        var selected = units.Select(OrthogonalityParams.CanonicalUnit).ToArray();
-        if (selected.Any(u => u.Length == 0) || selected.Distinct().Count() != 1)
-            throw new ArgumentException("拟合通道必须具有相同且明确的磁场单位；含温度或其他单位的布局请按格式说明整理为明确三轴 CSV。");
-        return selected[0];
+        CalibrationDataSource.Live when _dataBus.CurrentConnection != null && !_dataBus.IsPlaybackMode
+            => (_dataBus.AcquisitionChannelNames, _dataBus.AcquisitionChannelUnits),
+        CalibrationDataSource.Session when _loadedSession is { } session => (session.ChannelNames, session.ChannelUnits),
+        _ => ([], []),
+    };
+
+    /// <summary>来源变化（新连接、选了会话、切换来源）：重建选项并按名称重新建议。</summary>
+    private void RefreshFittingChannels()
+    {
+        var (names, units) = FittingSourceLayout();
+        FittingChannelOptions.Clear();
+        if (names.Count == units.Count)
+            for (int i = 0; i < names.Count; i++)
+                FittingChannelOptions.Add(new FittingChannelOption(i, units[i].Length > 0 ? $"{names[i]} ({units[i]})" : names[i]));
+        ApplyFittingSuggestion();
+    }
+
+    /// <summary>“自动识别”：按通道名称重新建议；已选会话时按建议重新读取。</summary>
+    [RelayCommand]
+    private void SuggestFittingChannels()
+    {
+        ApplyFittingSuggestion();
+        ReloadSessionIfSelected();
+    }
+
+    private void ApplyFittingSuggestion()
+    {
+        var (names, units) = FittingSourceLayout();
+        var map = names.Count == units.Count ? FittingChannelMap.Suggest(names, units, FittingGroups) : null;
+        _applyingSuggestion = true;
+        try
+        {
+            FitX1 = map?[0] ?? -1; FitY1 = map?[1] ?? -1; FitZ1 = map?[2] ?? -1;
+            FitX2 = map is { Length: 6 } ? map[3] : -1;
+            FitY2 = map is { Length: 6 } ? map[4] : -1;
+            FitZ2 = map is { Length: 6 } ? map[5] : -1;
+        }
+        finally { _applyingSuggestion = false; }
+        UpdateFittingChannelHint();
+    }
+
+    partial void OnFitX1Changed(int value) => OnFittingChannelsEdited();
+    partial void OnFitY1Changed(int value) => OnFittingChannelsEdited();
+    partial void OnFitZ1Changed(int value) => OnFittingChannelsEdited();
+    partial void OnFitX2Changed(int value) => OnFittingChannelsEdited();
+    partial void OnFitY2Changed(int value) => OnFittingChannelsEdited();
+    partial void OnFitZ2Changed(int value) => OnFittingChannelsEdited();
+
+    /// <summary>用户改了某个下拉框：更新提示；已选会话且选择有效时按新的通道重新读取。</summary>
+    private void OnFittingChannelsEdited()
+    {
+        if (_applyingSuggestion) return;
+        UpdateFittingChannelHint();
+        ReloadSessionIfSelected();
+    }
+
+    private void ReloadSessionIfSelected()
+    {
+        if (IsFittingChannelValid && DataSource == CalibrationDataSource.Session && _loadedSession is { } session && !IsCollecting)
+            _ = LoadSessionDataAsync(session);
+    }
+
+    private void UpdateFittingChannelHint()
+    {
+        var (names, units) = FittingSourceLayout();
+        if (names.Count == 0)
+        {
+            IsFittingChannelValid = false;
+            FittingChannelHint = DataSource == CalibrationDataSource.Session
+                ? "选择会话后，按会话的通道选择 X、Y、Z。"
+                : "连接设备后，按当前协议的通道选择 X、Y、Z。";
+            return;
+        }
+        try
+        {
+            var unit = FittingChannelMap.Validate(SelectedFittingMap(), units, FittingGroups);
+            IsFittingChannelValid = true;
+            FittingChannelHint = $"单位 {unit}";
+        }
+        catch (ArgumentException ex)
+        {
+            IsFittingChannelValid = false;
+            FittingChannelHint = ex.Message;
+        }
     }
 
     // 手动模式：保留最近 10 条读数用于记录点时求均值。
@@ -142,6 +260,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
 
         _isDeviceConnected = dataBus.CurrentConnection != null;
         _dataBus.ConnectionChanged += OnConnectionChanged;
+        RefreshFittingChannels();
 
         // 已保存配置延迟加载
     }
@@ -152,9 +271,12 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
 
     private void OnConnectionChanged(Core.Communication.IDeviceConnection? connection)
     {
-        var dispatcher = System.Windows.Application.Current?.Dispatcher;
-        if (dispatcher == null || dispatcher.CheckAccess()) IsDeviceConnected = connection != null;
-        else dispatcher.BeginInvoke(() => IsDeviceConnected = connection != null);
+        RunOnUi(() =>
+        {
+            IsDeviceConnected = connection != null;
+            // 采集中途换了连接由读数回调发现并停止；这里只更新可选通道。
+            if (DataSource == CalibrationDataSource.Live && !IsCollecting) RefreshFittingChannels();
+        });
     }
 
     private void OnManualOrthoRecordRequested()
@@ -340,6 +462,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         OnPropertyChanged(nameof(IsDualSensor));
         OnPropertyChanged(nameof(SensorSummary));
         if (value != SensorType.DualTriaxialFluxgate) SelectedResultGroup = 0;
+        if (!IsCollecting) ApplyFittingSuggestion();
         UpdateStepNavigation();
     }
 
@@ -388,6 +511,12 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
     [ObservableProperty]
     private CalibrationDataSource _dataSource = CalibrationDataSource.Live;
 
+    partial void OnDataSourceChanged(CalibrationDataSource value)
+    {
+        OnPropertyChanged(nameof(ShowsFittingChannels));
+        RefreshFittingChannels();
+    }
+
     /// <summary>手动 48 点的格子：已记录为 "on"，下一个为 "next"，其余为空。</summary>
     public IReadOnlyList<string> ManualPointSlots => Enumerable.Range(0, ManualPointTarget)
         .Select(i => i < CollectedSampleCount ? "on" : i == CollectedSampleCount && IsCollecting ? "next" : "")
@@ -405,8 +534,17 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         {
             if (_dataBus.CurrentConnection == null || _dataBus.IsPlaybackMode)
                 throw new ArgumentException("请先连接设备，再按当前协议通道单位采集拟合数据。");
-            var count = SelectedSensorType == SensorType.DualTriaxialFluxgate ? 6 : 3;
-            SetCollectedUnit(SourceUnit(_dataBus.AcquisitionChannelUnits, count), count);
+            var names = _dataBus.AcquisitionChannelNames;
+            var units = _dataBus.AcquisitionChannelUnits;
+            var map = SelectedFittingMap();
+            var unit = FittingChannelMap.Validate(map, units, FittingGroups);
+            if (names.Count != units.Count)
+                throw new ArgumentException("当前连接的通道名称与单位数量不一致，不能采集拟合数据。");
+            SetCollectedUnit(unit, map.Length);
+            _collectedMap = map;
+            _collectedLabels = map.Select(i => names[i]).ToArray();
+            _collectedLayoutNames = names;
+            _collectedLayoutUnits = units;
         }
         catch (Exception ex) { CollectionStatus = ex.Message; return; }
         lock (_sampleLock)
@@ -442,15 +580,15 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
 
     private void OnCalibrationDataReceived(MagnetometerReading reading)
     {
-        // 连接通道单位或数量与开始采集时不同：不混入这批数据，在界面线程停止采集。
+        // 连接的通道布局与开始采集时不同，或读数通道数与协议不符：不混入这批数据，在界面线程停止采集。
         var generation = Interlocked.Read(ref _collectedGeneration);
+        var map = _collectedMap;
         string? unitProblem = null;
-        try
-        {
-            if (SourceUnit(_dataBus.AcquisitionChannelUnits, _collectedChannelCount, reading.ChannelValues.Length) != _collectedUnit)
-                unitProblem = "连接通道单位已改变，请重新开始拟合数据采集。";
-        }
-        catch (Exception ex) { unitProblem = ex.Message; }
+        if (!SameLayout(_dataBus.AcquisitionChannelUnits, _collectedLayoutUnits)
+            || !SameLayout(_dataBus.AcquisitionChannelNames, _collectedLayoutNames))
+            unitProblem = "连接的通道布局已改变，已停止拟合数据采集，请重新选择拟合通道后开始。";
+        else if (reading.ChannelValues.Length != _collectedLayoutUnits.Count || map.Length == 0)
+            unitProblem = "读数的通道数与协议不一致，已停止拟合数据采集。";
         if (unitProblem != null)
         {
             RunOnUi(() =>
@@ -484,9 +622,9 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
             return;
         }
 
-        // 连续模式：每条读数取前三个（双三轴为六个）通道作为样本
-        bool dual = _collectedChannelCount == 6;
-        var v = reading.ChannelValues;
+        // 连续模式：每条读数取所选的三个（双三轴为六个）通道作为样本
+        bool dual = map.Length == 6;
+        var v = Pick(reading.ChannelValues, map);
         var sample1 = new[] { v[0], v[1], v[2] };
         lock (_sampleLock)
         {
@@ -494,7 +632,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
             _collectedData.Add(sample1);
             if (dual) _collectedDataSecondGroup.Add(new[] { v[3], v[4], v[5] });
             _pendingUiSamples.Add(sample1);
-            AppendRawPoint(reading);
+            AppendRawPoint(reading.Timestamp, v);
         }
 
         if (Interlocked.Exchange(ref _uiFlushPending, 1) == 0)
@@ -504,6 +642,17 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
             else dispatcher.BeginInvoke(FlushPendingSamples, System.Windows.Threading.DispatcherPriority.Background);
         }
     }
+
+    private static double[] Pick(double[] values, int[] map)
+    {
+        var picked = new double[map.Length];
+        for (int i = 0; i < map.Length; i++) picked[i] = values[map[i]];
+        return picked;
+    }
+
+    /// <summary>通道布局是否未变：同一份冻结列表，或内容相同（同一协议重新连接）。</summary>
+    private static bool SameLayout(IReadOnlyList<string> current, IReadOnlyList<string> frozen) =>
+        ReferenceEquals(current, frozen) || current.SequenceEqual(frozen);
 
     /// <summary>界面线程：把接收线程新增的样本并入显示集合，并按 50 个样本一次更新覆盖度与校验。</summary>
     private void FlushPendingSamples()
@@ -608,8 +757,9 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
     {
         if (SelectedMode != CalibrationCollectionMode.Manual48 || !IsCollecting) return;
 
-        bool dual = _collectedChannelCount == 6;
-        int n = dual ? 6 : 3;
+        var map = _collectedMap;
+        bool dual = map.Length == 6;
+        int n = map.Length;
         var sums = new double[n];
         int validCount = 0, buffered, count;
         double[] sample1;
@@ -632,14 +782,14 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
             DateTime lastTs = DateTime.Now;
             foreach (var r in _recentReadings)
             {
-                if (r.ChannelValues.Length != n) continue;
-                for (int i = 0; i < n; i++) sums[i] += r.ChannelValues[i];
+                if (r.ChannelValues.Length != _collectedLayoutUnits.Count) continue;
+                for (int i = 0; i < n; i++) sums[i] += r.ChannelValues[map[i]];
                 validCount++;
                 lastTs = r.Timestamp;
             }
             if (validCount < RecentBufferSize)
             {
-                CollectionStatus = $"最近 {RecentBufferSize} 条读数中只有 {validCount} 条为 {n} 个通道，不能记录";
+                CollectionStatus = $"最近 {RecentBufferSize} 条读数中只有 {validCount} 条与协议通道数一致，不能记录";
                 return;
             }
             var avg = new double[n];
@@ -651,7 +801,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
             count = _collectedData.Count;
 
             // 写 raw CSV
-            AppendRawPoint(new MagnetometerReading { Timestamp = lastTs, ChannelValues = avg, SensorType = SelectedSensorType });
+            AppendRawPoint(lastTs, avg);
         }
 
         CollectedData.Add(sample1);
@@ -748,9 +898,11 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         var now = DateTime.UtcNow.Ticks;
         var last = Interlocked.Read(ref _lastLiveValuesTicks);
         if (now - last < TimeSpan.TicksPerMillisecond * 200 || Interlocked.CompareExchange(ref _lastLiveValuesTicks, now, last) != last) return;
-        var count = Math.Min(reading.ChannelValues.Length, _collectedChannelCount == 6 ? 6 : 3);
-        var text = count == 0 ? "—" : string.Join("   ", Enumerable.Range(0, count).Select(i =>
-            $"{(i < 3 ? "XYZ"[i] : "XYZ"[i - 3])}{(count > 3 ? (i < 3 ? "1" : "2") : "")} {reading.ChannelValues[i]:0.0}"));
+        var map = _collectedMap;
+        var labels = _collectedLabels;
+        if (map.Length == 0 || reading.ChannelValues.Length <= map.Max()) return;
+        var text = string.Join("   ", map.Select((channel, i) =>
+            $"{(i < labels.Length ? labels[i] : "XYZ"[i % 3].ToString())} {reading.ChannelValues[channel]:0.0}"));
         var dispatcher = System.Windows.Application.Current?.Dispatcher;
         if (dispatcher == null || dispatcher.CheckAccess()) LiveValuesText = text;
         else dispatcher.BeginInvoke(() => { if (IsCollecting) LiveValuesText = text; });
@@ -795,22 +947,26 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         _rawWriter.WriteLine($"# Recorded At         : {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
         var channelNames = _collectedChannelCount == 6
             ? "X1,Y1,Z1,X2,Y2,Z2" : "X,Y,Z";
+        // 列名按轴排列；对应的协议通道写在注释里（名称中的换行替换为空格）。
+        var axes = channelNames.Split(',');
+        _rawWriter.WriteLine("# Source Channels     : " + string.Join(", ", _collectedLabels.Select((label, i) =>
+            $"{(i < axes.Length ? axes[i] : "?")}={label.Replace('\r', ' ').Replace('\n', ' ')}")));
         _rawWriter.WriteLine("point_index,timestamp," + channelNames);
         _rawWriter.Flush();
     }
 
-    private void AppendRawPoint(MagnetometerReading reading)
+    /// <summary>写一行原始点：<paramref name="values"/> 已按所选通道排成 X、Y、Z[、X2、Y2、Z2]。</summary>
+    private void AppendRawPoint(DateTime timestamp, double[] values)
     {
         if (_rawWriter == null) return;
         _rawPointIndex++;
         var sb = new System.Text.StringBuilder();
         sb.Append(_rawPointIndex).Append(',');
-        sb.Append(reading.Timestamp.ToString("yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture));
-        int n = _collectedChannelCount == 6 ? 6 : 3;
-        for (int i = 0; i < n && i < reading.ChannelValues.Length; i++)
+        sb.Append(timestamp.ToString("yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture));
+        foreach (var value in values)
         {
             sb.Append(',');
-            sb.Append(reading.ChannelValues[i].ToString("R", CultureInfo.InvariantCulture));
+            sb.Append(value.ToString("R", CultureInfo.InvariantCulture));
         }
         _rawWriter.WriteLine(sb.ToString());
         _rawWriter.Flush();
@@ -1440,15 +1596,30 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         await LoadSessionDataAsync(picker.SelectedSession);
     }
 
-    /// <summary>会话的通道数和单位必须与拟合模式一致（单三轴 3、双三轴 6，同一磁场单位）；不一致时不加载。</summary>
+    /// <summary>
+    /// 从会话读取拟合样本：按“拟合通道”中所选的通道（换了会话时先按名称重新建议）。
+    /// 通道元数据不一致、所选通道无效或单位不同时不加载，保留原有样本。
+    /// </summary>
     private async Task LoadSessionDataAsync(SessionInfo session)
     {
+        if (!ReferenceEquals(_loadedSession, session))
+        {
+            // 换了会话：来源切到“已保存会话”，通道选项换成该会话的通道并按名称重新建议。
+            _loadedSession = session;
+            if (DataSource != CalibrationDataSource.Session) DataSource = CalibrationDataSource.Session;
+            else RefreshFittingChannels();
+        }
+        var version = ++_sessionLoadVersion;
         try
         {
-            bool dual = SelectedSensorType == SensorType.DualTriaxialFluxgate;
-            int requiredCols = dual ? 6 : 3;
-            var sourceUnit = SourceUnit(session.ChannelUnits, requiredCols, session.ChannelCount);
+            if (session.ChannelNames.Length != session.ChannelCount || session.ChannelUnits.Length != session.ChannelCount)
+                throw new ArgumentException("会话的通道名称、单位与通道数不一致，未加载拟合数据。");
+            var map = SelectedFittingMap();
+            bool dual = map.Length == 6;
+            int requiredCols = map.Length;
+            var sourceUnit = FittingChannelMap.Validate(map, session.ChannelUnits, FittingGroups);
             var readings = await _storageService.GetReadingsAsync(session.Id);
+            if (version != _sessionLoadVersion) return;   // 期间又改了通道或换了会话，以最后一次为准
             if (readings.Count == 0)
             {
                 CollectionStatus = $"会话 '{session.Name}' 中没有数据";
@@ -1461,15 +1632,15 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
             {
                 // 拟合用校正前的原始值；已校正的读数再拟合会叠加上一次校正。
                 var v = r.OriginalChannelValues ?? r.ChannelValues;
-                if (v.Length != requiredCols)
+                if (v.Length != session.ChannelCount)
                     throw new ArgumentException("会话读数与通道元数据不一致，未加载拟合数据。请按格式说明整理为明确三轴 CSV。");
-                importedData.Add(new[] { v[0], v[1], v[2] });
+                importedData.Add(new[] { v[map[0]], v[map[1]], v[map[2]] });
                 if (dual)
-                    importedDataSecond.Add(new[] { v[3], v[4], v[5] });
+                    importedDataSecond.Add(new[] { v[map[3]], v[map[4]], v[map[5]] });
             }
 
             ReplaceSamples(importedData, importedDataSecond, sourceUnit, requiredCols);
-            CollectionStatus = $"已从会话 '{session.Name}' 加载 {importedData.Count} 个样本（{sourceUnit}）";
+            CollectionStatus = $"已从会话 '{session.Name}' 加载 {importedData.Count} 个样本（{sourceUnit}，{string.Join("、", map.Select(i => session.ChannelNames[i]))}）";
 
             UpdateCoverageEstimate();
             RunDataValidation();

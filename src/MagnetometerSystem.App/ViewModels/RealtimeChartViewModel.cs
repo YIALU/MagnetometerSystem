@@ -1,4 +1,6 @@
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
+using System.ComponentModel;
 using System.Text;
 using System.Globalization;
 using System.Windows;
@@ -248,6 +250,9 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
             Interval = TimeSpan.FromMilliseconds(1000.0 / _refreshRate),
         };
         _renderTimer.Tick += OnRenderTick;
+
+        ChannelConfigs.CollectionChanged += OnOffsetSourcesChanged;
+        ComputedChannels.CollectionChanged += OnOffsetSourcesChanged;
     }
 
     partial void OnRefreshRateChanged(int value)
@@ -473,15 +478,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
         double xMax = times[^1];
         double xMin = TimeWindowSeconds > 0 ? xMax - TimeWindowSeconds : times[0];
 
-        int startIdx = 0;
-        if (TimeWindowSeconds > 0)
-        {
-            for (int i = times.Length - 1; i >= 0; i--)
-            {
-                if (times[i] < xMin) { startIdx = i + 1; break; }
-            }
-        }
-        if (startIdx >= times.Length) startIdx = times.Length - 1;
+        int startIdx = WindowStartIndex(times);
         int count = times.Length - startIdx;
         var windowTimes = times.AsSpan(startIdx, count).ToArray();
 
@@ -495,6 +492,16 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
         }
 
         UpdateStatistics(times, rawData, startIdx, count);
+    }
+
+    /// <summary>当前时间窗口在缓冲中的起点（窗口为 0 表示全部）。</summary>
+    private int WindowStartIndex(double[] times)
+    {
+        if (TimeWindowSeconds <= 0 || times.Length == 0) return 0;
+        double xMin = times[^1] - TimeWindowSeconds;
+        for (int i = times.Length - 1; i >= 0; i--)
+            if (times[i] < xMin) return Math.Min(i + 1, times.Length - 1);
+        return 0;
     }
 
     private void RenderSinglePlot(double[] windowTimes, double[][] channelData,
@@ -1092,6 +1099,105 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
         }
     }
 
+    // ---- 一键归零 ----
+
+    /// <summary>有通道（含计算通道）设置了显示偏移时为 true，工具栏据此显示“取消归零”。</summary>
+    public bool HasDisplayOffsets =>
+        ChannelConfigs.Any(c => c.DisplayOffset != 0) || ComputedChannels.Any(c => c.DisplayOffset != 0);
+
+    private readonly HashSet<INotifyPropertyChanged> _offsetSources = new();
+
+    private void OnOffsetSourcesChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        // 通道列表会整体清空重建（Reset 不带旧项），按当前内容重新对齐订阅。
+        var current = ChannelConfigs.Cast<INotifyPropertyChanged>().Concat(ComputedChannels).ToHashSet();
+        foreach (var gone in _offsetSources.Where(source => !current.Contains(source)).ToList())
+        {
+            gone.PropertyChanged -= OnOffsetSourcePropertyChanged;
+            _offsetSources.Remove(gone);
+        }
+        foreach (var source in current)
+            if (_offsetSources.Add(source)) source.PropertyChanged += OnOffsetSourcePropertyChanged;
+        OnPropertyChanged(nameof(HasDisplayOffsets));
+    }
+
+    private void OnOffsetSourcePropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(ChannelDisplayConfig.DisplayOffset))
+            OnPropertyChanged(nameof(HasDisplayOffsets));
+    }
+
+    private bool CanZeroVisibleChannels() => DataPointCount > 0;
+
+    partial void OnDataPointCountChanged(long value)
+    {
+        // 绘图每次刷新都会更新点数，只在“有无数据”变化时通知按钮。
+        if ((value > 0) != _zeroCommandHadData)
+        {
+            _zeroCommandHadData = value > 0;
+            ZeroVisibleChannelsCommand.NotifyCanExecuteChanged();
+        }
+    }
+    private bool _zeroCommandHadData;
+
+    /// <summary>
+    /// 一键归零：把当前显示的每条曲线（可见通道与启用的计算通道）在时间窗口内的均值移到 0。
+    /// 只设置显示偏移（暂停时用冻结的数据），不改变保存的原始值、统计表和十字准线读数。
+    /// 手动纵轴范围是按原始数值设的，归零后曲线会移出范围，因此主 Y 轴改为自动。
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanZeroVisibleChannels))]
+    private void ZeroVisibleChannels()
+    {
+        var (times, channelData, _, _) = _pausedData ?? CapturePlotData();
+        if (times.Length == 0) return;
+        int start = WindowStartIndex(times);
+        int count = times.Length - start;
+
+        foreach (var config in ChannelConfigs.Where(c => c.Visible))
+        {
+            int ch = config.ChannelIndex;
+            if (ch < channelData.Length && channelData[ch].Length >= start + count
+                && FiniteMean(channelData[ch].AsSpan(start, count)) is { } mean)
+                config.DisplayOffset = -mean;
+        }
+
+        foreach (var computed in ComputedChannels.Where(c => c.Enabled && !string.IsNullOrWhiteSpace(c.Formula)))
+        {
+            var evaluator = GetOrCreateEvaluator(computed.Formula);
+            if (evaluator == null) continue;
+            var values = new double[count];
+            var row = new double[channelData.Length];
+            for (int i = 0; i < count; i++)
+            {
+                for (int ch = 0; ch < row.Length; ch++)
+                    row[ch] = channelData[ch].Length > start + i ? channelData[ch][start + i] : double.NaN;
+                values[i] = evaluator.Evaluate(row);
+            }
+            if (FiniteMean(values) is { } mean) computed.DisplayOffset = -mean;
+        }
+
+        AutoScaleY = true;
+        RefreshPlot();
+    }
+
+    /// <summary>取消归零：清除所有通道与计算通道的显示偏移。</summary>
+    [RelayCommand]
+    private void ClearDisplayOffsets()
+    {
+        foreach (var config in ChannelConfigs) config.DisplayOffset = 0;
+        foreach (var computed in ComputedChannels) computed.DisplayOffset = 0;
+        RefreshPlot();
+    }
+
+    private static double? FiniteMean(ReadOnlySpan<double> values)
+    {
+        double sum = 0;
+        int n = 0;
+        foreach (var v in values)
+            if (double.IsFinite(v)) { sum += v; n++; }
+        return n > 0 ? sum / n : null;
+    }
+
     // ---- 自动偏移 ----
 
     /// <summary>通道颜色可选色块：与默认色相同的 8 色。</summary>
@@ -1530,6 +1636,10 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
         _dataBus.ProcessedReadingReceived -= OnReadingReceived;
         _dataBus.AcquisitionStarted -= OnAcquisitionStarted;
         _dataBus.AcquisitionStopped -= OnAcquisitionStopped;
+        ChannelConfigs.CollectionChanged -= OnOffsetSourcesChanged;
+        ComputedChannels.CollectionChanged -= OnOffsetSourcesChanged;
+        foreach (var source in _offsetSources) source.PropertyChanged -= OnOffsetSourcePropertyChanged;
+        _offsetSources.Clear();
     }
 }
 

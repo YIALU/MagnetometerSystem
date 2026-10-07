@@ -2,6 +2,7 @@ using System.Collections;
 using System.Collections.Specialized;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using MagnetometerSystem.App.Controls;
 using MagnetometerSystem.Core.Models;
 
@@ -9,6 +10,30 @@ namespace MagnetometerSystem.App.Tests;
 
 public class WorkspaceControlsTests
 {
+    [Fact]
+    public Task ToolbarPanel_WrapsTheRightGroupInsteadOfClippingEitherGroup() => WpfTestHost.RunAsync(() =>
+    {
+        var left = new Border { Width = 420, Height = 30 };
+        var right = new Border { Width = 360, Height = 30 };
+        var panel = new ToolbarPanel { Spacing = 12, Children = { left, right } };
+
+        // 放得下：同一行，右组贴右边。
+        panel.Measure(new Size(900, double.PositiveInfinity));
+        panel.Arrange(new Rect(0, 0, 900, panel.DesiredSize.Height));
+        Assert.False(panel.IsWrapped);
+        Assert.Equal(30, panel.DesiredSize.Height);
+        Assert.Equal(new Rect(540, 0, 360, 30), LayoutInformation.GetLayoutSlot(right));
+
+        // 放不下（如 1100 px 窗口里的图表栏）：右组换到第二行，两组都完整。
+        panel.Measure(new Size(620, double.PositiveInfinity));
+        panel.Arrange(new Rect(0, 0, 620, panel.DesiredSize.Height));
+        Assert.True(panel.IsWrapped);
+        Assert.Equal(72, panel.DesiredSize.Height);
+        Assert.Equal(new Rect(0, 0, 420, 30), LayoutInformation.GetLayoutSlot(left));
+        Assert.Equal(new Rect(260, 42, 360, 30), LayoutInformation.GetLayoutSlot(right));
+        return Task.CompletedTask;
+    });
+
     [Fact]
     public Task WeightPanel_ManySegmentsNeverProduceNegativeWidths() => WpfTestHost.RunAsync(() =>
     {

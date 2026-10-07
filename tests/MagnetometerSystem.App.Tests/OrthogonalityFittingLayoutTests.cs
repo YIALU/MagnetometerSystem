@@ -14,31 +14,100 @@ namespace MagnetometerSystem.App.Tests;
 public class OrthogonalityFittingLayoutTests
 {
     [Fact]
-    public Task StartCollectingRejectsExtraMissingAndMixedChannelsWithoutTakingAPrefix() =>
+    public Task AmbiguousLayoutsWaitForTheUserInsteadOfTakingAPrefix() =>
         WpfTestHost.RunAsync(async () =>
         {
             using var fixture = await Fixture.CreateAsync();
-            foreach (var (dual, units) in new[]
+            foreach (var units in new[]
             {
-                (false, new[] { "nT", "nT", "nT", "nT" }),
-                (false, new[] { "°C", "nT", "nT", "nT" }),
-                (false, new[] { "nT", "nT" }),
-                (false, new[] { "nT", "", "nT" }),
-                (false, new[] { "nT", "uT", "nT" }),
-                (true, new[] { "nT", "nT", "nT", "nT", "nT", "nT", "°C" }),
+                new[] { "nT", "nT", "nT", "nT" },   // 多于所需，名称看不出轴
+                new[] { "nT", "nT" },
+                new[] { "nT", "", "nT" },
+                new[] { "nT", "uT", "nT" },
             })
             {
-                var vm = fixture.CreateVm(dual ? 6 : 3);
+                var vm = fixture.CreateVm(3);
                 await fixture.PrepareLiveAsync(units);
+                Assert.Equal(units.Length, vm.FittingChannelOptions.Count);
+                Assert.Equal(-1, vm.FitX1);
+                Assert.False(vm.IsFittingChannelValid);
                 vm.StartCollectingCommand.Execute(null);
                 Assert.False(vm.IsCollecting);
-                Assert.Contains("CSV", vm.CollectionStatus);
+                Assert.Contains("拟合通道", vm.CollectionStatus);
                 fixture.Bus.PublishReading(new MagnetometerReading
                 { Timestamp = DateTime.UtcNow, ChannelValues = Enumerable.Repeat(42d, units.Length).ToArray() });
                 Assert.Empty(vm.CollectedData);
-                Assert.Equal(0, vm.CollectedSampleCount);
                 Assert.Null(vm.CalculationResult);
             }
+
+            // 用户明确选择后按所选通道采集。
+            var chosen = fixture.CreateVm(3);
+            await fixture.PrepareLiveAsync(["nT", "nT", "nT", "nT"]);
+            (chosen.FitX1, chosen.FitY1, chosen.FitZ1) = (3, 1, 2);
+            Assert.True(chosen.IsFittingChannelValid, chosen.FittingChannelHint);
+            chosen.StartCollectingCommand.Execute(null);
+            Assert.True(chosen.IsCollecting, chosen.CollectionStatus);
+            fixture.Bus.PublishReading(new MagnetometerReading { Timestamp = DateTime.UtcNow, ChannelValues = [10, 11, 12, 13] });
+            Assert.Equal(new double[] { 13, 11, 12 }, Assert.Single(chosen.CollectedData));
+            chosen.StopCollectingCommand.Execute(null);
+
+            // 混合单位即使手动选择也拒绝。
+            var mixed = fixture.CreateVm(3);
+            await fixture.PrepareLiveAsync(["nT", "uT", "nT"]);
+            (mixed.FitX1, mixed.FitY1, mixed.FitZ1) = (0, 1, 2);
+            mixed.StartCollectingCommand.Execute(null);
+            Assert.False(mixed.IsCollecting);
+            Assert.Contains("单位", mixed.CollectionStatus);
+        });
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public Task NonMagneticChannelsAreSkippedWhenTheMagneticLayoutIsExact(bool dual) =>
+        WpfTestHost.RunAsync(async () =>
+        {
+            using var fixture = await Fixture.CreateAsync();
+            var vm = fixture.CreateVm(dual ? 6 : 3);
+            string[] units = dual ? ["nT", "nT", "nT", "nT", "nT", "nT", "°C"] : ["°C", "nT", "nT", "nT"];
+            await fixture.PrepareLiveAsync(units);
+            vm.StartCollectingCommand.Execute(null);
+            Assert.True(vm.IsCollecting, vm.CollectionStatus);
+            fixture.Bus.PublishReading(new MagnetometerReading
+            {
+                Timestamp = DateTime.UtcNow,
+                ChannelValues = dual ? [1, 2, 3, 4, 5, 6, 25] : [25, 1, 2, 3],
+            });
+            Assert.Equal(new double[] { 1, 2, 3 }, Assert.Single(vm.CollectedData));
+            if (dual) Assert.Equal(new double[] { 4, 5, 6 }, Assert.Single(SecondGroup(vm)));
+            vm.StopCollectingCommand.Execute(null);
+        });
+
+    [Theory]
+    [InlineData("cct5", true)]
+    [InlineData("cct5", false)]
+    [InlineData("zdz", true)]
+    [InlineData("zdz", false)]
+    public Task BuiltInProtocolsMapProbesByChannelName(string protocolKind, bool dual) =>
+        WpfTestHost.RunAsync(async () =>
+        {
+            using var fixture = await Fixture.CreateAsync();
+            var protocol = protocolKind == "cct5" ? ProtocolConfig.CreateCct5Gradiometer() : ProtocolConfig.CreateZdzC08();
+            var names = protocol.DerivedChannelNames.ToArray();
+            var vm = fixture.CreateVm(dual ? 6 : 3);
+            vm.SelectedMode = CalibrationCollectionMode.Manual48;
+            await fixture.PrepareLiveAsync(protocol.DerivedChannelUnits.ToArray(), names);
+            vm.StartCollectingCommand.Execute(null);
+            Assert.True(vm.IsCollecting, vm.CollectionStatus);
+            for (int i = 0; i < 10; i++)
+                fixture.Bus.PublishReading(new MagnetometerReading
+                { Timestamp = DateTime.UtcNow, ChannelValues = Enumerable.Range(0, names.Length).Select(ch => 10d * ch).ToArray() });
+            vm.RecordCurrentPointCommand.Execute(null);
+
+            double Value(string name) => 10d * Array.IndexOf(names, name);
+            Assert.Equal(new[] { Value("X1"), Value("Y1"), Value("Z1") }, Assert.Single(vm.CollectedData));
+            if (dual) Assert.Equal(new[] { Value("X2"), Value("Y2"), Value("Z2") }, Assert.Single(SecondGroup(vm)));
+            Assert.Contains("X1", vm.LiveValuesText);
+            vm.StopCollectingCommand.Execute(null);
         });
 
     [Theory]
@@ -101,7 +170,7 @@ public class OrthogonalityFittingLayoutTests
             });
 
             Assert.False(vm.IsCollecting);
-            Assert.Contains("CSV", vm.CollectionStatus);
+            Assert.Contains("已停止拟合数据采集", vm.CollectionStatus);
             Assert.Equal(new double[] { 1, 2, 3 }, Assert.Single(vm.CollectedData));
             Assert.Equal(1, vm.CollectedSampleCount);
             fixture.Bus.PublishReading(new MagnetometerReading { ChannelValues = [8, 9, 10], Timestamp = DateTime.UtcNow });
@@ -126,21 +195,25 @@ public class OrthogonalityFittingLayoutTests
                     Assert.Equal(new double[] { 4, 5, 6 }, Assert.Single(SecondGroup(vm)));
                 Assert.Equal("nT", vm.CollectedUnit);
 
+                // 会话元数据自相矛盾：拒绝，保留已有样本。
                 session.ChannelCount = channels + 1;
                 await ImportSessionAsync(vm, session);
-                Assert.Contains("CSV", vm.CollectionStatus);
+                Assert.Contains("不一致", vm.CollectionStatus);
                 Assert.Equal(new double[] { 1, 2, 3 }, Assert.Single(vm.CollectedData));
                 session.ChannelCount = channels;
 
+                // 多一个看不出轴的通道：不按前缀截取，等用户在“拟合通道”中选择。
                 var extra = await fixture.SaveSessionAsync(Enumerable.Repeat("nT", channels + 1).ToArray());
                 await ImportSessionAsync(vm, extra);
-                Assert.Contains("CSV", vm.CollectionStatus);
+                Assert.Contains("拟合通道", vm.CollectionStatus);
+                Assert.Equal(channels + 1, vm.FittingChannelOptions.Count);
                 Assert.Equal(new double[] { 1, 2, 3 }, Assert.Single(vm.CollectedData));
 
-                // Exercise the same production import with a legacy/inconsistent metadata snapshot.
-                // The underlying rows still come from real SQLite and contain the extra channel.
+                // 旧库的元数据快照少记了一个通道，但行里仍有：即使选了通道也拒绝。
                 extra.ChannelCount = channels;
+                extra.ChannelNames = extra.ChannelNames[..channels];
                 extra.ChannelUnits = Enumerable.Repeat("nT", channels).ToArray();
+                SelectInOrder(vm, channels);
                 await ImportSessionAsync(vm, extra);
                 Assert.Contains("读数与通道元数据不一致", vm.CollectionStatus);
                 Assert.Equal(new double[] { 1, 2, 3 }, Assert.Single(vm.CollectedData));
@@ -148,9 +221,10 @@ public class OrthogonalityFittingLayoutTests
 
                 session.ChannelUnits = [];
                 await ImportSessionAsync(vm, session);
-                Assert.Contains("CSV", vm.CollectionStatus);
+                Assert.Contains("不一致", vm.CollectionStatus);
                 session.ChannelUnits = Enumerable.Repeat("nT", channels).ToArray();
                 session.ChannelUnits[^1] = "°C";
+                SelectInOrder(vm, channels);
                 await ImportSessionAsync(vm, session);
                 Assert.Contains("单位", vm.CollectionStatus);
                 Assert.Equal(new double[] { 1, 2, 3 }, Assert.Single(vm.CollectedData));
@@ -250,6 +324,12 @@ public class OrthogonalityFittingLayoutTests
             Assert.Equal(new double[] { 1, 2, 3 }, Assert.Single(vm.CollectedData));
         });
 
+    private static void SelectInOrder(OrthogonalityCalibrationViewModel vm, int channels)
+    {
+        (vm.FitX1, vm.FitY1, vm.FitZ1) = (0, 1, 2);
+        if (channels == 6) (vm.FitX2, vm.FitY2, vm.FitZ2) = (3, 4, 5);
+    }
+
     private static List<double[]> SecondGroup(OrthogonalityCalibrationViewModel vm) =>
         (List<double[]>)typeof(OrthogonalityCalibrationViewModel)
             .GetField("_collectedDataSecondGroup", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(vm)!;
@@ -289,9 +369,9 @@ public class OrthogonalityFittingLayoutTests
             return vm;
         }
 
-        public async Task PrepareLiveAsync(string[] units)
+        public async Task PrepareLiveAsync(string[] units, string[]? names = null)
         {
-            await Bus.PublishAcquisitionStartingAsync(Config(units));
+            await Bus.PublishAcquisitionStartingAsync(Config(units, names));
             Bus.PublishConnectionChanged(new LiveConnection());
         }
 
@@ -304,10 +384,10 @@ public class OrthogonalityFittingLayoutTests
             return Assert.Single((await Storage.GetSessionsAsync()).Where(s => s.Id == id));
         }
 
-        private static SensorConfig Config(string[] units) => new()
+        private static SensorConfig Config(string[] units, string[]? names = null) => new()
         {
             Type = SensorType.Generic, ChannelCountOverride = units.Length,
-            ChannelNamesOverride = Enumerable.Range(0, units.Length).Select(i => $"CH{i}").ToArray(),
+            ChannelNamesOverride = names ?? Enumerable.Range(0, units.Length).Select(i => $"CH{i}").ToArray(),
             ChannelUnitsOverride = units,
         };
 

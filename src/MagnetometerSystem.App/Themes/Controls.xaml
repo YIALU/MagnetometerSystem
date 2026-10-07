@@ -23,6 +23,7 @@
     <converters:EqualsToVisibilityConverter x:Key="ActiveToVisibility"/>
     <converters:EmptyToVisibleConverter x:Key="EmptyToVisible"/>
     <converters:StepStateConverter x:Key="StepState"/>
+    <converters:RatioConverter x:Key="Ratio"/>
     <!-- ComboBox 显示枚举中文名 -->
     <DataTemplate x:Key="EnumItemTemplate">
         <TextBlock Text="{Binding Converter={StaticResource EnumDisplay}}"/>

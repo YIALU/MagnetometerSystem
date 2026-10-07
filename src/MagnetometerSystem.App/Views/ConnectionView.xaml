@@ -259,10 +259,10 @@
                                     </ItemsControl.ItemsPanel>
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate DataType="{x:Type models:FrameSegment}">
-                                            <Border controls:WeightPanel.Weight="{Binding ByteCount}" Margin="0,0,2,0" CornerRadius="3" Padding="4,3"
-                                                    ToolTip="{Binding Name}">
+                                            <Border controls:WeightPanel.Weight="{Binding ByteCount}" Margin="0,0,2,0" CornerRadius="3" Padding="4,3">
                                                 <Border.Style>
                                                     <Style TargetType="Border">
+                                                        <Setter Property="ToolTip" Value="{Binding Name}"/>
                                                         <Setter Property="Background" Value="{DynamicResource Panel3Brush}"/>
                                                         <Setter Property="TextElement.Foreground" Value="{DynamicResource Ink2Brush}"/>
                                                         <Style.Triggers>
@@ -282,6 +282,16 @@
                                                                 <Setter Property="Background" Value="{DynamicResource WarnSoftBrush}"/>
                                                                 <Setter Property="TextElement.Foreground" Value="{DynamicResource WarnBrush}"/>
                                                             </DataTrigger>
+                                                            <!-- 未启用的校验段只占位：与填充段同色，提示里说明 -->
+                                                            <MultiDataTrigger>
+                                                                <MultiDataTrigger.Conditions>
+                                                                    <Condition Binding="{Binding Type}" Value="{x:Static models:SegmentType.Checksum}"/>
+                                                                    <Condition Binding="{Binding ChecksumEnabled}" Value="False"/>
+                                                                </MultiDataTrigger.Conditions>
+                                                                <Setter Property="Background" Value="{DynamicResource Panel3Brush}"/>
+                                                                <Setter Property="TextElement.Foreground" Value="{DynamicResource MutedBrush}"/>
+                                                                <Setter Property="ToolTip" Value="校验未启用：这几个字节只占位，不比对"/>
+                                                            </MultiDataTrigger>
                                                         </Style.Triggers>
                                                     </Style>
                                                 </Border.Style>
@@ -355,8 +365,10 @@
                                                             <!-- 长度 -->
                                                             <CheckBox Content="大端序" IsChecked="{Binding LengthBigEndian}" Style="{StaticResource OnlyLength}"
                                                                       ToolTip="长度值表示数据区字节数"/>
-                                                            <!-- 校验 -->
+                                                            <!-- 校验：先决定是否比对，后面是参数 -->
                                                             <StackPanel Orientation="Horizontal" Style="{StaticResource OnlyChecksum}">
+                                                                <CheckBox Content="启用校验" IsChecked="{Binding ChecksumEnabled}" Margin="0,0,12,0" VerticalAlignment="Center"
+                                                                          ToolTip="不勾选：帧里预留了校验字段、但固件没有计算时使用。这几个字节照常占位，解析时不比对；右侧参数保留，勾选后立即生效。"/>
                                                                 <ComboBox Width="96" ItemsSource="{Binding Source={StaticResource ChecksumAlgorithmValues}}" SelectedItem="{Binding ChecksumAlgorithm}"
                                                                           ItemTemplate="{StaticResource EnumItemTemplate}" Margin="0,0,8,0"/>
                                                                 <TextBlock Text="起始段" VerticalAlignment="Center" Margin="0,0,4,0" Foreground="{DynamicResource MutedBrush}"/>
