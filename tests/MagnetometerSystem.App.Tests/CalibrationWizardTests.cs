@@ -165,6 +165,13 @@ public class CalibrationWizardTests
 
         vm.RecordCurrentPointCommand.Execute(null);
         Assert.Equal(0, vm.CollectedSampleCount); // 还没有读数
+        // 每点是最近 10 条读数的均值：不足 10 条时页面、链路条两个入口都不记录。
+        for (int i = 0; i < 5; i++) f.Bus.PublishReading(Reading([1, 2, 3, 4, 5, 6]));
+        vm.RecordCurrentPointCommand.Execute(null);
+        f.Bus.RaiseManualOrthoRecord();
+        Assert.Equal(0, vm.CollectedSampleCount);
+        Assert.Contains("5/10", vm.CollectionStatus);
+        Assert.False(vm.ManualState.HasEnoughBuffer);
         for (int i = 0; i < 10; i++) f.Bus.PublishReading(Reading([1, 2, 3, 4, 5, 6 + i]));
         vm.RecordCurrentPointCommand.Execute(null);
         f.Bus.RaiseManualOrthoRecord(); // 链路条上的“记录当前点”

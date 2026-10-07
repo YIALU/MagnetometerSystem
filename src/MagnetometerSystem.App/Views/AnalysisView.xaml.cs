@@ -61,7 +61,8 @@ public partial class AnalysisView : UserControl
             {
                 var s = plot.Add.Scatter(xs, ys);
                 s.Color = accent; s.LineWidth = 1.5f; s.MarkerSize = xs.Length > 200 ? 0 : 4;
-                s.LegendText = "窗口残差标准差";
+                s.LegendText = "窗口残差标准差" + (r.NoiseWindowCount > r.NoiseWindows.Count
+                    ? $"（显示 {r.NoiseWindows.Count:N0} / {r.NoiseWindowCount:N0} 个窗口）" : "");
                 var median = plot.Add.HorizontalLine(r.NoiseMedianStd);
                 median.Color = orange; median.LineWidth = 1.5f; median.LinePattern = ScottPlot.LinePattern.Dashed;
                 median.LegendText = $"中位数 {r.NoiseMedianStd:G5}";
@@ -70,10 +71,8 @@ public partial class AnalysisView : UserControl
         }
         else
         {
-            var finite = Enumerable.Range(0, row.Values.Length).Where(i => double.IsFinite(row.Values[i])).ToArray();
-            var xs = finite.Select(i => row.Seconds[i]).ToArray();
-            var ys = finite.Select(i => row.Values[i]).ToArray();
-            if (xs.Length > MaxPlotPoints) (xs, ys) = LttbDownsampler.Downsample(xs, ys, MaxPlotPoints);
+            // 直接从源数组按桶取极值并跳过非有限值，不在界面线程上复制全量数据。
+            var (xs, ys) = MinMaxDecimator.Decimate(row.Seconds, row.Values, MaxPlotPoints);
             if (xs.Length > 0)
             {
                 var series = plot.Add.ScatterLine(xs, ys);

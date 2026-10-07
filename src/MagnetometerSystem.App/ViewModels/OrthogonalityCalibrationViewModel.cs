@@ -372,6 +372,9 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
 
     /// <summary>是否处于手动模式（供 XAML DataTrigger 使用）</summary>
     public bool IsManualMode => SelectedMode == CalibrationCollectionMode.Manual48;
+
+    /// <summary>手动采集的缓冲就绪状态（链路条与本页“记录当前点”按钮共用）。</summary>
+    public ManualOrthoState ManualState => _dataBus.ManualOrthoState;
     partial void OnSelectedModeChanged(CalibrationCollectionMode value)
     {
         OnPropertyChanged(nameof(IsManualMode));
@@ -610,6 +613,12 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
                 CollectionStatus = "还没有收到读数：确认设备已连接并在输出数据";
                 return;
             }
+            // 每个点承诺为最近 RecentBufferSize 条读数的均值；不足时不记录（页面按钮、链路条按钮和快捷键一致）。
+            if (buffered < RecentBufferSize)
+            {
+                CollectionStatus = $"缓冲中（{buffered}/{RecentBufferSize}），收满 {RecentBufferSize} 条读数后再记录";
+                return;
+            }
 
             // 对每通道求均值
             DateTime lastTs = DateTime.Now;
@@ -620,9 +629,9 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
                 validCount++;
                 lastTs = r.Timestamp;
             }
-            if (validCount == 0)
+            if (validCount < RecentBufferSize)
             {
-                CollectionStatus = $"最近的读数不足 {n} 个通道，不能记录";
+                CollectionStatus = $"最近 {RecentBufferSize} 条读数中只有 {validCount} 条为 {n} 个通道，不能记录";
                 return;
             }
             var avg = new double[n];

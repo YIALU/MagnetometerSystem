@@ -115,6 +115,23 @@ public class DriftNoiseAnalyzerTests
     }
 
     [Fact]
+    public void ManyShortWindowsKeepBoundedDisplayRecordsButExactStatistics()
+    {
+        // 1 kHz、200 秒；3.5 ms 窗口（每窗 3 或 4 点）约 5.7 万个、1 s 分段 200 个：显示记录有上限，计数与统计按全部窗口。
+        var (t, v) = Series(200_000, 0.001, (i, _) => i % 3 == 0 ? 1 : -1);
+        var r = DriftNoiseAnalyzer.Analyze(t, v, new DriftNoiseOptions { NoiseWindowSeconds = 0.0035, DriftSegmentSeconds = 1 });
+        Assert.True(r.NoiseWindowCount > DriftNoiseAnalyzer.MaxRetainedWindows);
+        Assert.InRange(r.NoiseWindows.Count, 1, DriftNoiseAnalyzer.MaxRetainedWindows);
+        Assert.Equal(0, r.NoiseWindows[0].StartSeconds, 9);
+        Assert.True(r.NoiseWindows.Zip(r.NoiseWindows.Skip(1)).All(p => p.Second.StartSeconds > p.First.StartSeconds));
+        Assert.Equal(200, r.SegmentCount);
+        Assert.Equal(200, r.Segments.Count); // 未超过上限时全部保留
+        // 计数是全部窗口（约 200 s / 3.5 ms），不是保留下来用于显示的条数。
+        Assert.InRange(r.NoiseWindowCount, 56_500, 57_500);
+        Assert.True(double.IsFinite(r.NoiseMedianStd) && r.NoiseMedianStd > 0);
+    }
+
+    [Fact]
     public void TinyFiniteWindowsStillTerminate()
     {
         var (t, v) = Series(200, 1, (_, s) => s);

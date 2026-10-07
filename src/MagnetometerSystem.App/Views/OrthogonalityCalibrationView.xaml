@@ -291,8 +291,9 @@
                                     <!-- 采集中 -->
                                     <StackPanel Visibility="{Binding IsCollecting, Converter={StaticResource BoolToVis}}">
                                         <StackPanel Visibility="{Binding IsManualMode, Converter={StaticResource BoolToVis}}">
+                                            <!-- 与链路条按钮相同：缓冲满 10 条读数后才能记录 -->
                                             <Button Content="记录当前点" Style="{StaticResource PrimaryButton}" Height="40" FontSize="14"
-                                                    Command="{Binding RecordCurrentPointCommand}"/>
+                                                    IsEnabled="{Binding ManualState.HasEnoughBuffer}" Command="{Binding RecordCurrentPointCommand}"/>
                                             <DockPanel Margin="0,8,0,0">
                                                 <Button DockPanel.Dock="Right" Content="结束采集" Style="{StaticResource SmallButton}" Command="{Binding StopCollectingCommand}"/>
                                                 <Button Content="撤销上一点" Style="{StaticResource SmallButton}" Command="{Binding UndoLastPointCommand}" Margin="0,0,6,0"/>
