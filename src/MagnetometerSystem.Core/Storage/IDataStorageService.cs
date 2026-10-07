@@ -95,5 +95,9 @@ public sealed record StorageWriteStatus(long SavedReadings, long PendingReadings
 /// <summary>分页读取的续读位置：上一页最后一条的存储时间戳与 ID。</summary>
 public sealed record ReadingPageCursor(string Timestamp, long Id);
 
-/// <summary>一页读数及续读位置；<see cref="Next"/> 为 null 表示已读完。</summary>
-public sealed record ReadingPage(IReadOnlyList<MagnetometerReading> Readings, ReadingPageCursor? Next);
+/// <summary>
+/// 一页读数及续读位置；<see cref="Next"/> 为 null 表示已读完。
+/// <see cref="UtcTimestamps"/> 与 <see cref="Readings"/> 一一对应，是存储中的 UTC 时刻（未经本地时间往返），
+/// 计算经过时间时应使用它：读数的 <c>Timestamp</c> 是本地时间，跨夏令时切换时会出现虚假的跳变或回退。
+/// </summary>
+public sealed record ReadingPage(IReadOnlyList<MagnetometerReading> Readings, IReadOnlyList<DateTime> UtcTimestamps, ReadingPageCursor? Next);

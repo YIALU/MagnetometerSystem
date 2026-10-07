@@ -176,6 +176,35 @@ public class AnalysisViewModelTests
     });
 
     [Fact]
+    public Task Run_UsesStoredUtcInstantsAcrossDaylightSavingChanges() => WpfTestHost.RunAsync(async () =>
+    {
+        using var f = await Fixture.CreateAsync();
+        // 模拟秋季回拨：后半段读数的本地时间比真实时刻早 1 小时，存储中的 UTC 时刻不变。
+        var midpointUtc = f.Start.ToUniversalTime().AddSeconds(Seconds / 2.0);
+        var shifted = new GatedStorage(f.Storage)
+        {
+            Transform = page =>
+            {
+                for (int i = 0; i < page.Readings.Count; i++)
+                    if (page.UtcTimestamps[i] >= midpointUtc) page.Readings[i].Timestamp = page.Readings[i].Timestamp.AddHours(-1);
+                return page;
+            },
+        };
+        shifted.Release.TrySetResult();
+        var vm = await ReadyAsync(shifted);
+        vm.ReadPageSize = 700;
+
+        await vm.RunCommand.ExecuteAsync(null);
+
+        Assert.False(vm.IsError, vm.StatusMessage);
+        var drift = vm.Results[0];
+        Assert.All(drift.Seconds.Zip(drift.Seconds.Skip(1)), p => Assert.True(p.Second > p.First));
+        Assert.Equal(Seconds, drift.Result.Quality.DurationSeconds, 6);
+        Assert.Equal(1, drift.Result.Quality.GapCount); // 只有夹具里真实的缺失
+        Assert.Equal(3.6, drift.Result.DriftPerHour, 6);
+    });
+
+    [Fact]
     public Task Csv_EscapesNamesKeepsFullPrecisionAndRecordsSettings() => WpfTestHost.RunAsync(async () =>
     {
         using var f = await Fixture.CreateAsync();
@@ -254,6 +283,7 @@ public class AnalysisViewModelTests
         public TaskCompletionSource FirstChunkRequested { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public int ChunkCalls { get; private set; }
+        public Func<ReadingPage, ReadingPage>? Transform { get; init; }
 
         public async Task<ReadingPage> GetReadingsPageAsync(string sessionId, DateTime startTime, DateTime endTime, ReadingPageCursor? after, int limit)
         {
@@ -262,7 +292,8 @@ public class AnalysisViewModelTests
                 FirstChunkRequested.TrySetResult();
                 await Release.Task;
             }
-            return await inner.GetReadingsPageAsync(sessionId, startTime, endTime, after, limit);
+            var page = await inner.GetReadingsPageAsync(sessionId, startTime, endTime, after, limit);
+            return Transform?.Invoke(page) ?? page;
         }
 
         public Task<IReadOnlyList<MagnetometerReading>> GetReadingsAsync(string sessionId, DateTime? startTime = null, DateTime? endTime = null) =>

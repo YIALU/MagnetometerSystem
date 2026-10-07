@@ -297,7 +297,7 @@ public class SqliteStorageService : IDataStorageService, IDisposable
 
         var sensorTypeName = await conn.ExecuteScalarAsync<string?>(
             "SELECT sensor_type FROM sessions WHERE id = @Id", new { Id = sessionId });
-        if (sensorTypeName == null) return new ReadingPage([], null);
+        if (sensorTypeName == null) return new ReadingPage([], [], null);
         var legacyTable = await conn.ExecuteScalarAsync<string?>(
             "SELECT legacy_data_table FROM sessions WHERE id = @Id", new { Id = sessionId });
         if (legacyTable != null)
@@ -322,13 +322,15 @@ public class SqliteStorageService : IDataStorageService, IDisposable
         parameters.Add("Limit", limit);
 
         var readings = new List<MagnetometerReading>();
+        var utcTimestamps = new List<DateTime>();
         ReadingPageCursor? last = null;
         foreach (var row in await conn.QueryAsync(sql, parameters))
         {
             readings.Add(MapRowToReading(row, channelNames, sensorType));
+            utcTimestamps.Add(ParseUtc((string)row.timestamp));
             last = new ReadingPageCursor((string)row.timestamp, (long)row.id);
         }
-        return new ReadingPage(readings, readings.Count == limit ? last : null);
+        return new ReadingPage(readings, utcTimestamps, readings.Count == limit ? last : null);
     }
 
     /// <inheritdoc />
@@ -792,12 +794,13 @@ public class SqliteStorageService : IDataStorageService, IDisposable
     /// 将 DB 里存储的 UTC ISO-8601 时间字符串解析为本地时间（Kind=Local）。
     /// DB 仍统一保持 UTC 存储；仅显示/读取时转本地，避免时区歧义。
     /// </summary>
-    private static DateTime ParseUtcAsLocal(string iso)
+    private static DateTime ParseUtcAsLocal(string iso) => ParseUtc(iso).ToLocalTime();
+
+    /// <summary>存储的时间戳按 UTC 解析（无时区标记时视为 UTC），不经过本地时间。</summary>
+    private static DateTime ParseUtc(string iso)
     {
         var dt = DateTime.Parse(iso, null, DateTimeStyles.RoundtripKind);
-        if (dt.Kind == DateTimeKind.Unspecified)
-            dt = DateTime.SpecifyKind(dt, DateTimeKind.Utc);
-        return dt.ToLocalTime();
+        return dt.Kind == DateTimeKind.Unspecified ? DateTime.SpecifyKind(dt, DateTimeKind.Utc) : dt.ToUniversalTime();
     }
 
     #endregion

@@ -162,8 +162,10 @@ public partial class AnalysisViewModel : ObservableObject
         DateTime from, to;
         try
         {
-            from = startOffset is { } a ? session.StartedAt.AddSeconds(a) : session.StartedAt;
-            to = endOffset is { } b ? session.StartedAt.AddSeconds(b) : sessionEnd;
+            // 起止按 UTC 计算：偏移秒数是实际经过时间，跨夏令时切换时不能按本地钟面相加。
+            var startUtc = session.StartedAt.ToUniversalTime();
+            from = startOffset is { } a ? startUtc.AddSeconds(a) : startUtc;
+            to = endOffset is { } b ? startUtc.AddSeconds(b) : sessionEnd.ToUniversalTime();
         }
         catch (ArgumentOutOfRangeException)
         {
@@ -203,7 +205,7 @@ public partial class AnalysisViewModel : ObservableObject
             }).ToArray(), token);
             foreach (var row in rows) Results.Add(row);
             FocusedResult = Results.FirstOrDefault();
-            AnalysisSettingsText = $"会话：{session.Name}；时间段：{from:yyyy-MM-dd HH:mm:ss.fff} — {to:yyyy-MM-dd HH:mm:ss.fff}；"
+            AnalysisSettingsText = $"会话：{session.Name}；时间段：{from.ToLocalTime():yyyy-MM-dd HH:mm:ss.fff} — {to.ToLocalTime():yyyy-MM-dd HH:mm:ss.fff}；"
                 + $"数据：原始值（协议解析后、校正前）；噪声窗口 {options.NoiseWindowSeconds:0.###} s，"
                 + (options.DetrendNoiseWindows ? "窗口内去线性趋势" : "窗口内仅去均值")
                 + $"；漂移分段 {options.DriftSegmentSeconds:0.###} s";
@@ -234,10 +236,12 @@ public partial class AnalysisViewModel : ObservableObject
             token.ThrowIfCancellationRequested();
             Report($"正在读取，已读 {times.Count:N0} 条…", false);
             var page = await _storage.GetReadingsPageAsync(sessionId, from, to, cursor, ReadPageSize);
-            foreach (var r in page.Readings)
+            for (int n = 0; n < page.Readings.Count; n++)
             {
+                var r = page.Readings[n];
                 var raw = r.OriginalChannelValues ?? r.ChannelValues;
-                times.Add(r.Timestamp);
+                // 用存储中的 UTC 时刻：本地时间跨夏令时会产生虚假的缺失或时间回退。
+                times.Add(page.UtcTimestamps[n]);
                 for (int k = 0; k < indices.Length; k++)
                     columns[k].Add(indices[k] < raw.Length ? raw[indices[k]] : double.NaN);
             }

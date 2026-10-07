@@ -83,6 +83,10 @@ public class SqliteStorageServiceTests : IAsyncLifetime
         {
             var page = await _service.GetReadingsPageAsync(sessionId, from, to, cursor, 7);
             Assert.True(page.Readings.Count <= 7);
+            // 每条读数附带存储中的 UTC 时刻（不经本地时间往返）。
+            Assert.Equal(page.Readings.Count, page.UtcTimestamps.Count);
+            Assert.All(page.UtcTimestamps, t => Assert.Equal(DateTimeKind.Utc, t.Kind));
+            Assert.Equal(page.Readings.Select(r => r.Timestamp.ToUniversalTime()), page.UtcTimestamps);
             seen.AddRange(page.Readings.Select(r => r.ChannelValues[0]));
             cursor = page.Next;
             pages++;
