@@ -85,3 +85,7 @@ python_tools/
 *.pem
 *.env
 src/MagnetometerSystem.Feedback.Server/data/
+
+## Python
+__pycache__/
+*.pyc

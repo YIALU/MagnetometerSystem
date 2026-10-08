@@ -53,9 +53,9 @@ public sealed class ParseRecordLog(int capacity = ParseRecordLog.DefaultCapacity
     public long DroppedCount { get; private set; }
 
     /// <summary>一帧通过。只在一段的第一帧生成预览。</summary>
-    public void Accepted(int bytes, int channels, ReadOnlySpan<byte> frame, bool hex)
+    public void Accepted(int bytes, int channels, ReadOnlySpan<byte> frame, bool hex, string? note = null)
     {
-        var detail = $"{channels} 通道";
+        var detail = note is null ? $"{channels} 通道" : $"{channels} 通道 · {note}";
         if (_runOpen && _runOutcome == ParseOutcome.Accepted && _runDetail == detail)
         {
             _runFrames++;

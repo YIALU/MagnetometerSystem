@@ -38,8 +38,8 @@ public partial class FeedbackViewModel(IFeedbackClient client, FeedbackDraftStor
     private FeedbackSubmission Snapshot()
     {
         var current = new FeedbackSubmission(_attempt?.FeedbackId ?? Guid.NewGuid(), Scenario, Description, Name, Contact,
-            _attempt?.Version ?? AppVersion.Display);
-        if (_attempt is not null && current != _attempt) current = current with { FeedbackId = Guid.NewGuid(), Version = AppVersion.Display };
+            _attempt?.Version ?? AppVersion.DiagnosticVersion);
+        if (_attempt is not null && current != _attempt) current = current with { FeedbackId = Guid.NewGuid(), Version = AppVersion.DiagnosticVersion };
         return current;
     }
     public async Task SaveDraftAsync()

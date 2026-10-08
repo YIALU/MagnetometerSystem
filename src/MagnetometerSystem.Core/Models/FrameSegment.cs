@@ -151,6 +151,24 @@ public class FrameSegment : INotifyPropertyChanged
 
     // ---- Checksum 专用 ----
 
+    private bool _checksumEnabled = true;
+    /// <summary>
+    /// 是否校验。帧里预留了校验字段、但固件尚未计算时关闭：这些字节照常占位，解析时不比对，
+    /// 算法与范围等参数保留，固件启用后打开即可。旧配置没有该字段时为 true。
+    /// </summary>
+    public bool ChecksumEnabled
+    {
+        get => _checksumEnabled;
+        set
+        {
+            if (_checksumEnabled != value)
+            {
+                _checksumEnabled = value;
+                OnPropertyChanged(nameof(ChecksumEnabled));
+            }
+        }
+    }
+
     /// <summary>校验算法</summary>
     private ChecksumAlgorithm _checksumAlgorithm = ChecksumAlgorithm.Xor;
     public ChecksumAlgorithm ChecksumAlgorithm

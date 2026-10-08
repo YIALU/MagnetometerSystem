@@ -295,6 +295,9 @@ public class ProtocolConfig
                 || checksum.ChecksumStartIndex < 0 || checksum.ChecksumStartIndex >= Segments.IndexOf(checksum)
                 || (checksum.ChecksumAlgorithm == ChecksumAlgorithm.CRC16 && !Enum.IsDefined(checksum.Crc16Variant)))
                 throw new ArgumentException(message);
+            // 协议声明必须校验时，未启用的校验段等于不校验：拒绝，避免损坏的载荷被当作有效数据保存。
+            if (!checksum.ChecksumEnabled)
+                throw new ArgumentException("该协议要求校验，但校验段未启用：请在校验段勾选“启用校验”，并按固件确认参数后再连接。");
         }
         else if (Checksum == ChecksumType.None || !Enum.IsDefined(Checksum))
             throw new ArgumentException(message);
@@ -359,9 +362,52 @@ public class ProtocolConfig
             {
                 config.MigrateFromLegacy();
             }
+            config.NormalizeChannelText();
+            config.MigrateChecksumPlaceholder();
             config.ComputeSegmentOffsets();
         }
         return config;
+    }
+
+    /// <summary>
+    /// JSON 里显式写成 null 的名称 / 单位会绕过属性默认值；按空文本处理（单位未知），
+    /// 免得通道元数据传到会话、图表单位轴和拟合通道时出现 null。
+    /// </summary>
+    private void NormalizeChannelText()
+    {
+        FieldMappings ??= [];
+        Segments ??= [];
+        foreach (var field in FieldMappings)
+        {
+            field.Name ??= "";
+            field.Unit ??= "";
+        }
+        foreach (var segment in Segments)
+        {
+            segment.Name ??= "";
+            segment.Unit ??= "";
+        }
+    }
+
+    /// <summary>v0.5.3 及以前数采卡预设里的校验占位段名称。</summary>
+    internal const string LegacyChecksumPlaceholderName = "CRC参数待确认（请配置校验段）";
+
+    private const string LegacyChecksumPlaceholderNote =
+        "CRC 参数待固件确认，默认禁止采集；请删除 CRC 占位段，在帧尾前添加校验段并配置确认的参数。";
+
+    /// <summary>
+    /// 旧版数采卡预设把校验字节存为占位段并强制要求校验，固件实际未启用校验时无法连接。
+    /// 保存过的副本在加载时换成与内置预设相同的“未启用”校验段，其他协议不受影响。
+    /// </summary>
+    private void MigrateChecksumPlaceholder()
+    {
+        if (!RequireChecksum || Segments.Any(s => s.Type == SegmentType.Checksum)) return;
+        var index = Segments.FindIndex(s => s.Type == SegmentType.Padding && s.ByteCount == 2
+            && s.Name == LegacyChecksumPlaceholderName);
+        if (index < 0) return;
+        Segments[index] = CreateZdzC08ChecksumSegment();
+        RequireChecksum = false;
+        Notes = Notes?.Replace(LegacyChecksumPlaceholderNote, ZdzC08ChecksumNote);
     }
 
     /// <summary>
@@ -487,9 +533,9 @@ public class ProtocolConfig
     /// FF5A + 信息ID(AD00) + 长度(5C00=92) + 92 字节数据区 + CRC16(2) + 帧尾(33)。
     /// 信息 ID 与长度字段值恒定，打开 ValidateFixedValue 作为帧同步锚点 —— 92 字节浮点载荷中
     /// 偶然出现 FF5A 的概率不低，仅靠帧头帧尾定长容易误锁。
-    /// CRC 参数未确认，保留显式占位并通过 RequireChecksum 阻止默认采集：文档称"序号 2~26 之间所有字节的 CRC-16"，多项式 0x8005，
-    /// 但按该范围以 ARC/MSB-0x8005 × init{0000,FFFF} 组合计算均与文档样本包的 BD 67 不符；
-    /// 进一步对 init 做 GF(2) 线性反解并跨 ZDZ 实测样本交叉验证，无一致解。参数待固件侧确认。
+    /// 帧里设计了 CRC 字段，但固件没有启用计算（文档样本 BD 67 与实测记录 C6 48 对不上任何 CRC 参数组合）。
+    /// 校验段按文档（"序号 2~26 之间所有字节的 CRC-16"，多项式 0x8005）预置为 CRC-16/MODBUS、自信息 ID 起、
+    /// 低字节在前，默认不启用；固件启用后在协议中打开并按固件确认变体与字节序。
     /// </remarks>
     private static List<FrameSegment> BuildZdzC08Segments(bool magneticOnly)
     {
@@ -549,10 +595,26 @@ public class ProtocolConfig
 
             Data("入水深度", FieldDataType.Float, unit: "m"),
 
-            new() { Type = SegmentType.Padding, Name = "CRC参数待确认（请配置校验段）", ByteCount = 2 },
+            CreateZdzC08ChecksumSegment(),
             new() { Type = SegmentType.Tail, Name = "帧尾", ByteCount = 1, FixedHexValue = "33" },
         ];
     }
+
+    private const string ZdzC08ChecksumNote =
+        "帧内 CRC 字段固件尚未启用，校验段已按文档预置但默认不校验；固件启用后在校验段勾选“启用”，并按固件确认 CRC 变体与字节序。";
+
+    /// <summary>数采卡帧的校验段：参数按文档预置，固件未启用计算，默认不校验。</summary>
+    private static FrameSegment CreateZdzC08ChecksumSegment() => new()
+    {
+        Type = SegmentType.Checksum,
+        Name = "CRC16",
+        ByteCount = 2,
+        ChecksumEnabled = false,
+        ChecksumAlgorithm = ChecksumAlgorithm.CRC16,
+        Crc16Variant = Crc16Variant.Modbus,
+        ChecksumBigEndian = false,
+        ChecksumStartIndex = 1,
+    };
 
     /// <summary>
     /// 创建"磁梯度数采卡-pt"内置协议：101 字节定长帧，21 个通道全展开
@@ -565,10 +627,9 @@ public class ProtocolConfig
             Name = "磁梯度数采卡-pt",
             Category = ProtocolCategory.Binary,
             Segments = BuildZdzC08Segments(magneticOnly: false),
-            RequireChecksum = true,
             Commands = ZdzC08Commands.CreateGroups(),
             Notes = "ZDZ_C08 / CTMBS-3 数采卡 101 字节上传帧，全字段。串口 115200 8N1。"
-                  + "磁分量与梯度单位 nT，加速度 m/s²，陀螺 °/s，深度 m。CRC 参数待固件确认，默认禁止采集；请删除 CRC 占位段，在帧尾前添加校验段并配置确认的参数。",
+                  + "磁分量与梯度单位 nT，加速度 m/s²，陀螺 °/s，深度 m。" + ZdzC08ChecksumNote,
         };
         config.ComputeSegmentOffsets();
         return config;
@@ -585,10 +646,9 @@ public class ProtocolConfig
             Name = "磁梯度数采卡-pt (仅磁场6通道)",
             Category = ProtocolCategory.Binary,
             Segments = BuildZdzC08Segments(magneticOnly: true),
-            RequireChecksum = true,
             Commands = ZdzC08Commands.CreateGroups(),
             Notes = "ZDZ_C08 / CTMBS-3 数采卡 101 字节上传帧，仅映射 X1/Y1/Z1/X2/Y2/Z2（单位 nT）。"
-                  + "其余字段按保留区跳过。CRC 参数待固件确认，默认禁止采集；请删除 CRC 占位段，在帧尾前添加校验段并配置确认的参数。",
+                  + "其余字段按保留区跳过。" + ZdzC08ChecksumNote,
         };
         config.ComputeSegmentOffsets();
         return config;

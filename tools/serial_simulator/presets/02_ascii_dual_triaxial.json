@@ -1,0 +1,87 @@
+{
+  "Id": "builtin-02_ascii_dual_triaxial",
+  "Name": "\u53CC\u4E09\u8F74 ASCII (\u9017\u53F7\u5206\u9694)",
+  "Category": "Ascii",
+  "ParserKind": "Auto",
+  "AsciiDelimiter": ",",
+  "AsciiLineEnding": "\r\n",
+  "AsciiHasHeader": false,
+  "AsciiSkipLines": 0,
+  "FrameHeader": "AA55",
+  "FrameTail": "",
+  "HasLengthByte": true,
+  "LengthByteCount": 1,
+  "LengthBigEndian": false,
+  "FixedDataLength": 0,
+  "Checksum": "None",
+  "RequireChecksum": false,
+  "ChecksumStartOffset": 0,
+  "Crc16Variant": "Modbus",
+  "ChecksumBigEndian": false,
+  "FieldMappings": [
+    {
+      "Name": "X1",
+      "Unit": "nT",
+      "ByteOffset": 0,
+      "DataType": "Double",
+      "ChannelIndex": 0,
+      "Scale": 1,
+      "Offset": 0,
+      "BigEndian": false
+    },
+    {
+      "Name": "Y1",
+      "Unit": "nT",
+      "ByteOffset": 1,
+      "DataType": "Double",
+      "ChannelIndex": 1,
+      "Scale": 1,
+      "Offset": 0,
+      "BigEndian": false
+    },
+    {
+      "Name": "Z1",
+      "Unit": "nT",
+      "ByteOffset": 2,
+      "DataType": "Double",
+      "ChannelIndex": 2,
+      "Scale": 1,
+      "Offset": 0,
+      "BigEndian": false
+    },
+    {
+      "Name": "X2",
+      "Unit": "nT",
+      "ByteOffset": 3,
+      "DataType": "Double",
+      "ChannelIndex": 3,
+      "Scale": 1,
+      "Offset": 0,
+      "BigEndian": false
+    },
+    {
+      "Name": "Y2",
+      "Unit": "nT",
+      "ByteOffset": 4,
+      "DataType": "Double",
+      "ChannelIndex": 4,
+      "Scale": 1,
+      "Offset": 0,
+      "BigEndian": false
+    },
+    {
+      "Name": "Z2",
+      "Unit": "nT",
+      "ByteOffset": 5,
+      "DataType": "Double",
+      "ChannelIndex": 5,
+      "Scale": 1,
+      "Offset": 0,
+      "BigEndian": false
+    }
+  ],
+  "Segments": [],
+  "Commands": [],
+  "Notes": null,
+  "CreatedAt": "2026-10-07T00:00:00"
+}

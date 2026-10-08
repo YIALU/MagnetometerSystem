@@ -227,7 +227,7 @@ public partial class SessionListViewModel : ObservableObject
             if (ActiveSessionId != null)
                 throw new InvalidOperationException("上一个会话尚未完成保存，请先重试存储。");
             _currentSensorConfig = config;
-            var name = $"采集_{DateTime.Now:yyyy-MM-dd_HH:mm:ss}";
+            var name = DefaultSessionName(config.ProtocolType, DateTime.Now);
             var connectionConfig = _dataBus.AcquisitionConnectionConfig ?? new ConnectionConfig();
             _savedBaseline = _storageService.WriteStatus.SavedReadings;
             var sessionId = await _storageService.StartSessionAsync(name, config, connectionConfig);
@@ -547,17 +547,7 @@ public partial class SessionListViewModel : ObservableObject
     {
         if (session == null) return;
 
-        var suffix = session.ChannelCount switch
-        {
-            3 => "_3C",
-            6 => "_3CG",
-            _ => "_Custom"
-        };
-        var timestamp = session.StartedAt.ToString("yyyy-MM-dd_HH-mm-ss");
-        var notes = SanitizeForFileName(session.Notes);
-        var fileName = string.IsNullOrEmpty(notes)
-            ? $"{timestamp}{suffix}.csv"
-            : $"{timestamp}_{notes}{suffix}.csv";
+        var fileName = DefaultExportFileName(session);
 
         var dialog = new Microsoft.Win32.SaveFileDialog
         {
@@ -663,7 +653,7 @@ public partial class SessionListViewModel : ObservableObject
         {
             Title = "选择校正结果 CSV 保存位置",
             Filter = "CSV 文件 (*.csv)|*.csv",
-            FileName = $"{SanitizeForFileName(session.Name)}_corrected_{DateTime.Now:yyyyMMdd_HHmmss}.csv",
+            FileName = $"{SessionFileBaseName(session)}_corrected_{DateTime.Now:yyyyMMdd_HHmmss}.csv",
             DefaultExt = ".csv"
         };
         if (csvDialog.ShowDialog() != true) return;
@@ -834,7 +824,31 @@ public partial class SessionListViewModel : ObservableObject
         return result;
     }
 
-    private static string SanitizeForFileName(string? notes)
+    /// <summary>新会话的默认名称：协议名 + 开始时间，例如“三轴 ASCII (逗号分隔) 2026-10-08 09:30:15”。</summary>
+    internal static string DefaultSessionName(string? protocolName, DateTime localTime)
+    {
+        var protocol = string.IsNullOrWhiteSpace(protocolName) ? "采集" : protocolName.Trim();
+        return $"{protocol} {localTime:yyyy-MM-dd HH:mm:ss}";
+    }
+
+    /// <summary>导出文件的默认名：会话名（默认即协议名 + 时间）；改过名、不含开始日期时补上开始时间，再接备注。</summary>
+    internal static string DefaultExportFileName(SessionInfo session)
+    {
+        var notes = SanitizeForFileName(session.Notes);
+        var baseName = SessionFileBaseName(session);
+        return string.IsNullOrEmpty(notes) ? $"{baseName}.csv" : $"{baseName}_{notes}.csv";
+    }
+
+    private static string SessionFileBaseName(SessionInfo session)
+    {
+        // 时间里的冒号不能出现在文件名中，换成短横线，保留可读的时分秒。
+        var name = SanitizeForFileName(session.Name.Replace(':', '-'), maxLength: 120);
+        var started = session.StartedAt.ToString("yyyy-MM-dd_HH-mm-ss", System.Globalization.CultureInfo.InvariantCulture);
+        if (name.Length == 0) return started;
+        return name.Contains(started[..10]) ? name : $"{name}_{started}";
+    }
+
+    private static string SanitizeForFileName(string? notes, int maxLength = 60)
     {
         if (string.IsNullOrWhiteSpace(notes)) return string.Empty;
 
@@ -849,8 +863,7 @@ public partial class SessionListViewModel : ObservableObject
 
         // 压缩连续空白为单空格
         var result = System.Text.RegularExpressions.Regex.Replace(sb.ToString(), @"\s+", " ").Trim();
-        // 截断到 60 字符
-        if (result.Length > 60) result = result[..60];
+        if (result.Length > maxLength) result = result[..maxLength];
         // 空格替换为下划线
         return result.Replace(' ', '_');
     }

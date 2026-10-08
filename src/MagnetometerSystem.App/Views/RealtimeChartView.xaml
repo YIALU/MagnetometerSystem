@@ -7,6 +7,7 @@
              xmlns:i="http://schemas.microsoft.com/xaml/behaviors"
              xmlns:behaviors="clr-namespace:MagnetometerSystem.App.Behaviors"
              xmlns:converters="clr-namespace:MagnetometerSystem.App.Converters"
+             xmlns:controls="clr-namespace:MagnetometerSystem.App.Controls"
              mc:Ignorable="d"
              d:DesignHeight="600" d:DesignWidth="1100"
              Loaded="OnLoaded">
@@ -16,8 +17,58 @@
     <!-- 图表：工具栏只放高频操作，其余收进“更多”；通道与分析在工作台侧栏 -->
     <DockPanel>
         <Border DockPanel.Dock="Top" Style="{StaticResource PanelHeader}" Padding="10,0">
-            <DockPanel VerticalAlignment="Center">
-                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+            <!-- 左组：视图设置；右组：显示操作。一行放不下时右组换到下一行，不截掉控件。 -->
+            <controls:ToolbarPanel x:Name="ChartToolbar" VerticalAlignment="Center" Margin="0,7">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <Border Style="{StaticResource SegmentGroup}">
+                        <StackPanel Orientation="Horizontal">
+                            <RadioButton Style="{StaticResource SegmentItem}" Content="单图"
+                                         IsChecked="{Binding CurrentViewMode, Converter={StaticResource EnumToBool}, ConverterParameter=Single}"
+                                         ToolTip="所有选中通道共用一个绘图区；不同单位使用独立纵轴"/>
+                            <RadioButton Style="{StaticResource SegmentItem}" Content="多图"
+                                         IsChecked="{Binding CurrentViewMode, Converter={StaticResource EnumToBool}, ConverterParameter=Multi}"
+                                         ToolTip="每个通道单独一个图"/>
+                        </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource SegmentGroup}" Margin="6,0,0,0"
+                            Visibility="{Binding IsMultiPlotMode, Converter={StaticResource BoolToVis}}">
+                        <StackPanel Orientation="Horizontal">
+                            <RadioButton Style="{StaticResource SegmentItem}" Content="1 列" Padding="8,0"
+                                         IsChecked="{Binding MultiPlotColumnCount, Converter={StaticResource ValueEquals}, ConverterParameter=1}"/>
+                            <RadioButton Style="{StaticResource SegmentItem}" Content="2 列" Padding="8,0"
+                                         IsChecked="{Binding MultiPlotColumnCount, Converter={StaticResource ValueEquals}, ConverterParameter=2}"/>
+                        </StackPanel>
+                    </Border>
+                    <Rectangle Width="1" Height="20" Fill="{DynamicResource Line2Brush}" Margin="12,0"/>
+                    <TextBlock Text="时间窗口" VerticalAlignment="Center" Margin="0,0,6,0" Foreground="{DynamicResource Ink2Brush}"/>
+                    <ComboBox Width="84" ItemsSource="{Binding TimeWindowOptions}" SelectedItem="{Binding TimeWindowSeconds}">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate><TextBlock Text="{Binding Converter={StaticResource SecondsLabel}}"/></DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
+                    <TextBlock Text="主 Y 轴" VerticalAlignment="Center" Margin="12,0,6,0" Foreground="{DynamicResource Ink2Brush}"
+                               ToolTip="手动范围只控制每个图的左侧主轴；单图中的其他单位轴（如温度）始终按各自数据自适应。"/>
+                    <Border Style="{StaticResource SegmentGroup}">
+                        <StackPanel Orientation="Horizontal">
+                            <RadioButton Style="{StaticResource SegmentItem}" Content="自动" Padding="8,0" IsChecked="{Binding AutoScaleY}"/>
+                            <RadioButton Style="{StaticResource SegmentItem}" Content="手动" Padding="8,0" IsChecked="{Binding AutoScaleY, Converter={StaticResource InverseBool}}"/>
+                        </StackPanel>
+                    </Border>
+                    <StackPanel Orientation="Horizontal" Margin="6,0,0,0"
+                                Visibility="{Binding AutoScaleY, Converter={StaticResource InverseBoolToVis}}">
+                        <TextBox Width="76" Style="{StaticResource MonoTextBox}" Text="{Binding YMin, UpdateSourceTrigger=LostFocus}" ToolTip="主纵轴下限"/>
+                        <TextBlock Text="~" VerticalAlignment="Center" Margin="4,0"/>
+                        <TextBox Width="76" Style="{StaticResource MonoTextBox}" Text="{Binding YMax, UpdateSourceTrigger=LostFocus}" ToolTip="主纵轴上限"/>
+                    </StackPanel>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <!-- 归零只改显示偏移；有偏移时出现“取消归零” -->
+                    <Button Content="一键归零" Command="{Binding ZeroVisibleChannelsCommand}" Margin="0,0,6,0"
+                            ToolTip="把当前显示的每条曲线按时间窗口内的均值移到 0（暂停时按冻结的画面），主 Y 轴改为自动。只设置显示偏移，不影响保存的原始数据、统计和读数。"/>
+                    <Button Content="取消归零" Command="{Binding ClearDisplayOffsetsCommand}" Margin="0,0,6,0"
+                            Visibility="{Binding HasDisplayOffsets, Converter={StaticResource BoolToVis}}"
+                            ToolTip="清除所有通道的显示偏移，曲线回到原始数值"/>
+                    <Rectangle Width="1" Height="20" Fill="{DynamicResource Line2Brush}" Margin="6,0,12,0"/>
                     <TextBlock Style="{StaticResource Hint}" VerticalAlignment="Center" Margin="0,0,12,0"
                                ToolTip="绘图刷新率只决定曲线多久重绘一次，与设备输出频率、标称采样率无关。">
                         <Run Text="绘图刷新 "/><Run Text="{Binding RefreshRate, Mode=OneWay}"/><Run Text=" Hz"/>
@@ -68,50 +119,7 @@
                         </Button.Style>
                     </Button>
                 </StackPanel>
-
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                    <Border Style="{StaticResource SegmentGroup}">
-                        <StackPanel Orientation="Horizontal">
-                            <RadioButton Style="{StaticResource SegmentItem}" Content="单图"
-                                         IsChecked="{Binding CurrentViewMode, Converter={StaticResource EnumToBool}, ConverterParameter=Single}"
-                                         ToolTip="所有选中通道共用一个绘图区；不同单位使用独立纵轴"/>
-                            <RadioButton Style="{StaticResource SegmentItem}" Content="多图"
-                                         IsChecked="{Binding CurrentViewMode, Converter={StaticResource EnumToBool}, ConverterParameter=Multi}"
-                                         ToolTip="每个通道单独一个图"/>
-                        </StackPanel>
-                    </Border>
-                    <Border Style="{StaticResource SegmentGroup}" Margin="6,0,0,0"
-                            Visibility="{Binding IsMultiPlotMode, Converter={StaticResource BoolToVis}}">
-                        <StackPanel Orientation="Horizontal">
-                            <RadioButton Style="{StaticResource SegmentItem}" Content="1 列" Padding="8,0"
-                                         IsChecked="{Binding MultiPlotColumnCount, Converter={StaticResource ValueEquals}, ConverterParameter=1}"/>
-                            <RadioButton Style="{StaticResource SegmentItem}" Content="2 列" Padding="8,0"
-                                         IsChecked="{Binding MultiPlotColumnCount, Converter={StaticResource ValueEquals}, ConverterParameter=2}"/>
-                        </StackPanel>
-                    </Border>
-                    <Rectangle Width="1" Height="20" Fill="{DynamicResource Line2Brush}" Margin="12,0"/>
-                    <TextBlock Text="时间窗口" VerticalAlignment="Center" Margin="0,0,6,0" Foreground="{DynamicResource Ink2Brush}"/>
-                    <ComboBox Width="84" ItemsSource="{Binding TimeWindowOptions}" SelectedItem="{Binding TimeWindowSeconds}">
-                        <ComboBox.ItemTemplate>
-                            <DataTemplate><TextBlock Text="{Binding Converter={StaticResource SecondsLabel}}"/></DataTemplate>
-                        </ComboBox.ItemTemplate>
-                    </ComboBox>
-                    <TextBlock Text="主 Y 轴" VerticalAlignment="Center" Margin="12,0,6,0" Foreground="{DynamicResource Ink2Brush}"
-                               ToolTip="手动范围只控制每个图的左侧主轴；单图中的其他单位轴（如温度）始终按各自数据自适应。"/>
-                    <Border Style="{StaticResource SegmentGroup}">
-                        <StackPanel Orientation="Horizontal">
-                            <RadioButton Style="{StaticResource SegmentItem}" Content="自动" Padding="8,0" IsChecked="{Binding AutoScaleY}"/>
-                            <RadioButton Style="{StaticResource SegmentItem}" Content="手动" Padding="8,0" IsChecked="{Binding AutoScaleY, Converter={StaticResource InverseBool}}"/>
-                        </StackPanel>
-                    </Border>
-                    <StackPanel Orientation="Horizontal" Margin="6,0,0,0"
-                                Visibility="{Binding AutoScaleY, Converter={StaticResource InverseBoolToVis}}">
-                        <TextBox Width="76" Style="{StaticResource MonoTextBox}" Text="{Binding YMin, UpdateSourceTrigger=LostFocus}" ToolTip="主纵轴下限"/>
-                        <TextBlock Text="~" VerticalAlignment="Center" Margin="4,0"/>
-                        <TextBox Width="76" Style="{StaticResource MonoTextBox}" Text="{Binding YMax, UpdateSourceTrigger=LostFocus}" ToolTip="主纵轴上限"/>
-                    </StackPanel>
-                </StackPanel>
-            </DockPanel>
+            </controls:ToolbarPanel>
         </Border>
 
         <!-- 绘图区 -->

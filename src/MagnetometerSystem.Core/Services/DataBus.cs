@@ -131,6 +131,10 @@ public class DataBus
     /// <summary>连接准备时冻结的采集通道单位；只读，不包含回放配置。</summary>
     public IReadOnlyList<string> AcquisitionChannelUnits => _acquisitionChannelUnits;
 
+    private IReadOnlyList<string> _acquisitionChannelNames = Array.AsReadOnly(Array.Empty<string>());
+    /// <summary>与 <see cref="AcquisitionChannelUnits"/> 同时冻结的通道名称。</summary>
+    public IReadOnlyList<string> AcquisitionChannelNames => _acquisitionChannelNames;
+
     /// <summary>是否处于回放模式（回放时不写入数据库）</summary>
     public bool IsPlaybackMode { get; set; }
 
@@ -204,6 +208,7 @@ public class DataBus
             _acquisitionAcceptanceFault = null;
         }
         _acquisitionChannelUnits = Array.AsReadOnly(config.ChannelUnits.ToArray());
+        _acquisitionChannelNames = Array.AsReadOnly(config.ChannelNames.ToArray());
         AcquisitionConnectionConfig = connectionConfig;
         var handlers = AcquisitionStarting;
         if (handlers != null)
@@ -229,6 +234,7 @@ public class DataBus
     {
         CloseAcquisitionAcceptance();
         _acquisitionChannelUnits = Array.AsReadOnly(Array.Empty<string>());
+        _acquisitionChannelNames = Array.AsReadOnly(Array.Empty<string>());
         AcquisitionStopped?.Invoke();
     }
 
