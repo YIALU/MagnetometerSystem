@@ -54,7 +54,7 @@ git commit -m "描述本次变更"
 git push -u origin codex/my-change
 ```
 
-每次改动（含文档、配置）都要在同一 PR 中递增 `Directory.Build.props` 的版本号并更新 `docs/变更日志.md`，版本修改与改动一起经过 CI 和审查。
+每次改动（含文档、配置）都要在同一 PR 中递增 `Directory.Build.props` 的版本号并更新 `docs/变更日志.md`，版本修改与改动一起经过 CI 和审查。同一 PR 的后续推送沿用该版本；每个新 PR 都在主分支当前版本上再递增，不与其他 PR 共用版本号。
 
 不要使用 `git add .` 打包无关工作或个人配置，不直接推送 `master`。
 
