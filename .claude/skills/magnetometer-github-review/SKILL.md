@@ -76,7 +76,7 @@ dotnet test MagnetometerSystem.sln -c Debug --no-build --no-restore -m:1
 - 合并前重新读取 head SHA 和分支规则；head 变化时先核验新提交的 CI 与审查。合并请求绑定已核验的 head SHA（`gh pr merge <PR> --merge --match-head-commit <SHA>`），默认使用 merge commit 保留历史，不能用管理员绕过检查或开启自动合并让 PR 在 Codex 审查完成前被合入。
 - 核实 GitHub 返回 merged 状态和合并提交，再 fetch `origin/master` 确认合并已存在；随后执行 Gitee 同步。结果不明时先读取远端状态，不盲目重复合并。CI、审查、规则或权限未满足时保持 PR 开放，报告缺失环节。
 
-交付包含 PR 链接、分支和提交、CI 与审查证据、合并结果、Gitee 同步结果、两平台 Release 链接与软件包校验结果及未验证范围；不能把“已提交 PR”或“代码已同步”当作完整软件交付终点。
+交付包含 PR 链接、分支和提交、CI 与审查证据、合并结果、Gitee 同步结果及未验证范围。**软件代码改动**还要包含两平台 Release 链接与软件包校验结果，不能把“已提交 PR”或“代码已同步”当作完整软件交付终点；**纯文档 / 配置 / skill 改动**在合并与 Gitee 同步完成后即结束，不打标签、不创建 Release，版本号保持未发布。
 
 ## GitHub 合并后同步 Gitee
 
@@ -104,7 +104,7 @@ $giteeHead = git rev-parse gitee/master
 if ($githubHead -ne $giteeHead) { throw '两平台 master 不一致，需要检查。' }
 ```
 
-完成后核实 GitHub / Gitee 主分支的共同提交 SHA 和当前版本，再执行下方的标签与 Release 软件包发布。不配置双远程自动推送。
+完成后核实 GitHub / Gitee 主分支的共同提交 SHA 和当前版本。软件代码改动再执行下方的标签与 Release 软件包发布；纯文档 / 配置 / skill 改动到此结束，不打标签、不发布。不配置双远程自动推送。
 
 ## 每次软件代码交付更新两平台 Release
 
