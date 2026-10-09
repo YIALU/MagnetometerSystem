@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.IO;
 using System.Windows;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using MagnetometerSystem.App.ViewModels;
 using MagnetometerSystem.App.Views;
 using MagnetometerSystem.Core.Calibration;
@@ -28,6 +30,8 @@ public class CalibrationWizardTests
     private sealed class Fixture : IDisposable
     {
         private readonly string _path = Path.Combine(Path.GetTempPath(), $"calib_{Guid.NewGuid():N}.db");
+        /// <summary>原始 CSV 写到临时目录，不进入用户的 %LocalAppData%。</summary>
+        public string RawDir { get; } = Path.Combine(Path.GetTempPath(), $"calib_raw_{Guid.NewGuid():N}");
         public DataBus Bus { get; } = new();
         public DatabaseInitializer Database { get; private set; } = null!;
         public SqliteStorageService Storage { get; private set; } = null!;
@@ -41,7 +45,10 @@ public class CalibrationWizardTests
             await f.Database.InitializeAsync();
             f.Storage = new SqliteStorageService(f.Database, f.Bus);
             f.Repository = new SqliteCalibrationRepository(f.Database);
-            f.Ortho = new OrthogonalityCalibrationViewModel(new OrthogonalityCalculator(), f.Repository, f.Bus, f.Storage);
+            f.Ortho = new OrthogonalityCalibrationViewModel(new OrthogonalityCalculator(), f.Repository, f.Bus, f.Storage)
+            {
+                RawDataDirectory = f.RawDir,
+            };
             return f;
         }
 
@@ -65,7 +72,18 @@ public class CalibrationWizardTests
             SqliteConnection.ClearAllPools();
             foreach (var suffix in new[] { "", "-wal", "-shm" })
                 if (File.Exists(_path + suffix)) File.Delete(_path + suffix);
+            if (Directory.Exists(RawDir)) Directory.Delete(RawDir, recursive: true);
         }
+    }
+
+    private static void SaveScreenshot(FrameworkElement element, string path)
+    {
+        element.UpdateLayout();
+        var bitmap = new RenderTargetBitmap((int)element.ActualWidth, (int)element.ActualHeight, 96, 96, PixelFormats.Pbgra32);
+        bitmap.Render(element);
+        var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(bitmap));
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        using var stream = File.Create(path); encoder.Save(stream);
     }
 
     private static async Task WaitForAsync(Func<bool> ready)
@@ -86,6 +104,7 @@ public class CalibrationWizardTests
             Content = new CalibrationPageView { DataContext = page }, Width = 1280, Height = 860,
             Left = -10000, Top = -10000, ShowActivated = false, ShowInTaskbar = false,
         };
+        var shots = Environment.GetEnvironmentVariable("MAGNETOMETER_TEST_SCREENSHOTS");
         var errors = new StringWriter();
         using var listener = new TextWriterTraceListener(errors);
         PresentationTraceSources.DataBindingSource.Listeners.Add(listener);
@@ -106,12 +125,32 @@ public class CalibrationWizardTests
             Assert.Equal("nT", vm.CollectedUnit);
             Assert.False(vm.CanGoNext);
             Assert.Contains("先结束采集", vm.StepGateText);
+            // 开始采集即显示原始 CSV 的位置与文件名，可以打开。
+            var rawPath = Assert.IsType<string>(vm.RawFilePath);
+            Assert.Equal(f.RawDir, vm.RawFileDirectory);
+            Assert.Equal(Path.GetFileName(rawPath), vm.RawFileName);
+            Assert.EndsWith("_raw.csv", vm.RawFileName);
+            Assert.True(File.Exists(rawPath));
+            Assert.True(vm.OpenRawFileCommand.CanExecute(null));
+            Assert.True(vm.OpenRawFileFolderCommand.CanExecute(null));
+            Assert.Equal("写入中 · 0 行", vm.RawFileStatus);
+            window.UpdateLayout(); await WpfTestHost.PumpAsync();
             const int count = 240;
             // 从后台线程发布，与真实接收线程一致。
             await Task.Run(() => { for (int i = 0; i < count; i++) f.Bus.PublishReading(Reading(DistortedSample(i, count))); });
             await WaitForAsync(() => vm.CollectedSampleCount == count);
             Assert.Equal(count, vm.CollectedData.Count);
+            Assert.Equal($"写入中 · {count} 行", vm.RawFileStatus);
+            await WpfTestHost.PumpAsync();
+            if (!string.IsNullOrEmpty(shots)) SaveScreenshot((FrameworkElement)window.Content, Path.Combine(shots, "calib-step2-collecting.png"));
             vm.StopCollectingCommand.Execute(null);
+            Assert.Equal($"采集已结束 · 共 {count} 行", vm.RawFileStatus);
+            await WpfTestHost.PumpAsync();
+            if (!string.IsNullOrEmpty(shots)) SaveScreenshot((FrameworkElement)window.Content, Path.Combine(shots, "calib-step2-stopped.png"));
+            Assert.False(vm.RawFileFailed);
+            var rawLines = File.ReadAllLines(rawPath);
+            Assert.Equal(count, rawLines.Count(l => l.Length > 0 && char.IsDigit(l[0])));
+            Assert.StartsWith($"{count},", rawLines[^1]);
             Assert.True(vm.SphericityCoverage > 80);
             Assert.NotNull(vm.DataValidation);
             Assert.True(vm.CanGoNext);
@@ -189,9 +228,12 @@ public class CalibrationWizardTests
         Assert.False(vm.UndoLastPointCommand.CanExecute(null));
 
         for (int i = 0; i < 3; i++) vm.RecordCurrentPointCommand.Execute(null);
+        Assert.Equal(vm.RawFilePath, f.Bus.ManualOrthoState.RawFilePath);
         vm.StopCollectingCommand.Execute(null);
         Assert.False(f.Bus.ManualOrthoState.IsActive);
         Assert.Equal(3, vm.CollectedSampleCount);
+        // 原始 CSV 只追加：撤销、清空前写入的 3 行仍在，加上之后的 3 行。
+        Assert.Equal("采集已结束 · 共 6 行", vm.RawFileStatus);
         // 退订前已在进行的读数回调在停止之后才执行：不能把链路条状态改回“采集中”。
         typeof(OrthogonalityCalibrationViewModel)
             .GetMethod("OnCalibrationDataReceived", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
@@ -201,6 +243,69 @@ public class CalibrationWizardTests
         f.Bus.RaiseManualOrthoRecord();
         Assert.Equal(3, vm.CollectedSampleCount);
         await WpfTestHost.PumpAsync();
+    });
+
+    [Fact]
+    public Task RawFile_ExistingNameIsNotOverwritten_AndWriteFailureIsShownWithoutStoppingCollection() => WpfTestHost.RunAsync(async () =>
+    {
+        using var f = await Fixture.CreateAsync();
+        var vm = f.Ortho;
+        vm.CurrentStep = 2;
+        await f.PrepareLiveAsync(3);
+
+        // 同一秒内已有同名文件（例如刚停止又开始）：另起新名，不覆盖已有的原始数据。
+        Directory.CreateDirectory(f.RawDir);
+        var now = DateTime.Now;
+        var existing = Enumerable.Range(0, 3)
+            .Select(s => Path.Combine(f.RawDir, $"{vm.ProfileName}_{now.AddSeconds(s):yyyyMMdd_HHmmss}_raw.csv")).ToArray();
+        foreach (var path in existing) File.WriteAllText(path, "keep");
+        vm.StartCollectingCommand.Execute(null);
+        var second = Assert.IsType<string>(vm.RawFilePath);
+        Assert.EndsWith("_raw_2.csv", second);
+        Assert.True(File.Exists(second));
+        Assert.All(existing, path => Assert.Equal("keep", File.ReadAllText(path)));
+
+        // 写入中途失败（此处让写入器失效）：停止写这个文件并说明原因，拟合样本照常累积。
+        for (int i = 0; i < 2; i++) f.Bus.PublishReading(Reading([1, 2, 3 + i]));
+        await WaitForAsync(() => vm.CollectedSampleCount == 2);
+        var writer = (StreamWriter)typeof(OrthogonalityCalibrationViewModel)
+            .GetField("_rawWriter", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(vm)!;
+        writer.Dispose();
+        for (int i = 0; i < 3; i++) f.Bus.PublishReading(Reading([1, 2, 5 + i]));
+        await WaitForAsync(() => vm.CollectedSampleCount == 5);
+        Assert.True(vm.RawFileFailed);
+        Assert.Contains("写入失败", vm.RawFileStatus);
+        Assert.Contains("此前已写入 2 行", vm.RawFileStatus);
+        vm.StopCollectingCommand.Execute(null);
+        Assert.True(vm.RawFileFailed);
+        Assert.Equal(5, vm.CollectedSampleCount);
+        Assert.Equal(2, File.ReadAllLines(second).Count(l => l.Length > 0 && char.IsDigit(l[0])));
+    });
+
+    [Fact]
+    public Task RawFile_CreateFailureIsShown_AndCollectionStillRuns() => WpfTestHost.RunAsync(async () =>
+    {
+        using var f = await Fixture.CreateAsync();
+        var vm = f.Ortho;
+        vm.CurrentStep = 2;
+        await f.PrepareLiveAsync(3);
+        // 目录位置被同名文件占用，无法创建目录。
+        Directory.CreateDirectory(f.RawDir);
+        var blocked = Path.Combine(f.RawDir, "blocked");
+        File.WriteAllText(blocked, "");
+        vm.RawDataDirectory = blocked;
+
+        vm.StartCollectingCommand.Execute(null);
+        Assert.True(vm.IsCollecting, vm.CollectionStatus);
+        Assert.True(vm.RawFileFailed);
+        Assert.Contains("无法创建文件", vm.RawFileStatus);
+        Assert.Equal(blocked, vm.RawFileDirectory);
+        for (int i = 0; i < 3; i++) f.Bus.PublishReading(Reading([1, 2, 3 + i]));
+        await WaitForAsync(() => vm.CollectedSampleCount == 3);
+        vm.StopCollectingCommand.Execute(null);
+        Assert.True(vm.RawFileFailed);
+        Assert.Contains("本次采集的点不会写入文件", vm.RawFileStatus);
+        Assert.DoesNotContain("。。", vm.RawFileStatus);
     });
 
     /// <summary>

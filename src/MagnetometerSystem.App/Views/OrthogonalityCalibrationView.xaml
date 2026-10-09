@@ -354,6 +354,33 @@
                                                 Visibility="{Binding IsContinuousMode, Converter={StaticResource BoolToVis}}"/>
                                     </StackPanel>
 
+                                    <!-- 原始数据文件：开始采集时创建，逐点追加；停止后保留，便于查看或交给他人 -->
+                                    <Border BorderBrush="{DynamicResource Line2Brush}" BorderThickness="0,1,0,0" Margin="0,12,0,0" Padding="0,10,0,0"
+                                            Visibility="{Binding RawFilePath, Converter={StaticResource NullToCollapsed}}">
+                                        <StackPanel>
+                                            <DockPanel Margin="0,0,0,4">
+                                                <TextBlock DockPanel.Dock="Right" Text="{Binding RawFileStatus}" FontSize="12" VerticalAlignment="Center"
+                                                           Foreground="{DynamicResource MutedBrush}"
+                                                           Visibility="{Binding RawFileFailed, Converter={StaticResource InverseBoolToVis}}"/>
+                                                <TextBlock Text="原始数据文件" Style="{StaticResource FieldLabel}" Margin="0" VerticalAlignment="Center"/>
+                                            </DockPanel>
+                                            <TextBlock Text="{Binding RawFileName}" FontFamily="{DynamicResource MonoFont}" FontSize="12.5" TextWrapping="Wrap"
+                                                       ToolTip="{Binding RawFilePath}"/>
+                                            <TextBlock Style="{StaticResource Hint}" Margin="0,2,0,0" ToolTip="{Binding RawFilePath}">
+                                                <Run Text="保存在 "/><Run Text="{Binding RawFileDirectory, Mode=OneWay}"/>
+                                            </TextBlock>
+                                            <TextBlock Text="{Binding RawFileStatus}" TextWrapping="Wrap" FontSize="12" Margin="0,4,0,0"
+                                                       Foreground="{DynamicResource WarnBrush}"
+                                                       Visibility="{Binding RawFileFailed, Converter={StaticResource BoolToVis}}"/>
+                                            <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                                <Button Content="打开文件" Style="{StaticResource SmallButton}" Command="{Binding OpenRawFileCommand}"
+                                                        ToolTip="用系统默认程序打开这个 CSV"/>
+                                                <Button Content="打开所在文件夹" Style="{StaticResource SmallButton}" Command="{Binding OpenRawFileFolderCommand}"
+                                                        Margin="6,0,0,0" ToolTip="在资源管理器中定位到这个文件"/>
+                                            </StackPanel>
+                                        </StackPanel>
+                                    </Border>
+
                                     <TextBlock Style="{StaticResource Hint}" Margin="0,10,0,0"
                                                Text="校正采集只读取读数，不影响会话保存。手动模式下也可以在任何页面点顶部链路条的「记录当前点」。"/>
                                 </StackPanel>
