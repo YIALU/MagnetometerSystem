@@ -296,10 +296,10 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
     public const int ManualPointTarget = 48;
     private long _lastLiveValuesTicks;
 
-    // raw CSV 写入
+    // raw CSV 写入：_rawPointIndex 是已成功写入的数据行数，_rawWriteError 记录创建或写入失败的原因；两者都在 _sampleLock 内访问。
     private StreamWriter? _rawWriter;
-    private string? _rawFilePath;
     private int _rawPointIndex;
+    private string? _rawWriteError;
 
     public OrthogonalityCalibrationViewModel(
         IOrthogonalityService orthogonalityService,
@@ -733,6 +733,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         var before = CollectedSampleCount;
         foreach (var sample in added) CollectedData.Add(sample);
         CollectedSampleCount = count;
+        UpdateRawFileStatus();
         if (before / 50 != count / 50)
         {
             UpdateCoverageEstimate();
@@ -873,6 +874,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         CollectedData.Add(sample1);
         CollectedSampleCount = count;
         CollectionStatus = $"已记录第 {count} 点（最近 {validCount} 条读数的均值）";
+        UpdateRawFileStatus();
         UpdateManualState(buffered);
         if (count % 6 == 0)
         {
@@ -900,6 +902,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         if (CollectedData.Count > 0) CollectedData.RemoveAt(CollectedData.Count - 1);
         CollectedSampleCount = count;
         CollectionStatus = $"已撤销第 {count + 1} 点";
+        UpdateRawFileStatus();
         UpdateManualState(null);
         UpdateCoverageEstimate();
         RunDataValidation();
@@ -924,6 +927,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         HasValidationWarnings = false;
         ValidationStatusText = string.Empty;
         CollectionStatus = $"已清空 {removed} 点，可以重新记录";
+        UpdateRawFileStatus();
         UpdateManualState(null);
     }
 
@@ -949,7 +953,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         {
             if (!_manualPublishing) return;
             if (generation is { } g && g != Interlocked.Read(ref _collectedGeneration)) return;
-            _dataBus.ManualOrthoState.Update(true, points, _rawFilePath, status, enoughBuffer);
+            _dataBus.ManualOrthoState.Update(true, points, RawFilePath, status, enoughBuffer);
         }
     }
 
@@ -984,17 +988,28 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
 
     // ---- raw CSV 写入 ----
 
-    private static string RawDataDir
-    {
-        get
-        {
-            var dir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "MagnetometerSystem", "statistics", "calibration_raw");
-            Directory.CreateDirectory(dir);
-            return dir;
-        }
-    }
+    /// <summary>原始 CSV 的保存目录；测试改为临时目录，不写入用户数据。</summary>
+    internal string RawDataDirectory { get; set; } = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "MagnetometerSystem", "statistics", "calibration_raw");
+
+    /// <summary>最近一次实时采集的原始 CSV（开始采集时确定）；导入文件或会话不改变它。</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(RawFileName))]
+    [NotifyPropertyChangedFor(nameof(RawFileDirectory))]
+    [NotifyCanExecuteChangedFor(nameof(OpenRawFileCommand))]
+    [NotifyCanExecuteChangedFor(nameof(OpenRawFileFolderCommand))]
+    private string? _rawFilePath;
+
+    public string RawFileName => Path.GetFileName(RawFilePath) ?? "";
+    public string RawFileDirectory => Path.GetDirectoryName(RawFilePath) ?? "";
+
+    /// <summary>原始 CSV 的写入状态：写入中 / 已结束及已写入的行数，或创建、写入失败的原因。</summary>
+    [ObservableProperty]
+    private string _rawFileStatus = string.Empty;
+
+    [ObservableProperty]
+    private bool _rawFileFailed;
 
     private void OpenRawCsv(CalibrationCollectionMode mode)
     {
@@ -1002,49 +1017,93 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         var safeName = string.Join("_",
             (ProfileName ?? "calib").Split(Path.GetInvalidFileNameChars()));
         if (string.IsNullOrWhiteSpace(safeName)) safeName = "calib";
-        _rawFilePath = Path.Combine(RawDataDir,
-            $"{safeName}_{DateTime.Now:yyyyMMdd_HHmmss}_raw.csv");
-        _rawWriter = new StreamWriter(_rawFilePath, append: false, new System.Text.UTF8Encoding(true));
-        _rawPointIndex = 0;
-        _rawWriter.WriteLine($"# Calibration Profile : {ProfileName}");
-        _rawWriter.WriteLine($"# Sensor Type         : {SelectedSensorType}");
-        _rawWriter.WriteLine($"# Unit                : {_collectedUnit}");
-        _rawWriter.WriteLine($"# Collection Mode     : {mode}");
-        _rawWriter.WriteLine($"# Recorded At         : {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
-        var channelNames = _collectedChannelCount == 6
-            ? "X1,Y1,Z1,X2,Y2,Z2" : "X,Y,Z";
-        // 列名按轴排列；对应的协议通道写在注释里（名称中的换行替换为空格）。
-        var axes = channelNames.Split(',');
-        _rawWriter.WriteLine("# Source Channels     : " + string.Join(", ", _collectedLabels.Select((label, i) =>
-            $"{(i < axes.Length ? axes[i] : "?")}={label.Replace('\r', ' ').Replace('\n', ' ')}")));
-        _rawWriter.WriteLine("point_index,timestamp," + channelNames);
-        _rawWriter.Flush();
+        lock (_sampleLock) { _rawPointIndex = 0; _rawWriteError = null; }
+        var baseName = $"{safeName}_{DateTime.Now:yyyyMMdd_HHmmss}_raw";
+        RawFilePath = Path.Combine(RawDataDirectory, baseName + ".csv");
+        StreamWriter? writer = null;
+        try
+        {
+            Directory.CreateDirectory(RawDataDirectory);
+            // 同一秒内再次开始时文件名相同：另起新名，不覆盖上一次的原始数据。
+            FileStream? stream = null;
+            for (int n = 2; stream == null; n++)
+            {
+                try { stream = new FileStream(RawFilePath, FileMode.CreateNew, FileAccess.Write, FileShare.Read); }
+                catch (IOException) when (File.Exists(RawFilePath) && n < 100)
+                {
+                    RawFilePath = Path.Combine(RawDataDirectory, $"{baseName}_{n}.csv");
+                }
+            }
+            writer = new StreamWriter(stream, new System.Text.UTF8Encoding(true));
+            writer.WriteLine($"# Calibration Profile : {ProfileName}");
+            writer.WriteLine($"# Sensor Type         : {SelectedSensorType}");
+            writer.WriteLine($"# Unit                : {_collectedUnit}");
+            writer.WriteLine($"# Collection Mode     : {mode}");
+            writer.WriteLine($"# Recorded At         : {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+            var channelNames = _collectedChannelCount == 6
+                ? "X1,Y1,Z1,X2,Y2,Z2" : "X,Y,Z";
+            // 列名按轴排列；对应的协议通道写在注释里（名称中的换行替换为空格）。
+            var axes = channelNames.Split(',');
+            writer.WriteLine("# Source Channels     : " + string.Join(", ", _collectedLabels.Select((label, i) =>
+                $"{(i < axes.Length ? axes[i] : "?")}={label.Replace('\r', ' ').Replace('\n', ' ')}")));
+            writer.WriteLine("point_index,timestamp," + channelNames);
+            writer.Flush();
+            lock (_sampleLock) _rawWriter = writer;
+        }
+        catch (Exception ex)
+        {
+            // 原始 CSV 只是拟合样本的旁路记录：创建失败时照常采集，在文件状态里说明原因。
+            try { writer?.Dispose(); } catch { }
+            System.Diagnostics.Trace.TraceError($"创建校正原始数据文件失败: {ex}");
+            lock (_sampleLock) _rawWriteError = $"无法创建文件：{Sentence(ex)}。本次采集的点不会写入文件，拟合样本不受影响。";
+        }
+        UpdateRawFileStatus();
     }
 
-    /// <summary>写一行原始点：<paramref name="values"/> 已按所选通道排成 X、Y、Z[、X2、Y2、Z2]。</summary>
+    /// <summary>写一行原始点：<paramref name="values"/> 已按所选通道排成 X、Y、Z[、X2、Y2、Z2]。调用方持有 _sampleLock。</summary>
     private void AppendRawPoint(DateTime timestamp, double[] values)
     {
         if (_rawWriter == null) return;
-        _rawPointIndex++;
         var sb = new System.Text.StringBuilder();
-        sb.Append(_rawPointIndex).Append(',');
+        sb.Append(_rawPointIndex + 1).Append(',');
         sb.Append(timestamp.ToString("yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture));
         foreach (var value in values)
         {
             sb.Append(',');
             sb.Append(value.ToString("R", CultureInfo.InvariantCulture));
         }
-        _rawWriter.WriteLine(sb.ToString());
-        _rawWriter.Flush();
+        try
+        {
+            _rawWriter.WriteLine(sb.ToString());
+            _rawWriter.Flush();
+            _rawPointIndex++;
+        }
+        catch (Exception ex) { FailRawCsv(ex); }
     }
 
     /// <summary>在原始 CSV 中追加注释行（# 开头），记录撤销 / 清空等操作。调用方持有 _sampleLock。</summary>
     private void AppendRawComment(string text)
     {
         if (_rawWriter == null) return;
-        _rawWriter.WriteLine($"# {DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} {text}");
-        _rawWriter.Flush();
+        try
+        {
+            _rawWriter.WriteLine($"# {DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} {text}");
+            _rawWriter.Flush();
+        }
+        catch (Exception ex) { FailRawCsv(ex); }
     }
+
+    /// <summary>写入失败后停止写这个文件（之后的点不再尝试），保留原因供界面显示。调用方持有 _sampleLock。</summary>
+    private void FailRawCsv(Exception ex)
+    {
+        System.Diagnostics.Trace.TraceError($"写入校正原始数据文件失败: {ex}");
+        _rawWriteError = $"写入失败：{Sentence(ex)}。此前已写入 {_rawPointIndex:N0} 行，之后的点未写入文件；拟合样本不受影响。";
+        try { _rawWriter?.Dispose(); } catch { }
+        _rawWriter = null;
+    }
+
+    /// <summary>异常消息去掉结尾句号，便于接在提示句中间。</summary>
+    private static string Sentence(Exception ex) => ex.Message.Trim().TrimEnd('.', '。');
 
     private void CloseRawCsv()
     {
@@ -1054,7 +1113,49 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
             try { _rawWriter?.Dispose(); } catch { }
             _rawWriter = null;
         }
+        UpdateRawFileStatus();
     }
+
+    /// <summary>界面线程：按已写入的行数和失败原因刷新原始 CSV 的状态行。</summary>
+    private void UpdateRawFileStatus()
+    {
+        if (RawFilePath == null) return;
+        int rows;
+        string? error;
+        lock (_sampleLock) { rows = _rawPointIndex; error = _rawWriteError; }
+        RawFileFailed = error != null;
+        RawFileStatus = error ?? (IsCollecting ? $"写入中 · {rows:N0} 行" : $"采集已结束 · 共 {rows:N0} 行");
+    }
+
+    [RelayCommand(CanExecute = nameof(HasRawFile))]
+    private void OpenRawFile()
+    {
+        if (RawFilePath is not { } path) return;
+        if (!File.Exists(path)) { CollectionStatus = $"原始数据文件不存在：{path}"; return; }
+        try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo { FileName = path, UseShellExecute = true }); }
+        catch (Exception ex) { CollectionStatus = $"无法打开原始数据文件：{ex.Message}"; }
+    }
+
+    /// <summary>在资源管理器中打开所在文件夹并选中该文件；文件不存在时只打开文件夹。</summary>
+    [RelayCommand(CanExecute = nameof(HasRawFile))]
+    private void OpenRawFileFolder()
+    {
+        if (RawFilePath is not { } path) return;
+        var dir = Path.GetDirectoryName(path);
+        try
+        {
+            if (File.Exists(path))
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                    { FileName = "explorer.exe", Arguments = $"/select,\"{path}\"", UseShellExecute = true });
+            else if (Directory.Exists(dir))
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo { FileName = dir, UseShellExecute = true });
+            else
+                CollectionStatus = $"文件夹不存在：{dir}";
+        }
+        catch (Exception ex) { CollectionStatus = $"无法打开文件夹：{ex.Message}"; }
+    }
+
+    private bool HasRawFile() => RawFilePath != null;
 
     [RelayCommand]
     private void ImportFromFile()
