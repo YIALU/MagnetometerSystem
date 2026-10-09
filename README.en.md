@@ -1,6 +1,6 @@
 # MagnetometerSystem
 
-[简体中文](README.md) · [Download V0.5.2](https://github.com/YIALU/MagnetometerSystem/releases/tag/v0.5.2) · [User guide](docs/user-guide.en.md) · [Changelog](docs/变更日志.md)
+[简体中文](README.md) · [Download latest release](https://github.com/YIALU/MagnetometerSystem/releases/latest) · [User guide](docs/user-guide.en.md) · [Changelog](docs/变更日志.md)
 
 **MagnetometerSystem is a general-purpose magnetometer desktop application for everyday debugging and experimental recording.** Connect a device through serial or TCP, receive data using a user-defined protocol, automatically save original readings, and plot live curves.
 
@@ -8,32 +8,29 @@ The project centers on **customizable protocols, data recording, and live plotti
 
 ## Features
 
-| Feature | Capabilities |
-| --- | --- |
-| **Device connections** | Serial and TCP with configurable parameters; a "data link" strip on every page shows receive → parse → save counters and the measured rate |
-| **Frame diagnostics** | Raw frames lists each parse result: accepted, rejected with the reason (for example computed vs. received checksum), and bytes dropped while resynchronizing; Parse test decodes a pasted sample with the current protocol without connecting |
-| **Custom protocols** | ASCII or binary formats, field mappings, frame structure, byte order, scaling, checksums, channel units, and protocol JSON import/export |
-| **Automatic recording** | Original readings organized into sessions, with received counts, saved counts, and storage status |
-| **Live plots** | A combined plot or multiple plots in one/two columns; temperature and other channels with different units use separate axes in the combined plot |
-| **Acquire page** | Plot + channels / statistics / interval / filter / correction side panel + traffic / raw frames / events dock; collapsible panels and a focus mode that restores the layout |
-| **Channels and calculations** | Visibility, colors, order, display offsets, and total-field, gradient, or formula channels |
-| **Statistics and analysis** | Rolling statistics; drag on the plot to select an interval, hover for original values; moving-average and median display filters; the Analysis page computes noise, drift, and data quality for saved sessions by channel and time range |
-| **Device commands** | Protocol-associated command groups, parameterized commands, ASCII/HEX sending; the traffic log records direction, byte count, reply verdict, and latency per row |
-| **Data page** | Session list and details, replay (timestamp-based with speed, pause, and seek; disabled while connected), CSV export by channel |
-| **CSV export** | Time and channel selection, export precision, original values, and saved correction results |
-| **Data correction** | Calibration page: four-step orthogonality wizard (live continuous / manual 48 points, file import, saved session) with a profile library, and offset/gain parameter management; optional live/historical correction |
+- **Connections and protocols:** serial or TCP. ASCII and binary protocols configure field mappings, frame structure, byte order, scaling, checksums, and channel units, with JSON import/export. Send parameterized commands from protocol-associated command groups, or free ASCII/HEX.
+- **Reliable recording:** a session is prepared before connecting, and original readings (values after protocol parsing, before correction) are saved to a local database automatically. Pausing the display, collapsing panels, or switching pages does not affect recording; disconnect and shutdown wait for the final batch, and a storage failure stops reception with a clear message so you can fix the cause and retry.
+- **Live plots:** a combined plot or one plot per channel; temperature and other channels with different units get separate axes. Adjust channel visibility, colors, order, and display offsets, add total-field, gradient, or formula channels, and use rolling statistics, interval statistics, and display filters.
+- **Communication diagnostics:** the data-link strip at the top of the window always shows receive → parse → save counters and the measured rate. Raw frames gives a verdict and rejection reason for each frame, a pasted sample can be test-parsed with the current protocol without connecting, and the command log records reply verdicts and latency.
+- **Data management:** browse saved sessions, replay them by recorded timestamps (unavailable while connected), and export CSV by time range, channel, and precision; analyze noise, drift, and data quality for saved sessions.
+- **Optional correction:** orthogonality fitting and offset/gain parameters for live or historical data; original values are always preserved.
+- **Feedback:** submit problems and requests anonymously from within the application, with no login; name and contact are optional and visible only to the maintainer.
+
+See the [user guide](docs/user-guide.en.md) for details.
 
 ## Download and run
 
 Supports **Windows 10/11 x64**. Release packages include the .NET 8 runtime.
 
-| Download | Usage |
-| --- | --- |
-| [V0.5.2 installer](https://github.com/YIALU/MagnetometerSystem/releases/download/v0.5.2/MagnetometerSystem-v0.5.2-setup.exe) | Install and launch the application |
-| [V0.5.2 portable package](https://github.com/YIALU/MagnetometerSystem/releases/download/v0.5.2/MagnetometerSystem-v0.5.2-portable-win-x64.zip) | Extract and run `MagnetometerSystem.App.exe` |
-| [SHA256 checksums](https://github.com/YIALU/MagnetometerSystem/releases/download/v0.5.2/SHA256SUMS.txt) | Verify the downloaded installer or portable package |
+Download the latest version from [GitHub Releases](https://github.com/YIALU/MagnetometerSystem/releases/latest) or [Gitee releases](https://gitee.com/yialu/MagnetometerSystem/releases). Each release provides three files:
 
-See the [changelog](docs/变更日志.md) for version changes. The current version is **V0.5.2** and supports GitHub and Gitee updates: choose automatic comparison or a specific platform in Settings → Software updates. Automatic mode supports downloads from mirrors of the same version. A new version prompt does not start a download or installation; choose Download update to proceed.
+| File | Usage |
+| --- | --- |
+| `MagnetometerSystem-v<version>-setup.exe` | Installer: install and launch the application |
+| `MagnetometerSystem-v<version>-portable-win-x64.zip` | Portable package: extract and run `MagnetometerSystem.App.exe` |
+| `SHA256SUMS.txt` | Verify the downloaded installer or portable package |
+
+The application supports GitHub and Gitee updates: choose automatic comparison or a specific platform in Settings → Software updates. A new version prompt does not start a download or installation; choose Download update to proceed. The About dialog shows the installed version, and the [changelog](docs/变更日志.md) lists changes per version.
 
 ## Quick start
 
@@ -58,7 +55,7 @@ dotnet run --project src/MagnetometerSystem.App/MagnetometerSystem.App.csproj
 dotnet test MagnetometerSystem.sln -c Debug --no-build -m:1
 ```
 
-`src/MagnetometerSystem.App` contains the desktop UI, `Core` handles protocols, communication, and calculations, and `Infrastructure` implements storage, configuration, and export. Tests are in `tests`.
+`src/MagnetometerSystem.App` contains the desktop UI, `Core` handles protocols, communication, and calculations, and `Infrastructure` implements storage, configuration, and export. Tests are in `tests`. Without a device, [`tools/serial_simulator`](tools/serial_simulator/README.md) (Chinese) generates frames from a protocol configuration for manual testing over a virtual serial pair; it does not replace real-device acceptance.
 
 ## Documentation
 
@@ -66,7 +63,6 @@ dotnet test MagnetometerSystem.sln -c Debug --no-build -m:1
 - [Protocol checksums and channel units](docs/协议校验与单位.md) (Chinese): checksum setup, presets, and units.
 - [Testing and acceptance](docs/testing-and-acceptance.md) (Chinese): test instructions, evidence, and device acceptance.
 - [Release procedure](docs/发布流程.md) (Chinese): versioning and packaging.
+- [Feedback service](docs/feedback-deployment.md) (Chinese): deployment and maintenance of the anonymous feedback service.
 - [Contributing](CONTRIBUTING.md) (Chinese): commits, pull requests, and reviews.
 - [AGENTS.md](AGENTS.md) (Chinese): engineering entry points and constraints for agents.
-
-The application also includes a simple anonymous feedback form and the selected application icon. Scenario and description are required; name and contact are optional and kept private on the receiver. The service is deployed, and anonymous submission through automatic GitHub Issue creation has been verified. See [feedback deployment](docs/feedback-deployment.md).
