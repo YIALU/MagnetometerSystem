@@ -8,7 +8,7 @@ Choose serial or TCP and enter the connection parameters. If the device requires
 
 The protocol defines how bytes become readings and what each channel means. Configure line endings, delimiters, and field mappings for ASCII, or frame structure, data types, byte order, scaling, and checksums for binary data. Confirm channel order, names, and units against device output, then save the configuration or export it as JSON.
 
-The two ZDZ_C08 presets require firmware-confirmed CRC parameters before acquisition; the defaults block acquisition with an explanation. See [protocol checksums and channel units](协议校验与单位.md) (Chinese) for setup, older protocol JSON files, variable-length segments, and preset units.
+The two "磁梯度数采卡-pt" (ZDZ_C08) presets have a CRC field in the frame that the firmware does not compute yet, so their checksum segment is disabled by default and the presets connect as selected; once the firmware computes the CRC, tick "Enable checksum" in the checksum segment. See [protocol checksums and channel units](协议校验与单位.md) (Chinese) for setup, older protocol JSON files, variable-length segments, and preset units.
 
 The nominal sampling rate is session metadata. It neither sends a command nor proves the device's actual output rate. The plot refresh rate controls UI updates. Historical replay follows reading timestamps and the selected playback speed.
 
@@ -36,7 +36,7 @@ Orthogonality and offset/gain tools are optional; ordinary capture does not requ
 
 An orthogonality profile's fitting unit must match the target channels. `uT`, `µT`, and `μT` are equivalent, but offsets are not converted automatically. Older profiles without recorded units remain unknown and require refitting or an explicitly unit-tagged import.
 
-Orthogonality fitting collection and session import currently require exactly three magnetic channels in X/Y/Z order, or six in X1/Y1/Z1/X2/Y2/Z2 order, all with the same explicit unit. Arbitrary fitting-channel selection is not implemented. Sources containing temperature, extra channels, or incomplete metadata are rejected. Prepare a CSV with explicit axis columns and declare its unit for these sources. Ordinary capture, plotting, and correction with explicit channel mappings remain available.
+Live collection, manual 48-point collection, and saved sessions take fitting samples from the channels chosen under Fitting channels in step 2 of the wizard: one channel each for X/Y/Z for a single triaxial sensor, or one set per probe for a dual triaxial setup. The application suggests channels from their names (for example X1/Y1/Z1 or Bx/By/Bz), and you can change them; temperature, gradient, and other channels do not take part in the fit. The selected channels must be distinct and share the same explicit magnetic unit (nT/uT/mT/T). File import takes a CSV/TXT file with three columns (six for dual triaxial) and requires choosing the value unit. Ordinary capture, plotting, and correction with explicit channel mappings are unaffected by the fitting-channel selection.
 
 Historical batch corrections are saved as separate versions. Their identifiers include both profile IDs, channel mappings, fitting units, and a calculation-parameter fingerprint. Editing parameters under the same profile ID preserves previous results. Select a saved correction version when exporting; the CSV `CorrectionVersion` column records its full identifier. Legacy single-profile results remain selectable and exportable.
 
