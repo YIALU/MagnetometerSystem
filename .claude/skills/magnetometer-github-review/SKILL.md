@@ -13,7 +13,7 @@ description: "仅用于 YIALU/MagnetometerSystem 磁力仪项目的开发收尾�
 - 远程名称：`origin` 指向 `github.com/YIALU/MagnetometerSystem`（GitHub，审查与合并的主平台）；`gitee` 指向 `gitee.com/yialu/MagnetometerSystem`（Gitee 镜像与更新源）。先用 `git remote -v` 验证 URL（HTTPS/SSH 均可）；名称与地址不符时先查清目的地，不能按惯例猜测或擅自重配远程。
 - 主分支为 `master`；新任务分支使用 `codex/任务名`（沿用仓库已有约定）。推送明确写出远程和分支，不使用裸 `git push`。
 - 读取根目录 `AGENTS.md`、`README.md`、`CONTRIBUTING.md` 和涉及模块。若当前旧分支没有贡献指南，读取经 fetch 更新的 `origin/master:CONTRIBUTING.md`，或 [GitHub 主分支指南](https://github.com/YIALU/MagnetometerSystem/blob/master/CONTRIBUTING.md)。不要用旧分支缺文件作为跳过流程的理由。
-- 以当前用户请求和已有授权确定终点：只读审查、仅本地修改不自动扩展成发布；用户明确要求按此流程提交 PR 时，执行提交、推送任务分支、创建 PR 和处理反馈，不反复询问已授权步骤。用户已授权本项目在最新提交的 CI 和 Codex 审查通过后直接合并 GitHub，再核验并同步 Gitee 主分支，每次软件代码交付同时更新 GitHub 和 Gitee Release 软件包，无需重复询问合并、同步或发布权限。用户明确要求只审查、仅本地修改、只提交不合并、仅操作 GitHub、暂不同步或不发布时遵从该要求。不改仓库保护、账户设置或增加付费服务。
+- 以当前用户请求和已有授权确定终点：只读审查、仅本地修改不自动扩展成发布；用户明确要求按此流程提交 PR 时，执行提交、推送任务分支、创建 PR 和处理反馈，不反复询问已授权步骤。用户已授权本项目在最新提交的 CI 和 Codex 审查通过后直接合并 GitHub，再核验并同步 Gitee 主分支，每次影响软件包的交付同时更新 GitHub 和 Gitee Release 软件包，无需重复询问合并、同步或发布权限。用户明确要求只审查、仅本地修改、只提交不合并、仅操作 GitHub、暂不同步或不发布时遵从该要求。不改仓库保护、账户设置或增加付费服务。
 
 ## Claude Code 环境
 
@@ -35,9 +35,9 @@ description: "仅用于 YIALU/MagnetometerSystem 磁力仪项目的开发收尾�
 
 ## 软件交付前核对版本
 
-软件代码交付在提交 PR 前读取 `Directory.Build.props`（唯一版本源）和两平台现有标签、Release。版本必须为尚未正式发布的新版本；用户指定版本优先，否则当前版本已发布时默认递增补丁版本，并更新 `docs/变更日志.md`。版本修改必须进入同一 PR 的 CI 与审查，不能合并后才补改版本。尚未发布的版本可继续使用，但先核实两平台均无同名正式发布（Gitee 标签可匿名查询 `https://gitee.com/api/v5/repos/yialu/MagnetometerSystem/tags`）。已发布版本或标签不得移动、覆盖或通过重命名旧软件包伪造新版本。
+**每次改动**（代码、文档、配置、skill 均包括在内）在提交 PR 前读取 `Directory.Build.props`（唯一版本源）和两平台现有标签、Release，并在同一 PR 中变更版本号。版本必须为尚未正式发布的新版本；用户指定版本优先，否则当前版本已发布时默认递增补丁版本，并更新 `docs/变更日志.md`。版本修改必须进入同一 PR 的 CI 与审查，不能合并后才补改版本。同一 PR 内的后续推送沿用本 PR 已递增的版本；每个新 PR 都在主分支当前版本的基础上再递增，即使主分支的版本尚未正式发布，也不与其他 PR 共用版本号。选定版本前核实两平台均无同名标签或正式发布（Gitee 标签可匿名查询 `https://gitee.com/api/v5/repos/yialu/MagnetometerSystem/tags`），并核实没有其他未合并 PR 已占用该版本：`gh pr list --state open --json number,headRefName` 列出开放 PR，`git fetch origin` 后用 `git show origin/<headRefName>:Directory.Build.props` 读取各自版本，新版本取高于这些版本和主分支版本的值。已发布版本或标签不得移动、覆盖或通过重命名旧软件包伪造新版本。
 
-只读审查、仅本地编辑和纯文档/skill 维护不自行生成软件发布；用户要求的软件代码提交推送按下述完整交付流程执行。
+每次改动都要提交 PR 审查，审查通过后合并 GitHub 并同步 Gitee。只读审查不产生改动。是否发布按改动是否改变发布软件包内容判断，而不是按文件类型：随程序打包的 `src/` 代码、资源与协议 JSON 等运行时配置（例如 `MagnetometerSystem.App.csproj` 复制到输出目录的 `Protocols/*.json`），以及 `build.ps1`、`installer/`、`Directory.Build.props` 中版本号以外的构建设置，都属于**影响软件包的改动**，按下述完整交付流程同时更新两平台 Release；只改流程文档、skill、CI 等不进入软件包的改动同样升版本号、走 PR、合并并同步，但不生成发布包。拿不准时按影响软件包处理。
 
 ## Windows 验证与 GitHub PR
 
@@ -73,10 +73,10 @@ dotnet test MagnetometerSystem.sln -c Debug --no-build --no-restore -m:1
 用户已授权将审核通过后的直接合并作为本项目默认流程，不再单独请求合并确认；用户明确限制本次任务不合并时除外。这是用户对交付终点的约定，旧流程文档中“交给用户确认合并”的文字不再作为额外确认要求；实际仓库保护规则仍必须满足。
 
 - 最新 PR head SHA 的 `Windows build and tests` 及其他必需检查成功；Codex 审查摘要对应同一提交并确认完成，有效问题已处理、相关讨论已解决。旧提交结果、仅有 👍、审查运行中或额度不足均不能当作通过。
-- 合并前重新读取 head SHA 和分支规则；head 变化时先核验新提交的 CI 与审查。合并请求绑定已核验的 head SHA（`gh pr merge <PR> --merge --match-head-commit <SHA>`），默认使用 merge commit 保留历史，不能用管理员绕过检查或开启自动合并让 PR 在 Codex 审查完成前被合入。
+- 合并前重新读取 head SHA 和分支规则；head 变化时先核验新提交的 CI 与审查。合并请求绑定已核验的 head SHA（`gh pr merge <PR> --merge --match-head-commit <SHA>`），默认使用 merge commit 保留历史，不能用管理员绕过检查或开启自动合并让 PR 在 Codex 审查完成前被合入。同时 fetch `origin/master` 读取主分支版本：其他 PR 先合入使主分支版本不低于本 PR 版本时不合并，先同步最新 `master`、重新递增版本并更新变更日志，推送后重新完成 CI 与审查。
 - 核实 GitHub 返回 merged 状态和合并提交，再 fetch `origin/master` 确认合并已存在；随后执行 Gitee 同步。结果不明时先读取远端状态，不盲目重复合并。CI、审查、规则或权限未满足时保持 PR 开放，报告缺失环节。
 
-交付包含 PR 链接、分支和提交、CI 与审查证据、合并结果、Gitee 同步结果、两平台 Release 链接与软件包校验结果及未验证范围；不能把“已提交 PR”或“代码已同步”当作完整软件交付终点。
+交付包含 PR 链接、分支和提交、CI 与审查证据、合并结果、Gitee 同步结果及未验证范围。**影响软件包的改动**还要包含两平台 Release 链接与软件包校验结果，不能把“已提交 PR”或“代码已同步”当作完整软件交付终点；**不进入软件包的改动**（流程文档、skill、CI 等）在合并与 Gitee 同步完成后即结束，不打标签、不创建 Release，版本号保持未发布。
 
 ## GitHub 合并后同步 Gitee
 
@@ -104,11 +104,11 @@ $giteeHead = git rev-parse gitee/master
 if ($githubHead -ne $giteeHead) { throw '两平台 master 不一致，需要检查。' }
 ```
 
-完成后核实 GitHub / Gitee 主分支的共同提交 SHA 和当前版本，再执行下方的标签与 Release 软件包发布。不配置双远程自动推送。
+完成后核实 GitHub / Gitee 主分支的共同提交 SHA 和当前版本。影响软件包的改动再执行下方的标签与 Release 软件包发布；不进入软件包的改动到此结束，不打标签、不发布。不配置双远程自动推送。
 
-## 每次软件代码交付更新两平台 Release
+## 每次影响软件包的交付更新两平台 Release
 
-用户已授权每次软件代码提交推送的交付包含 Release 软件包更新。任务分支的中间推送先完成最新提交的 CI 与审查；通过后直接合并 GitHub、同步 Gitee，再发布对应版本，无需额外请求发布确认。旧发布文档中单独询问合并、同步或发布权限的要求以此用户授权为准；版本、构建、校验和仓库保护要求仍应执行。用户明确限制本次任务不发布时除外。
+用户已授权每次影响软件包的改动在交付时包含 Release 软件包更新。任务分支的中间推送先完成最新提交的 CI 与审查；通过后直接合并 GitHub、同步 Gitee，再发布对应版本，无需额外请求发布确认。旧发布文档中单独询问合并、同步或发布权限的要求以此用户授权为准；版本、构建、校验和仓库保护要求仍应执行。用户明确限制本次任务不发布时除外。
 
 1. 读取 `docs/发布流程.md` 和 `build.ps1`，在干净的独立 worktree 中准备已合并、已同步的确切源码提交。核实发布源码与已审查内容的对应关系；若合并引入未经验证的实质变化，先验证并处理。版本以 `Directory.Build.props` 为准，带说明的 `vX.Y.Z` 标签绑定该确切提交且两平台一致。已有标签指向其他提交或版本已正式发布时停止覆盖，先通过正常 PR 修正版本。
 2. 在 Windows 运行 `.\build.ps1 -Mode All`，检查退出码、实际输出和版本；正式发布不得使用 `AllowDirty`、`SkipVersionCheck` 绕过检查。安装版需要带 `Languages\ChineseSimplified.isl` 的 Inno Setup 7。构建一次，保留 `artifacts/v<version>/` 中同一套安装版 `MagnetometerSystem-v<version>-setup.exe`、便携版 `MagnetometerSystem-v<version>-portable-win-x64.zip` 和 `SHA256SUMS.txt`。核对程序版本、标签、源码提交及清单哈希，不能上传旧构建或只改文件名。

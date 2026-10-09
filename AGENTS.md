@@ -80,7 +80,13 @@ WPF 程序及涉及 WPF 的测试需要 Windows；Linux 上 Core 测试通过不
 
 ## 提交与审查
 
-遵循 [CONTRIBUTING.md](CONTRIBUTING.md)：功能分支提交到 GitHub PR；每次推送后核对最新提交的 Windows CI 与 Codex 审查。人工确认合并，未经明确要求不推送 Gitee。
+遵循 [CONTRIBUTING.md](CONTRIBUTING.md)。**每次改动**（代码、文档、配置与 skill 均包括在内）都要：
+
+1. 在同一 PR 中递增 `Directory.Build.props` 的版本号（默认递增补丁号），并更新 `docs/变更日志.md`；新版本须高于 `master` 和其他未合并 PR 已占用的版本；
+2. 从功能分支提交 GitHub PR，每次推送后核对最新提交的 Windows CI 与 Codex 审查，处理全部有效意见；
+3. 最新提交的 CI 与审查通过、讨论已解决后直接合并（维护者已授权，无需另行确认），再把 GitHub `master` 快进同步到 Gitee。合并前重新读取 `master` 的版本号：其他 PR 先合入使主分支版本不低于本 PR 时，先同步 `master`、重新递增版本并更新变更日志，经新一轮 CI 与审查后再合并。
+
+不直接推送 `master`，不强推，不开启自动合并让 PR 在审查完成前合入。改变发布软件包内容的改动（随程序打包的 `src/` 代码、资源与协议 JSON 等运行时配置，以及 `build.ps1`、`installer/` 等打包输入；拿不准时按此处理）还按 [发布流程](docs/发布流程.md) 更新两平台 Release；只改流程文档、skill、CI 等不进入软件包的改动在合并并同步 Gitee 后即结束。
 
 ## Code Review Rules
 

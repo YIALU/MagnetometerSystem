@@ -54,6 +54,8 @@ git commit -m "描述本次变更"
 git push -u origin codex/my-change
 ```
 
+每次改动（含文档、配置）都要在同一 PR 中递增 `Directory.Build.props` 的版本号并更新 `docs/变更日志.md`，版本修改与改动一起经过 CI 和审查。同一 PR 的后续推送沿用该版本；每个新 PR 都在主分支当前版本上再递增，并高于其他未合并 PR 已占用的版本（`gh pr list --state open` 后查看各 PR 的 `Directory.Build.props`），不与其他 PR 共用版本号。合并前若其他 PR 先合入使 `master` 的版本不低于本 PR，先同步 `master` 并重新递增版本，经新一轮 CI 与审查后再合并。
+
 不要使用 `git add .` 打包无关工作或个人配置，不直接推送 `master`。
 
 ### 3. 在 GitHub 审查并合并
@@ -61,7 +63,7 @@ git push -u origin codex/my-change
 1. 创建目标分支为 `master` 的 PR，填写问题、变化和验证证据。草稿完成后转为 Ready for review。
 2. 确认 Codex 审查已触发；必要时评论 `@codex review`，等待实际审查结果。按反馈修复，并推送到同一功能分支。
 3. **每次新的 push、解决冲突或更新基础分支之后，都要重新检查最新 PR HEAD 的 CI 和 Codex 审查。** 旧提交上的审查结果不覆盖新提交；自动审查没有运行时再次手动触发。
-4. 最新 `Windows build and tests` 成功、最新提交审查完成且问题已处理后，由维护者合并。不要开启自动合并来跳过人工确认。未解决问题应说明处理结果，不能只勾选模板作为审查证据。
+4. 最新 `Windows build and tests` 成功、最新提交审查完成且问题已处理后直接合并（维护者已授权，无需另行确认），随后按下文同步 Gitee。不要开启自动合并让 PR 在审查完成前合入。未解决问题应说明处理结果，不能只勾选模板作为审查证据。
 
 ## 首次同步已有提交
 
