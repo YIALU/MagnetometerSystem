@@ -11,8 +11,8 @@ using IUserPreferencesService = MagnetometerSystem.Infrastructure.Services.IUser
 namespace MagnetometerSystem.App.Services;
 
 /// <summary>
-/// 检查更新的应用层协调者：管理用户偏好（自动检查开关、上次检查时间、跳过的版本）、
-/// 启动时的静默检查、以及更新窗口的弹出。
+/// 检查更新的应用层协调者：管理用户偏好（自动检查开关、上次检查时间、跳过的版本、
+/// 最近发现的新版本）、启动及运行期间的静默检查、以及更新窗口的弹出。
 ///
 /// 偏好走 UserPreferencesService 而不是 AppSettings —— App.OnExit 会用主界面的当前值
 /// 整体覆盖 AppSettings，把更新相关的设置放进去会被那次写回冲掉。
@@ -23,17 +23,44 @@ public sealed class UpdateCoordinator
     public const string KeyLastCheckUtc = "update.lastCheckUtc";
     public const string KeySkippedVersion = "update.skippedVersion";
     public const string KeySource = "update.source";
+    public const string KeyKnownUpdate = "update.knownUpdate";
+    public const string KeyLastPrompt = "update.lastPrompt";
 
     /// <summary>两次静默检查的最小间隔。</summary>
-    private static readonly TimeSpan SilentCheckInterval = TimeSpan.FromHours(24);
+    internal static readonly TimeSpan SilentCheckInterval = TimeSpan.FromHours(24);
 
     /// <summary>启动后延迟多久才检查，避开数据库初始化和串口连接的高峰。</summary>
-    private static readonly TimeSpan StartupDelay = TimeSpan.FromSeconds(8);
+    internal TimeSpan StartupDelay { get; set; } = TimeSpan.FromSeconds(8);
+
+    /// <summary>
+    /// 运行期间多久看一次是否到了检查时间。真正联网仍受 24 小时间隔约束；
+    /// 检查失败不记时间，所以断网时也按这个节奏重试。
+    /// </summary>
+    internal TimeSpan PollInterval { get; set; } = TimeSpan.FromHours(1);
+
+    internal Func<DateTime> UtcNow { get; set; } = () => DateTime.UtcNow;
 
     private readonly IUpdateService _updateService;
     private readonly IUserPreferencesService _preferences;
     private readonly SemaphoreSlim _sourceGate = new(1, 1);
+
+    /// <summary>
+    /// 定时检查、手动检查和切换平台互斥执行，慢的旧结果不会覆盖新结果。
+    /// 加锁顺序固定为先 _checkGate 后 _sourceGate。
+    /// </summary>
+    private readonly SemaphoreSlim _checkGate = new(1, 1);
+
+    /// <summary>每写入一次检查结果或切换一次平台加一；静默检查弹窗前据此确认自己仍是最新结果。</summary>
+    private int _resultGeneration;
     private bool _sourceLoaded;
+    private bool _dialogOpen;
+    private readonly object _promptLock = new();
+    private string? _promptedVersion;
+    private DateTime _promptedAtUtc;
+    // 静默检查先占下冷却、再交给 UI 发布；UI 判定结果已作废时据此退回占用前的记录。
+    private string? _reservedVersion;
+    private string? _versionBeforeReservation;
+    private DateTime _atBeforeReservation;
 
     public UpdateCoordinator(IUpdateService updateService, IUserPreferencesService preferences)
     {
@@ -45,6 +72,19 @@ public sealed class UpdateCoordinator
 
     /// <summary>最近一次检查发现的新版本。供状态栏的"有新版本"按钮免去重新联网。</summary>
     public UpdateInfo? LastKnownUpdate { get; private set; }
+
+    /// <summary>
+    /// 这个检查结果是否仍是当前记下的那一个（按对象判断，同版本但来自另一平台或另一次检查的不算）。静默检查的回调在 UI 线程挂角标前用它做最后确认：
+    /// 清除总是先置空 <see cref="LastKnownUpdate"/> 再通知撤角标，所以无论两者在 UI 线程上
+    /// 谁先执行，最终都不会留下已作废的角标。
+    /// </summary>
+    public bool IsCurrentUpdate(UpdateInfo info) => ReferenceEquals(LastKnownUpdate, info);
+
+    /// <summary>
+    /// 之后的检查确认已是最新（例如发布被撤回或换了平台），以前记下的新版本作废。
+    /// 订阅方据此撤下状态栏角标；在后台线程触发。
+    /// </summary>
+    public event Action? KnownUpdateCleared;
 
     // ------------------------------------------------------------------ 偏好
 
@@ -69,15 +109,52 @@ public sealed class UpdateCoordinator
     public async Task SetSourceAsync(UpdateSource source)
     {
         if (!Enum.IsDefined(source)) throw new ArgumentOutOfRangeException(nameof(source));
-        await _sourceGate.WaitAsync();
+        // 等进行中的检查写完、且切换和清缓存做完之前不让新检查开始，
+        // 旧平台的结果不会在清除之后写回，新平台的结果也不会被清掉。
+        await _checkGate.WaitAsync();
         try
         {
-            _updateService.Options.PreferredSource = source;
-            _sourceLoaded = true;
-            await _preferences.SetPreferenceAsync(KeySource, source.ToString());
+            var changed = false;
+            var hadUpdate = false;
+            await _sourceGate.WaitAsync();
+            try
+            {
+                var previous = _updateService.Options.PreferredSource;
+                if (!_sourceLoaded)
+                {
+                    var saved = await _preferences.GetPreferenceAsync<string>(KeySource);
+                    previous = Enum.TryParse<UpdateSource>(saved, out var parsed) && Enum.IsDefined(parsed) ? parsed : UpdateSource.Automatic;
+                }
+                changed = previous != source;
+                if (changed)
+                {
+                    // 在任何 await 之前作废旧平台的结果，排队中的界面回调据此不再挂角标、弹窗。
+                    Interlocked.Increment(ref _resultGeneration);
+                    hadUpdate = LastKnownUpdate is not null;
+                    LastKnownUpdate = null;
+                }
+                _updateService.Options.PreferredSource = source;
+                _sourceLoaded = true;
+                await _preferences.SetPreferenceAsync(KeySource, source.ToString());
+            }
+            catch (Exception ex) { Log.Warning(ex, "保存更新平台失败"); }
+            finally { _sourceGate.Release(); }
+
+            if (changed) await InvalidateKnownUpdateAsync(hadUpdate);
         }
-        catch (Exception ex) { Log.Warning(ex, "保存更新平台失败"); }
-        finally { _sourceGate.Release(); }
+        finally { _checkGate.Release(); }
+    }
+
+    /// <summary>
+    /// 换了更新平台后，以前记下的新版本和检查时间都不再作数：撤下角标，
+    /// 下一轮定时检查按新平台重新联网。
+    /// </summary>
+    private async Task InvalidateKnownUpdateAsync(bool hadUpdate)
+    {
+        await TrySetKnownUpdateAsync(null);
+        try { await _preferences.SetPreferenceAsync<DateTime?>(KeyLastCheckUtc, null); }
+        catch (Exception ex) { Log.Warning(ex, "清除检查更新时间失败"); }
+        if (hadUpdate) KnownUpdateCleared?.Invoke();
     }
 
     public async Task<bool> IsAutoCheckEnabledAsync()
@@ -108,15 +185,46 @@ public sealed class UpdateCoordinator
     // ------------------------------------------------------------ 静默检查
 
     /// <summary>
+    /// 启动后的静默检查，之后在程序运行期间每到 24 小时再查一次。
+    /// 常年不关的实例也能收到新版本提示；"稍后提醒"的版本次日会再提示一次。
+    /// </summary>
+    /// <param name="onUpdateFound">联网发现新版本时的回调（挂角标并弹窗），由调用方负责切到 UI 线程。</param>
+    /// <param name="onUpdateRestored">只挂角标不弹窗的回调：启动时恢复上次发现的版本，或同一版本还在 24 小时提示冷却内。</param>
+    public async Task RunAutoCheckLoopAsync(
+        Func<UpdateInfo, Task> onUpdateFound, Func<UpdateInfo, Task>? onUpdateRestored, CancellationToken ct = default)
+    {
+        await RunStartupCheckAsync(onUpdateFound, onUpdateRestored);
+        while (true)
+        {
+            try { await Task.Delay(PollInterval, ct); }
+            catch (OperationCanceledException) { return; }
+
+            try
+            {
+                if (!await IsAutoCheckEnabledAsync() || !await IsCheckDueAsync()) continue;
+                await CheckSilentlyAsync(onUpdateFound, onUpdateRestored);
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "定时检查更新出错");
+            }
+        }
+    }
+
+    /// <summary>
     /// 启动后的静默检查。任何失败都只记日志，绝不弹窗——
     /// 这套软件常年跑在没有外网的工业现场，检查不到更新是常态而非异常。
     /// </summary>
     /// <param name="onUpdateFound">发现新版本时的回调，由调用方负责切到 UI 线程。</param>
-    public async Task RunStartupCheckAsync(Func<UpdateInfo, Task> onUpdateFound)
+    /// <param name="onUpdateRestored">只挂角标不弹窗的回调，见 <see cref="RunAutoCheckLoopAsync"/>。</param>
+    public async Task RunStartupCheckAsync(Func<UpdateInfo, Task> onUpdateFound, Func<UpdateInfo, Task>? onUpdateRestored = null)
     {
         try
         {
             _updateService.CleanupDownloads();
+
+            // 即使这次启动时关着自动检查也要读回：运行中重新打开后，定时检查同样受 24 小时提示冷却约束。
+            await LoadLastPromptAsync();
 
             if (!await IsAutoCheckEnabledAsync())
             {
@@ -124,19 +232,38 @@ public sealed class UpdateCoordinator
                 return;
             }
 
-            var lastCheck = await TryGetLastCheckAsync();
-            if (lastCheck.HasValue && DateTime.UtcNow - lastCheck.Value < SilentCheckInterval)
-            {
-                return;
-            }
+            // 先把上次发现的版本挂回角标：24 小时内重启不联网，到期了联网又可能失败，
+            // 两种情况下"稍后提醒"的版本都不该找不回来。之后的检查结果会再覆盖它。
+            UpdateInfo? known;
+            await _checkGate.WaitAsync();
+            try { known = await TryRestoreKnownUpdateAsync(); }
+            finally { _checkGate.Release(); }
+            if (known is not null && onUpdateRestored is not null) await onUpdateRestored(known);
+
+            if (!await IsCheckDueAsync()) return;
 
             await Task.Delay(StartupDelay);
 
             // 用户可能在启动延迟期间关闭了自动检查。
             if (!await IsAutoCheckEnabledAsync()) return;
 
+            await CheckSilentlyAsync(onUpdateFound, onUpdateRestored);
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "启动时检查更新出错");
+        }
+    }
+
+    private async Task CheckSilentlyAsync(Func<UpdateInfo, Task> onUpdateFound, Func<UpdateInfo, Task>? onBadgeOnly)
+    {
+        UpdateCheckResult result;
+        int published;
+        await _checkGate.WaitAsync();
+        try
+        {
             await GetSourceAsync();
-            var result = await _updateService.CheckForUpdateAsync();
+            result = await _updateService.CheckForUpdateAsync();
             if (result.WarningMessage != null) Log.Warning("部分更新平台检查失败: {Message}", result.WarningMessage);
 
             if (result.Status == UpdateCheckStatus.Failed)
@@ -146,32 +273,146 @@ public sealed class UpdateCoordinator
                 return;
             }
 
-            if (result.WarningMessage == null) await TrySetLastCheckAsync(DateTime.UtcNow);
-
-            if (result.Status != UpdateCheckStatus.UpdateAvailable || result.Info is null)
-            {
-                if (result.WarningMessage == null) Log.Information("当前已是最新版本 v{Version}", AppVersion.Number);
-                else Log.Information("已成功检查的平台未发现新版本 v{Version}", AppVersion.Number);
-                return;
-            }
-
-            LastKnownUpdate = result.Info;
-
-            var skipped = await TryGetSkippedVersionAsync();
-            if (string.Equals(skipped, result.Info.Version, StringComparison.OrdinalIgnoreCase))
-            {
-                Log.Information("用户已选择跳过版本 v{Version}，不再提示", result.Info.Version);
-                return;
-            }
-
-            if (!await IsAutoCheckEnabledAsync()) return;
-            Log.Information("发现新版本 v{Version}", result.Info.Version);
-            await onUpdateFound(result.Info);
+            await RecordResultAsync(result);
+            published = Volatile.Read(ref _resultGeneration);
         }
-        catch (Exception ex)
+        finally { _checkGate.Release(); }
+
+        if (result.Status != UpdateCheckStatus.UpdateAvailable || result.Info is null)
         {
-            Log.Warning(ex, "启动时检查更新出错");
+            if (result.WarningMessage == null) Log.Information("当前已是最新版本 v{Version}", AppVersion.Number);
+            else Log.Information("已成功检查的平台未发现新版本 v{Version}", AppVersion.Number);
+            return;
         }
+
+        var skipped = await TryGetSkippedVersionAsync();
+        if (string.Equals(skipped, result.Info.Version, StringComparison.OrdinalIgnoreCase))
+        {
+            Log.Information("用户已选择跳过版本 v{Version}，不再提示", result.Info.Version);
+            return;
+        }
+
+        if (!await IsAutoCheckEnabledAsync()) return;
+
+        // 上面几步读偏好期间，用户可能换了平台或手动检查得到了更新的结果；
+        // 这次结果已不是最新的，就不再挂角标、弹窗。
+        if (published != Volatile.Read(ref _resultGeneration)) return;
+
+        // 部分平台失败时不记检查时间，下一轮仍会联网重试；同一版本 24 小时内只弹一次，
+        // 否则"稍后提醒"后每小时都会再弹。
+        if (!await TryMarkPromptedAsync(result.Info.Version))
+        {
+            // 冷却内不再弹窗，但角标照挂：例如换平台后角标已撤下，新平台查到的仍是同一版本。
+            if (onBadgeOnly is not null) await onBadgeOnly(result.Info);
+            return;
+        }
+
+        // 保存冷却记录期间结果作废了：没弹窗就不能留下冷却，否则同一版本之后只挂角标。
+        if (published != Volatile.Read(ref _resultGeneration))
+        {
+            ReleasePromptReservation(result.Info);
+            return;
+        }
+
+        Log.Information("发现新版本 v{Version}", result.Info.Version);
+        await onUpdateFound(result.Info);
+    }
+
+    /// <summary>同一版本 24 小时内已弹过窗（自动或手动）时返回 false；否则记下本次并返回 true。</summary>
+    private async Task<bool> TryMarkPromptedAsync(string version)
+    {
+        DateTime now;
+        lock (_promptLock)
+        {
+            now = UtcNow();
+            var sinceLast = now - _promptedAtUtc;
+            if (string.Equals(_promptedVersion, version, StringComparison.OrdinalIgnoreCase)
+                && sinceLast >= TimeSpan.Zero && sinceLast < SilentCheckInterval)
+            {
+                return false;
+            }
+
+            _versionBeforeReservation = _promptedVersion;
+            _atBeforeReservation = _promptedAtUtc;
+            _reservedVersion = version;
+            _promptedVersion = version;
+            _promptedAtUtc = now;
+        }
+        await TrySaveLastPromptAsync(version, now);
+        return true;
+    }
+
+    /// <summary>
+    /// 静默检查占下的冷却最终没有弹窗（结果已被更新的检查或切换平台作废）时调用，
+    /// 退回占用前的记录。期间真正弹过窗（<see cref="MarkPrompted"/>）则保留。
+    /// </summary>
+    public void ReleasePromptReservation(UpdateInfo info)
+    {
+        string? version;
+        DateTime at;
+        lock (_promptLock)
+        {
+            if (!string.Equals(_reservedVersion, info.Version, StringComparison.OrdinalIgnoreCase)) return;
+            _reservedVersion = null;
+            _promptedVersion = version = _versionBeforeReservation;
+            _promptedAtUtc = at = _atBeforeReservation;
+        }
+        _ = version is null ? TryClearLastPromptAsync() : TrySaveLastPromptAsync(version, at);
+    }
+
+    private void MarkPrompted(string version)
+    {
+        DateTime now;
+        lock (_promptLock)
+        {
+            now = UtcNow();
+            _reservedVersion = null;
+            _promptedVersion = version;
+            _promptedAtUtc = now;
+        }
+        _ = TrySaveLastPromptAsync(version, now);
+    }
+
+    /// <summary>
+    /// 弹窗记录要跨重启保留：部分平台失败时不写检查时间，24 小时内重启会立即再查，
+    /// 不读回这条记录就会把刚点过"稍后提醒"的版本再弹一次。
+    /// </summary>
+    private async Task LoadLastPromptAsync()
+    {
+        LastPrompt? saved;
+        try { saved = await _preferences.GetPreferenceAsync<LastPrompt>(KeyLastPrompt); }
+        catch (Exception ex) { Log.Warning(ex, "读取上次更新提示记录失败"); return; }
+        if (saved is null || string.IsNullOrEmpty(saved.Version)) return;
+        lock (_promptLock)
+        {
+            // 本次运行中已有更新的记录时不用旧值覆盖。
+            if (_promptedVersion is not null && _promptedAtUtc >= saved.AtUtc) return;
+            _promptedVersion = saved.Version;
+            _promptedAtUtc = saved.AtUtc;
+        }
+    }
+
+    private async Task TrySaveLastPromptAsync(string version, DateTime atUtc)
+    {
+        try { await _preferences.SetPreferenceAsync(KeyLastPrompt, new LastPrompt(version, atUtc)); }
+        catch (Exception ex) { Log.Warning(ex, "保存更新提示记录失败"); }
+    }
+
+    private async Task TryClearLastPromptAsync()
+    {
+        try { await _preferences.SetPreferenceAsync<LastPrompt?>(KeyLastPrompt, null); }
+        catch (Exception ex) { Log.Warning(ex, "清除更新提示记录失败"); }
+    }
+
+    internal sealed record LastPrompt(string Version, DateTime AtUtc);
+
+    private async Task<bool> IsCheckDueAsync()
+    {
+        var lastCheck = await TryGetLastCheckAsync();
+        if (!lastCheck.HasValue) return true;
+        var elapsed = UtcNow() - lastCheck.Value;
+        // 系统时钟被往回调过时，上次检查时间会落在"未来"，按到期处理，免得长期不再检查。
+        return elapsed < TimeSpan.Zero || elapsed >= SilentCheckInterval;
     }
 
     // ------------------------------------------------------------ 手动检查
@@ -179,21 +420,41 @@ public sealed class UpdateCoordinator
     /// <summary>"关于"窗口里的手动检查。结果原样返回，由调用方决定怎么提示。</summary>
     public async Task<UpdateCheckResult> CheckManuallyAsync(CancellationToken ct = default)
     {
-        await GetSourceAsync();
-        ct.ThrowIfCancellationRequested();
-        var result = await _updateService.CheckForUpdateAsync(ct);
+        await _checkGate.WaitAsync(ct);
+        try
+        {
+            await GetSourceAsync();
+            ct.ThrowIfCancellationRequested();
+            var result = await _updateService.CheckForUpdateAsync(ct);
+            if (result.Status != UpdateCheckStatus.Failed) await RecordResultAsync(result);
+            return result;
+        }
+        finally { _checkGate.Release(); }
+    }
+
+    /// <summary>
+    /// 记录一次成功的检查。只有所有平台都答复时才写检查时间和"已是最新"；
+    /// 部分平台失败时发现的新版本照样记下，但不清除以前记下的版本。
+    /// 调用方须持有 _checkGate。
+    /// </summary>
+    private async Task RecordResultAsync(UpdateCheckResult result)
+    {
+        Interlocked.Increment(ref _resultGeneration);
 
         if (result.Status == UpdateCheckStatus.UpdateAvailable && result.Info is not null)
         {
             LastKnownUpdate = result.Info;
-            if (result.WarningMessage == null) await TrySetLastCheckAsync(DateTime.UtcNow);
+            await TrySetKnownUpdateAsync(result.Info);
         }
-        else if (result.Status == UpdateCheckStatus.UpToDate)
+        else if (result.WarningMessage == null)
         {
-            if (result.WarningMessage == null) await TrySetLastCheckAsync(DateTime.UtcNow);
+            var hadUpdate = LastKnownUpdate is not null;
+            LastKnownUpdate = null;
+            await TrySetKnownUpdateAsync(null);
+            if (hadUpdate) KnownUpdateCleared?.Invoke();
         }
 
-        return result;
+        if (result.WarningMessage == null) await TrySetLastCheckAsync(UtcNow());
     }
 
     /// <summary>
@@ -201,6 +462,9 @@ public sealed class UpdateCoordinator
     /// </summary>
     public async Task ShowUpdateDialogAsync(Window? owner, UpdateInfo info)
     {
+        // 定时检查可能恰好在用户从角标或"关于"打开更新窗口时触发，不叠第二个窗口。
+        if (_dialogOpen) return;
+
         var dialog = new UpdateDialog(_updateService, info);
 
         if (owner is not null && owner.IsVisible && !ReferenceEquals(owner, dialog))
@@ -208,7 +472,11 @@ public sealed class UpdateCoordinator
             dialog.Owner = owner;
         }
 
-        dialog.ShowDialog();
+        // 用户从"关于"或角标看过的版本，定时检查 24 小时内也不再自动弹。
+        MarkPrompted(info.Version);
+        _dialogOpen = true;
+        try { dialog.ShowDialog(); }
+        finally { _dialogOpen = false; }
 
         if (dialog.SkipRequested)
         {
@@ -229,6 +497,59 @@ public sealed class UpdateCoordinator
     {
         try { await _preferences.SetPreferenceAsync(KeyLastCheckUtc, utc); }
         catch (Exception ex) { Log.Warning(ex, "保存检查更新时间失败"); }
+    }
+
+    /// <summary>
+    /// 读回上次发现的新版本。已跳过、或已不比当前版本新（例如已经装好）的不再恢复。
+    /// </summary>
+    private async Task<UpdateInfo?> TryRestoreKnownUpdateAsync()
+    {
+        UpdateInfo? known;
+        try { known = await _preferences.GetPreferenceAsync<UpdateInfo>(KeyKnownUpdate); }
+        catch (Exception ex) { Log.Warning(ex, "读取上次发现的新版本失败"); return null; }
+        if (known is null) return null;
+
+        // 切换平台时先写平台偏好再清缓存，中途退出会留下旧平台的记录。固定平台时只恢复
+        // 主结果就来自该平台的记录：更新窗口默认用主结果下载，镜像匹配也不算。
+        var source = await GetSourceAsync();
+        var matchesSource = source == UpdateSource.Automatic || known.Source == source;
+
+        if (!matchesSource)
+        {
+            // 检查时间也属于旧平台，留着会让新平台 24 小时内都不联网。
+            await TrySetKnownUpdateAsync(null);
+            try { await _preferences.SetPreferenceAsync<DateTime?>(KeyLastCheckUtc, null); }
+            catch (Exception ex) { Log.Warning(ex, "清除检查更新时间失败"); }
+            return null;
+        }
+
+        if (!IsNewerThanCurrent(known.Version))
+        {
+            await TrySetKnownUpdateAsync(null);
+            return null;
+        }
+
+        LastKnownUpdate = known;
+        var skipped = await TryGetSkippedVersionAsync();
+        return string.Equals(skipped, known.Version, StringComparison.OrdinalIgnoreCase) ? null : known;
+    }
+
+    private bool IsNewerThanCurrent(string? version) =>
+        TryParseVersion(version, out var candidate)
+        && TryParseVersion(_updateService.Options.CurrentVersion, out var current)
+        && candidate > current;
+
+    private static bool TryParseVersion(string? raw, out Version version)
+    {
+        version = new Version(0, 0, 0);
+        var text = raw?.Trim().TrimStart('v', 'V');
+        return !string.IsNullOrEmpty(text) && Version.TryParse(text, out version!);
+    }
+
+    private async Task TrySetKnownUpdateAsync(UpdateInfo? info)
+    {
+        try { await _preferences.SetPreferenceAsync(KeyKnownUpdate, info); }
+        catch (Exception ex) { Log.Warning(ex, "保存发现的新版本失败"); }
     }
 
     private async Task<string?> TryGetSkippedVersionAsync()
