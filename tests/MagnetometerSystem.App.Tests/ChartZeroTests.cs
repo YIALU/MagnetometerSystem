@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using MagnetometerSystem.App.ViewModels;
+using MagnetometerSystem.App.Views.Charting;
 using MagnetometerSystem.Core.Models;
 using MagnetometerSystem.Core.Processing;
 using MagnetometerSystem.Core.Services;
@@ -29,7 +30,9 @@ public class ChartZeroTests
     public Task ZeroCentresTheFilteredCurveThatIsActuallyPlotted(FilterType filter) => WpfTestHost.RunAsync(async () =>
     {
         var bus = new DataBus();
-        using var vm = new RealtimeChartViewModel(bus) { PlotControl = new ScottPlot.WPF.WpfPlot() };
+        using var vm = new RealtimeChartViewModel(bus);
+        using var renderer = new ChartRenderer(new ScottPlot.WPF.WpfPlot());
+        renderer.Attach(vm);
         bus.PublishAcquisitionStarted(Configuration());
         await WpfTestHost.PumpAsync();
         var start = new DateTime(2020, 1, 1);
@@ -55,7 +58,7 @@ public class ChartZeroTests
         Assert.Equal(-filtered.Average(), offset, 9);
         Assert.NotEqual(-window.Average(), offset, 3);
         // 实际画出的 CH0 曲线（加偏移后再滤波）均值为 0。
-        var curve = vm.PlotControl.Plot.GetPlottables().OfType<ScottPlot.Plottables.Scatter>()
+        var curve = renderer.SinglePlot.Plot.GetPlottables().OfType<ScottPlot.Plottables.Scatter>()
             .Single(p => p.LegendText.StartsWith("CH0"));
         Assert.Equal(0, curve.Data.GetScatterPoints().Average(pt => pt.Y), 9);
         bus.PublishAcquisitionStopped();
@@ -66,7 +69,9 @@ public class ChartZeroTests
     public Task ZeroUsesVisibleCurvesInTheTimeWindowAndLeavesRawStatisticsAlone() => WpfTestHost.RunAsync(async () =>
     {
         var bus = new DataBus();
-        using var vm = new RealtimeChartViewModel(bus) { PlotControl = new ScottPlot.WPF.WpfPlot() };
+        using var vm = new RealtimeChartViewModel(bus);
+        using var renderer = new ChartRenderer(new ScottPlot.WPF.WpfPlot());
+        renderer.Attach(vm);
         bus.PublishAcquisitionStarted(Configuration());
         await WpfTestHost.PumpAsync();
         Assert.False(vm.Offsets.ZeroVisibleChannelsCommand.CanExecute(null));   // 还没有数据

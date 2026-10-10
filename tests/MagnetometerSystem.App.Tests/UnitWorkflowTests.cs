@@ -2,6 +2,7 @@ using System.Globalization;
 using System.IO;
 using System.Reflection;
 using MagnetometerSystem.App.ViewModels;
+using MagnetometerSystem.App.Views.Charting;
 using MagnetometerSystem.Core.Calibration;
 using MagnetometerSystem.Core.Models;
 using MagnetometerSystem.Core.Services;
@@ -27,7 +28,9 @@ public class UnitWorkflowTests
         }, new());
         await storage.SaveReadingsAsync([new() { SessionId = id, Timestamp = DateTime.Now, ChannelValues = [100, 30, 25] }]);
         await storage.EndSessionAsync(id);
-        using var chart = new RealtimeChartViewModel(bus) { PlotControl = new WpfPlot() };
+        using var chart = new RealtimeChartViewModel(bus);
+        using var renderer = new ChartRenderer(new WpfPlot());
+        renderer.Attach(chart);
         using var replay = new HistoryPlaybackViewModel(storage, bus, new OrthogonalityCorrector(), new SqliteCalibrationRepository(db));
         replay.SelectedSession = Assert.Single(await storage.GetSessionsAsync());
         await replay.LoadSessionCommand.ExecuteAsync(null);
@@ -45,7 +48,9 @@ public class UnitWorkflowTests
     public Task WizardsRejectIncompatibleSourcesAndDeriveUnitsWhileCustomUnitRemainsEditable() => WpfTestHost.RunAsync(async () =>
     {
         var bus = new DataBus();
-        using var chart = new RealtimeChartViewModel(bus) { PlotControl = new WpfPlot() };
+        using var chart = new RealtimeChartViewModel(bus);
+        using var renderer = new ChartRenderer(new WpfPlot());
+        renderer.Attach(chart);
         bus.PublishAcquisitionStarted(new SensorConfig
         {
             ChannelCountOverride = 7,
@@ -98,7 +103,7 @@ public class UnitWorkflowTests
         for (int i = 0; i < 3; i++)
             bus.PublishProcessedReading(new MagnetometerReading { Timestamp = start.AddMilliseconds(i * 10), ChannelValues = [100, 200, 300, 25, 1, 2, 3] });
         chart.RefreshPlot();
-        var lines = chart.PlotControl.Plot.GetPlottables().OfType<ScottPlot.Plottables.Scatter>().ToArray();
+        var lines = renderer.SinglePlot.Plot.GetPlottables().OfType<ScottPlot.Plottables.Scatter>().ToArray();
         Assert.Equal(11, lines.Length);
         Assert.Equal("°C", lines[^1].Axes.YAxis.Label.Text);
         Assert.Same(lines[3].Axes.YAxis, lines[^1].Axes.YAxis);

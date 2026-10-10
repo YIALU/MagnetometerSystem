@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Reflection;
 using System.Windows;
+using System.Windows.Media;
 using MagnetometerSystem.App.ViewModels;
 using MagnetometerSystem.App.Views;
 using MagnetometerSystem.Core.Calibration;
@@ -47,11 +48,14 @@ public class HistoryPlaybackViewModelTests
                 await WpfTestHost.PumpAsync();
                 chart.RefreshPlot();
 
-                Assert.NotNull(chart.PlotControl);
-                var lines = chart.PlotControl.Plot.GetPlottables().OfType<ScottPlot.Plottables.Scatter>().ToArray();
+                var chartView = FindVisualChild<RealtimeChartView>(view);
+                Assert.NotNull(chartView);
+                Assert.True(chart.HasChartRenderer);
+                var plot = chartView.Renderer.SinglePlot.Plot;
+                var lines = plot.GetPlottables().OfType<ScottPlot.Plottables.Scatter>().ToArray();
                 Assert.Equal(4, lines.Length);
                 var temperature = Assert.Single(lines.Where(line => line.LegendText.StartsWith("Temperature")));
-                Assert.NotSame(chart.PlotControl.Plot.Axes.Left, temperature.Axes.YAxis);
+                Assert.NotSame(plot.Axes.Left, temperature.Axes.YAxis);
                 Assert.Equal("°C", temperature.Axes.YAxis.Label.Text);
                 Assert.DoesNotContain("System.Windows.Data Error", errors.ToString());
             }
@@ -417,6 +421,14 @@ public class HistoryPlaybackViewModelTests
             Assert.Equal(0, displayed);
             Assert.Contains("磁场单位", vm.StatusMessage);
         });
+
+    private static T? FindVisualChild<T>(DependencyObject parent) where T : DependencyObject
+    {
+        if (parent is T match) return match;
+        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
+            if (FindVisualChild<T>(VisualTreeHelper.GetChild(parent, i)) is { } found) return found;
+        return null;
+    }
 
     private sealed class ImmediateConnectionFactory(ImmediateFirstFrameConnection connection) : IConnectionFactory
     {

@@ -3,20 +3,27 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using MagnetometerSystem.App.Helpers;
 using MagnetometerSystem.App.ViewModels;
+using MagnetometerSystem.App.Views.Charting;
 
 namespace MagnetometerSystem.App.Views;
 
 public partial class RealtimeChartView : UserControl
 {
     private RealtimeChartViewModel? _boundViewModel;
+    // 曲线由视图持有的图画出：视图模型只给出每帧内容，绘图器在加载时接上视图模型、卸载时解除。
+    private readonly ChartRenderer _renderer;
     private readonly HashSet<Core.Models.ChannelDisplayConfig> _subscribedChannels = new();
     private readonly HashSet<Core.Models.ComputedChannelDefinition> _subscribedComputed = new();
     public RealtimeChartView()
     {
         InitializeComponent();
+        _renderer = new ChartRenderer(WpfPlot1);
         AttachInteraction(WpfPlot1);
         Unloaded += OnUnloaded;
     }
+
+    /// <summary>这个视图的绘图器（测试用）。</summary>
+    internal ChartRenderer Renderer => _renderer;
 
     private void OnLoaded(object sender, System.Windows.RoutedEventArgs e)
     {
@@ -25,7 +32,7 @@ public partial class RealtimeChartView : UserControl
             if (ReferenceEquals(_boundViewModel, vm)) return;
             DetachViewModel();
             _boundViewModel = vm;
-            vm.PlotControl = WpfPlot1;
+            _renderer.Attach(vm);
             ChartFontHelper.Apply(WpfPlot1.Plot);
             vm.PropertyChanged += OnViewModelPropertyChanged;
             vm.ChannelConfigs.CollectionChanged += OnChannelConfigsChanged;
@@ -59,10 +66,8 @@ public partial class RealtimeChartView : UserControl
         foreach (var cfg in _subscribedComputed) cfg.PropertyChanged -= OnComputedPropertyChanged;
         _subscribedChannels.Clear();
         _subscribedComputed.Clear();
-        if (ReferenceEquals(vm.PlotControl, WpfPlot1))
-        { vm.PlotControl = null; vm.MultiPlotControls.Clear(); }
-        // 卸载后这些图不再显示：丢掉叠加层记录，旧图及其数据不再被视图模型留住。
-        vm.ForgetDetachedPlots();
+        // 卸载后这些图不再显示：绘图器解除订阅并丢掉多图和叠加层记录，旧图及其数据不再被视图模型留住。
+        _renderer.Detach();
         _boundViewModel = null;
     }
 
@@ -140,8 +145,7 @@ public partial class RealtimeChartView : UserControl
         if (DataContext is not RealtimeChartViewModel vm) return;
 
         MultiPlotPanel.Children.Clear();
-        vm.MultiPlotControls.Clear();
-        vm.ForgetDetachedPlots();
+        _renderer.SetMultiPlots([]);
 
         if (!vm.IsMultiPlotMode) { vm.RefreshPlot(); return; }
 
@@ -180,6 +184,7 @@ public partial class RealtimeChartView : UserControl
             });
         }
 
+        var plots = new List<ScottPlot.WPF.WpfPlot>();
         int channelIndex = 0;
         foreach (var config in vm.ChannelConfigs)
         {
@@ -200,7 +205,7 @@ public partial class RealtimeChartView : UserControl
             System.Windows.Controls.Grid.SetColumn(wpfPlot, col);
 
             grid.Children.Add(wpfPlot);
-            vm.MultiPlotControls.Add(wpfPlot);
+            plots.Add(wpfPlot);
 
             channelIndex++;
         }
@@ -225,11 +230,12 @@ public partial class RealtimeChartView : UserControl
             System.Windows.Controls.Grid.SetColumn(wpfPlot, col);
 
             grid.Children.Add(wpfPlot);
-            vm.MultiPlotControls.Add(wpfPlot);
+            plots.Add(wpfPlot);
 
             channelIndex++;
         }
 
+        _renderer.SetMultiPlots(plots);
         MultiPlotPanel.Children.Add(grid);
         vm.RefreshPlot();
     }

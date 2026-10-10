@@ -8,9 +8,7 @@ using CommunityToolkit.Mvvm.Input;
 using MagnetometerSystem.Core.Models;
 using MagnetometerSystem.Core.Processing;
 using MagnetometerSystem.Core.Services;
-using MagnetometerSystem.App.Helpers;
 using MagnetometerSystem.App.Services;
-using ScottPlot;
 
 namespace MagnetometerSystem.App.ViewModels;
 
@@ -36,7 +34,6 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
     // 时间轴 + 每通道显示值与原始值的环形缓冲，以及通道布局
     private readonly ChartSampleBuffer _samples = new();
 
-    private readonly Dictionary<string, ScottPlot.IYAxis> _unitAxes = new();
     private int _layoutRefreshPending;
     private bool _isAcquiring;
     private bool _disposed;
@@ -144,6 +141,9 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
     // 显示流水线：偏移 → 滤波 → 降采样
     private readonly DisplaySeriesPipeline _displayPipeline = new();
 
+    // 每帧要画的内容：单图的曲线与单位轴、多图的各张图
+    private readonly ChartFrameBuilder _frameBuilder;
+
     private DisplayFilterSettings DisplayFilter => new(IsFilterEnabled, SelectedFilterType, FilterWindowSize);
 
     // ---- 多图表模式 ----
@@ -169,11 +169,23 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
     partial void OnSinglePlotHeightChanged(double value) => IsChartHeightAutomatic = false;
     partial void OnMultiPlotHeightChanged(double value) => IsChartHeightAutomatic = false;
 
-    // 多图表控件引用（由 View 的 code-behind 设置）
-    public List<ScottPlot.WPF.WpfPlot> MultiPlotControls { get; set; } = new();
+    // ---- 绘图 ----
+    // 视图模型只算每帧要画的内容；ScottPlot 控件由视图持有，视图的绘图器（Views/Charting/ChartRenderer）订阅这些事件来画。
 
-    // ScottPlot 控件引用（由 View 设置）
-    public ScottPlot.WPF.WpfPlot? PlotControl { get; set; }
+    /// <summary>每次刷新算好的一帧。没有订阅者（视图未加载）时不计算曲线，只更新数值与统计。</summary>
+    public event Action<ChartFrame>? FrameReady;
+
+    /// <summary>新一次采集开始：清空单图并换回默认的坐标轴标题。</summary>
+    public event Action? ChartStarted;
+
+    /// <summary>清空图表：清掉所有图上的内容。</summary>
+    public event Action? ChartCleared;
+
+    /// <summary>区间、拖动预览或十字准线变化：只重画叠加层（见 <see cref="Overlay"/>），不重新取数。</summary>
+    public event Action? OverlaysChanged;
+
+    /// <summary>是否还有绘图器订阅（诊断与测试用）：视图卸载后应为 false，视图模型不再留住旧图。</summary>
+    internal bool HasChartRenderer => FrameReady != null || ChartStarted != null || ChartCleared != null || OverlaysChanged != null;
 
     // ---- 计算通道向导 ----
 
@@ -189,6 +201,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
     {
         _dataBus = dataBus;
         _preferencesService = preferencesService;
+        _frameBuilder = new ChartFrameBuilder(_displayPipeline, _computedEvaluator);
         Wizard = new ComputedChannelWizardViewModel(ComputedChannels, ProtocolChannelSources);
         Interval = new IntervalAnalysisViewModel(_samples.SnapshotRaw, dialogs ?? new WpfDialogService());
         Interval.PropertyChanged += OnIntervalPropertyChanged;
@@ -259,7 +272,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
             // 关闭向导面板
             Wizard.Close();
 
-            SetupPlot();
+            ChartStarted?.Invoke();
             _renderTimer.Start();
 
             // 恢复图表顺序
@@ -321,7 +334,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
         _lastFrame = (times, rawData);
         if (times.Length == 0)
         {
-            if (!IsMultiPlotMode && PlotControl != null) PlotControl.Refresh();
+            FrameReady?.Invoke(ChartFrame.NoData(IsMultiPlotMode));
             return;
         }
 
@@ -334,15 +347,13 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
 
         int startIdx = WindowStartIndex(times);
         int count = times.Length - startIdx;
-        var windowTimes = times.AsSpan(startIdx, count).ToArray();
 
-        if (IsMultiPlotMode)
+        if (FrameReady is { } frameReady)
         {
-            RenderMultiPlot(windowTimes, channelData, startIdx, count, xMin, xMax);
-        }
-        else
-        {
-            RenderSinglePlot(windowTimes, channelData, startIdx, count, xMin, xMax);
+            frameReady(_frameBuilder.Build(new ChartWindowData(times, channelData, startIdx, count, Layout.Count),
+                new ChartAxes(xMin, xMax, AutoScroll, AutoScaleY, YMin, YMax, ShowGrid),
+                new ChartDisplaySettings(IsMultiPlotMode, DisplayFilter, DownsampleTargetCount),
+                ChannelConfigs, ComputedChannels));
         }
 
         UpdateStatistics(times, rawData, startIdx, count);
@@ -356,192 +367,6 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
         for (int i = times.Length - 1; i >= 0; i--)
             if (times[i] < xMin) return Math.Min(i + 1, times.Length - 1);
         return 0;
-    }
-
-    private void RenderSinglePlot(double[] windowTimes, double[][] channelData,
-        int startIdx, int count, double xMin, double xMax)
-    {
-        if (PlotControl == null) return;
-
-        var plot = PlotControl.Plot;
-        plot.Clear();
-        ConfigureUnitAxes(plot);
-
-        // 绘制各通道
-        int channelCount = Layout.Count;
-        for (int ch = 0; ch < channelCount; ch++)
-        {
-            var config = ChannelConfigs.FirstOrDefault(c => c.ChannelIndex == ch);
-            if (config != null && !config.Visible)
-                continue;
-
-            if (ch >= channelData.Length || channelData[ch].Length < startIdx + count)
-                continue;
-
-            var series = _displayPipeline.Prepare(windowTimes, channelData[ch].AsSpan(startIdx, count).ToArray(),
-                config?.DisplayOffset ?? 0, DisplayFilter, DownsampleTargetCount);
-            var sig = plot.Add.ScatterLine(series.Xs, series.Ys);
-            if (config is not null && _unitAxes.TryGetValue(config.Unit, out var axis))
-                sig.Axes.YAxis = axis;
-
-            if (config != null)
-            {
-                var (a, r, g, b) = config.ParseColor();
-                sig.Color = new ScottPlot.Color(r, g, b, a);
-            }
-
-            sig.LineWidth = 1.5f;
-            sig.LegendText = (config?.Name ?? $"CH{ch}") + $" ({config?.Unit})";
-        }
-
-        // 绘制计算通道
-        RenderComputedChannels(plot, windowTimes, channelData, startIdx, count);
-
-        ConfigurePlotAxes(plot, xMin, xMax);
-        // 无参 AutoScaleY 只调整左轴；独立单位轴始终按自身数据确定范围。
-        foreach (var axis in _unitAxes.Values.Where(a => !ReferenceEquals(a, plot.Axes.Left)))
-            plot.Axes.AutoScaleY(axis);
-        plot.ShowLegend();
-        AddOverlays(plot, null);
-        PlotControl.Refresh();
-    }
-
-    private void ConfigureUnitAxes(ScottPlot.Plot plot)
-    {
-        foreach (var old in _unitAxes.Values.Where(a => !ReferenceEquals(a, plot.Axes.Left)))
-            plot.Axes.Remove(old);
-        _unitAxes.Clear();
-        var units = ChannelConfigs.Where(c => c.Visible).Select(c => c.Unit)
-            .Concat(ComputedChannels.Where(c => c.Enabled).Select(c => c.Unit))
-            .Distinct().OrderBy(u => u is "°C" or "℃" ? 1 : 0).ToArray();
-        plot.Axes.Left.Label.Text = units.FirstOrDefault() ?? "数值";
-        foreach (var unit in units)
-        {
-            ScottPlot.IYAxis axis = _unitAxes.Count == 0 ? plot.Axes.Left : plot.Axes.AddRightAxis();
-            axis.Label.Text = unit;
-            _unitAxes.Add(unit, axis);
-        }
-    }
-
-    private void RenderMultiPlot(double[] windowTimes, double[][] channelData,
-        int startIdx, int count, double xMin, double xMax)
-    {
-        int plotIdx = 0;
-        int channelCount = Layout.Count;
-
-        // 修复拖拽错位：按 ChannelConfigs 顺序迭代，用 config.ChannelIndex 取物理通道数据
-        foreach (var config in ChannelConfigs)
-        {
-            if (!config.Visible) continue;
-
-            int ch = config.ChannelIndex;
-            if (ch >= channelCount || plotIdx >= MultiPlotControls.Count) break;
-
-            var plotCtrl = MultiPlotControls[plotIdx];
-            var plot = plotCtrl.Plot;
-            plot.Clear();
-
-            if (ch < channelData.Length && channelData[ch].Length >= startIdx + count)
-            {
-                var series = _displayPipeline.Prepare(windowTimes, channelData[ch].AsSpan(startIdx, count).ToArray(),
-                    config.DisplayOffset, DisplayFilter, DownsampleTargetCount);
-                var sig = plot.Add.ScatterLine(series.Xs, series.Ys);
-                var (a, r, g, b) = config.ParseColor();
-                sig.Color = new ScottPlot.Color(r, g, b, a);
-                sig.LineWidth = 1.5f;
-
-                // 图上统计标注（右上角）
-                var stat = StatisticsResultItem.Compute(config.Name, series.Values);
-                var ann = plot.Add.Annotation("显示窗口\n" + stat.FormatMultiline(), ScottPlot.Alignment.UpperRight);
-                ann.LabelFontSize = 10;
-                ann.LabelFontName = ChartFontHelper.DefaultCjkFont;
-                ann.LabelBackgroundColor = new ScottPlot.Color(255, 255, 255, 200);
-                ann.LabelBorderColor = new ScottPlot.Color(200, 200, 200, 255);
-                ann.LabelBorderWidth = 1;
-            }
-
-            plot.Axes.Left.Label.Text = $"{config.Name} ({config.Unit})";
-            ConfigurePlotAxes(plot, xMin, xMax);
-            AddOverlays(plot, config);
-            plotCtrl.Refresh();
-            plotIdx++;
-        }
-
-        // 绘制计算通道
-        foreach (var computed in ComputedChannels)
-        {
-            if (!computed.Enabled || string.IsNullOrWhiteSpace(computed.Formula))
-                continue;
-
-            if (plotIdx >= MultiPlotControls.Count) break;
-
-            // 某通道缺这一点时按 0 求值
-            var computedValues = _computedEvaluator.Evaluate(computed.Formula, channelData, startIdx, count, missing: 0);
-            if (computedValues == null) continue;
-
-            var plotCtrl = MultiPlotControls[plotIdx];
-            var plot = plotCtrl.Plot;
-            plot.Clear();
-
-            var series = _displayPipeline.Prepare(windowTimes, computedValues, computed.DisplayOffset,
-                DisplayFilter, DownsampleTargetCount);
-            var compSig = plot.Add.ScatterLine(series.Xs, series.Ys);
-            var (ca, cr, cg, cb) = new ChannelDisplayConfig { ColorHex = computed.ColorHex }.ParseColor();
-            compSig.Color = new ScottPlot.Color(cr, cg, cb, ca);
-            compSig.LineWidth = computed.LineWidth;
-
-            // 计算通道统计标注
-            var compStat = StatisticsResultItem.Compute(computed.Name, series.Values);
-            var compAnn = plot.Add.Annotation("显示窗口\n" + compStat.FormatMultiline(), ScottPlot.Alignment.UpperRight);
-            compAnn.LabelFontSize = 10;
-            compAnn.LabelFontName = ChartFontHelper.DefaultCjkFont;
-            compAnn.LabelBackgroundColor = new ScottPlot.Color(255, 255, 255, 200);
-            compAnn.LabelBorderColor = new ScottPlot.Color(200, 200, 200, 255);
-            compAnn.LabelBorderWidth = 1;
-
-            plot.Axes.Left.Label.Text = $"{computed.Name} ({computed.Unit})";
-            ConfigurePlotAxes(plot, xMin, xMax);
-            AddOverlays(plot, null);
-            plotCtrl.Refresh();
-            plotIdx++;
-        }
-    }
-
-    private void RenderComputedChannels(ScottPlot.Plot plot, double[] windowTimes,
-        double[][] channelData, int startIdx, int count)
-    {
-        foreach (var computed in ComputedChannels)
-        {
-            if (!computed.Enabled || string.IsNullOrWhiteSpace(computed.Formula))
-                continue;
-
-            // 某通道缺这一点时按 0 求值
-            var computedValues = _computedEvaluator.Evaluate(computed.Formula, channelData, startIdx, count, missing: 0);
-            if (computedValues == null) continue;
-
-            var series = _displayPipeline.Prepare(windowTimes, computedValues, computed.DisplayOffset,
-                DisplayFilter, DownsampleTargetCount);
-            var compSig = plot.Add.ScatterLine(series.Xs, series.Ys);
-            var (ca, cr, cg, cb) = new ChannelDisplayConfig { ColorHex = computed.ColorHex }.ParseColor();
-            compSig.Color = new ScottPlot.Color(cr, cg, cb, ca);
-            compSig.LineWidth = computed.LineWidth;
-            compSig.LegendText = computed.Name;
-            if (_unitAxes.TryGetValue(computed.Unit, out var axis)) compSig.Axes.YAxis = axis;
-        }
-    }
-
-    private void ConfigurePlotAxes(ScottPlot.Plot plot, double xMin, double xMax)
-    {
-        if (AutoScroll)
-            plot.Axes.SetLimitsX(xMin, xMax);
-
-        if (AutoScaleY)
-            plot.Axes.AutoScaleY();
-        else
-            plot.Axes.SetLimitsY(YMin, YMax);
-
-        plot.Axes.Bottom.Label.Text = "时间 (s)";
-        plot.Grid.IsVisible = ShowGrid;
     }
 
     private void UpdateStatistics(double[] times, double[][] channelData, int startIdx, int count)
@@ -561,16 +386,6 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
             StatisticsRows = rows;
         }
         StatisticsText = "原始数据  ·  " + string.Join("  |  ", rows.Select(r => r.Stats.Format(statConfig)));
-    }
-
-    private void SetupPlot()
-    {
-        if (PlotControl == null) return;
-        var plot = PlotControl.Plot;
-        plot.Clear();
-        plot.Axes.Bottom.Label.Text = "时间 (s)";
-        plot.Axes.Left.Label.Text = "数值（单位由协议定义）";
-        PlotControl.Refresh();
     }
 
     [RelayCommand]
@@ -611,17 +426,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
         Interval.ClearIntervalSelection();
         _pausedData = IsPaused ? CapturePlotData(includeAll: true) : null;
         foreach (var config in ChannelConfigs) config.LatestValue = "—";
-        foreach (var control in MultiPlotControls)
-        {
-            control.Plot.Clear();
-            control.Refresh();
-        }
-
-        if (PlotControl != null)
-        {
-            PlotControl.Plot.Clear();
-            PlotControl.Refresh();
-        }
+        ChartCleared?.Invoke();
     }
 
     public void ZoomTimeWindow(double factor)
@@ -713,12 +518,24 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
 
     private (double[] Times, double[][] Raw)? _lastFrame;
     private double? _dragStart, _dragEnd, _hoverTime;
-    private readonly Dictionary<ScottPlot.Plot, (ChannelDisplayConfig? Channel, List<ScottPlot.IPlottable> Items)> _overlays = new();
-    private static readonly ScottPlot.Color OverlayAccent = ScottPlot.Color.FromHex("#2456C2");
-    private static readonly ScottPlot.Color OverlayMuted = ScottPlot.Color.FromHex("#66726E");
 
     /// <summary>曲线上鼠标所在时间（采集开始后的秒数）；null 表示鼠标不在曲线上。</summary>
     public double? HoverTime => _hoverTime;
+
+    /// <summary>当前的叠加层：区间阴影、拖动预览（拖过一段距离后才有）和十字准线（有数据时才有）。</summary>
+    public ChartOverlay Overlay => new(
+        Interval.CurrentInterval is { } interval ? (interval.StartTime, interval.EndTime) : null,
+        _dragStart is { } a && _dragEnd is { } b && a != b ? (Math.Min(a, b), Math.Max(a, b)) : null,
+        _hoverTime is { } t && _lastFrame is { Times.Length: > 0 } ? t : null);
+
+    /// <summary>
+    /// 十字准线读数：离鼠标最近的时间点的原始值（不含显示偏移和滤波）。channel 为多图中这张图对应的通道，
+    /// 为 null 时列出全部可见通道。没有十字准线或鼠标超出数据的时间范围时为 null。
+    /// </summary>
+    public string? CrosshairText(ChannelDisplayConfig? channel) =>
+        _hoverTime is { } t && _lastFrame is { Times.Length: > 0 } frame
+            ? CrosshairReadout.Format(frame.Times, frame.Raw, t, channel is null ? ChannelConfigs.Where(c => c.Visible) : [channel])
+            : null;
 
     public void SetHoverTime(double? seconds)
     {
@@ -744,16 +561,6 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
 
     /// <summary>叠加层实际重绘次数（诊断与测试用）。</summary>
     internal int OverlayRefreshCount { get; private set; }
-
-    /// <summary>仍保留叠加层记录的图数量（诊断与测试用）。</summary>
-    internal int OverlayPlotCount => _overlays.Count;
-
-    /// <summary>视图卸载或重建多图后调用：丢掉不再显示的图的叠加层记录，避免旧 ScottPlot 对象及其数据被留住。</summary>
-    public void ForgetDetachedPlots()
-    {
-        var live = MultiPlotControls.Select(c => c.Plot).Append(PlotControl?.Plot).ToHashSet();
-        foreach (var stale in _overlays.Keys.Where(p => !live.Contains(p)).ToArray()) _overlays.Remove(stale);
-    }
 
     public void BeginPlotSelection(double seconds)
     {
@@ -799,61 +606,11 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
         if (e.PropertyName == nameof(IntervalAnalysisViewModel.CurrentInterval)) RefreshOverlays();
     }
 
-    /// <summary>在一张图上加区间阴影、拖动预览和十字准线读数。channel 为多图模式下这张图对应的通道。</summary>
-    private void AddOverlays(ScottPlot.Plot plot, ChannelDisplayConfig? channel)
-    {
-        var items = new List<ScottPlot.IPlottable>();
-        if (Interval.CurrentInterval is { } interval)
-        {
-            var span = plot.Add.VerticalSpan(interval.StartTime, interval.EndTime);
-            span.FillStyle.Color = OverlayAccent.WithAlpha(.10);
-            span.LineStyle.Color = OverlayAccent.WithAlpha(.45);
-            span.LineStyle.Width = 1;
-            items.Add(span);
-        }
-        if (_dragStart is { } a && _dragEnd is { } b && a != b)
-        {
-            var drag = plot.Add.VerticalSpan(Math.Min(a, b), Math.Max(a, b));
-            drag.FillStyle.Color = OverlayAccent.WithAlpha(.22);
-            drag.LineStyle.Width = 0;
-            items.Add(drag);
-        }
-        if (_hoverTime is { } t && _lastFrame is { Times.Length: > 0 } frame)
-        {
-            var line = plot.Add.VerticalLine(t);
-            line.Color = OverlayMuted.WithAlpha(.8);
-            line.LineWidth = 1;
-            line.LinePattern = ScottPlot.LinePattern.Dashed;
-            items.Add(line);
-            var text = CrosshairReadout.Format(frame.Times, frame.Raw, t,
-                channel is null ? ChannelConfigs.Where(c => c.Visible) : [channel]);
-            if (text is not null)
-            {
-                var ann = plot.Add.Annotation(text, channel is null ? ScottPlot.Alignment.UpperRight : ScottPlot.Alignment.LowerLeft);
-                ann.LabelFontSize = 11;
-                ann.LabelFontName = ChartFontHelper.DefaultCjkFont;
-                ann.LabelBackgroundColor = new ScottPlot.Color(255, 255, 255, 225);
-                ann.LabelBorderColor = ScottPlot.Color.FromHex("#D2D9D5");
-                ann.LabelBorderWidth = 1;
-                items.Add(ann);
-            }
-        }
-        _overlays[plot] = (channel, items);
-    }
-
     /// <summary>只替换叠加层并重绘，不重新取数。</summary>
     private void RefreshOverlays()
     {
         OverlayRefreshCount++;
-        // 多图重建后旧图已不在界面上，先丢掉它们的记录。
-        ForgetDetachedPlots();
-        foreach (var (plot, (channel, items)) in _overlays.ToArray())
-        {
-            foreach (var item in items) plot.Remove(item);
-            AddOverlays(plot, channel);
-        }
-        PlotControl?.Refresh();
-        foreach (var control in MultiPlotControls) control.Refresh();
+        OverlaysChanged?.Invoke();
     }
 
     // ---- 拖拽排序 ----
