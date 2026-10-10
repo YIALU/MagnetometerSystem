@@ -196,11 +196,13 @@ public class LiveCalibrationCollectorTests : IDisposable
         _layoutChanges.Clear();
         var second = await StartAsync([0, 1, 2], manual: false, channels: 3);
         Assert.NotSame(first, second);
-        Publish(1, 2, 3, 4);
+        Publish(1, 2, 3);      // 排一次实时值
+        Publish(1, 2, 3, 4);   // 排一次通道数不符的通知
         _collector.Stop();
         await StartAsync([0, 1, 2], manual: false, channels: 3);
         RunUi();
         Assert.Empty(_layoutChanges);
+        Assert.Empty(_liveValues);
         Assert.True(_collector.IsCollecting);
 
         // 换了协议：通道名称或单位与开始时不同。
