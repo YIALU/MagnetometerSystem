@@ -1,7 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
-using System.Text;
 using System.Globalization;
 using System.Windows;
 using System.Windows.Threading;
@@ -12,6 +11,7 @@ using MagnetometerSystem.Core.Models;
 using MagnetometerSystem.Core.Processing;
 using MagnetometerSystem.Core.Services;
 using MagnetometerSystem.App.Helpers;
+using MagnetometerSystem.App.Services;
 using ScottPlot;
 
 namespace MagnetometerSystem.App.ViewModels;
@@ -98,9 +98,6 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
 
 
     [ObservableProperty]
-    private string _computationError = "";
-
-    [ObservableProperty]
     private long _dataPointCount;
 
     // 每通道显示配置（偏移、颜色、可见性）
@@ -124,23 +121,8 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
 
     // ---- 区间分析 ----
 
-    [ObservableProperty]
-    private IntervalSelection? _currentInterval;
-
-    [ObservableProperty]
-    private IntervalStatisticsResult? _intervalStatistics;
-
-    [ObservableProperty]
-    private bool _isIntervalSelectionMode;
-
-    [ObservableProperty]
-    private string _intervalStartInput = "";
-
-    [ObservableProperty]
-    private string _intervalEndInput = "";
-
-    [ObservableProperty]
-    private string _intervalStatisticsText = "";
+    /// <summary>“区间”页签：选一段计算原始读数的统计量，并可导出这一段。</summary>
+    public IntervalAnalysisViewModel Interval { get; }
 
     // ---- 滤波设置 ----
 
@@ -203,41 +185,16 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
 
     // ---- 计算通道向导 ----
 
-    [ObservableProperty]
-    private bool _isAddingTotalField;
+    /// <summary>总场与梯度向导，确认后添加到 <see cref="ComputedChannels"/>。</summary>
+    public ComputedChannelWizardViewModel Wizard { get; }
 
-    [ObservableProperty]
-    private bool _isAddingGradient;
-
-    [ObservableProperty]
-    private int _wizardSourceA;
-
-    [ObservableProperty]
-    private int _wizardSourceB = 1;
-
-    [ObservableProperty]
-    private int _wizardSourceC = 2;
-
-    /// <summary>向导可选的原始通道列表</summary>
-    [ObservableProperty]
-    private ObservableCollection<SourceOption> _wizardRawSources = new();
-
-    /// <summary>向导可选的梯度源列表（原始通道 + 已有计算通道）</summary>
-    [ObservableProperty]
-    private ObservableCollection<SourceOption> _wizardGradientSources = new();
-
-    /// <summary>梯度基线距离 (m)，用于将差值转换为梯度值 (nT/m)</summary>
-    private double _gradientBaselineDistance = 1.0;
-    public double GradientBaselineDistance
-    {
-        get => _gradientBaselineDistance;
-        set => SetProperty(ref _gradientBaselineDistance, value);
-    }
-
-    public RealtimeChartViewModel(DataBus dataBus, IUserPreferencesService? preferencesService = null)
+    public RealtimeChartViewModel(DataBus dataBus, IUserPreferencesService? preferencesService = null, IDialogService? dialogs = null)
     {
         _dataBus = dataBus;
         _preferencesService = preferencesService;
+        Wizard = new ComputedChannelWizardViewModel(ComputedChannels, ProtocolChannelSources);
+        Interval = new IntervalAnalysisViewModel(SnapshotRawData, dialogs ?? new WpfDialogService());
+        Interval.PropertyChanged += OnIntervalPropertyChanged;
 
         // 通道缓冲按实际协议通道数惰性分配（见 EnsureChannelBuffers），
         // 这里先建一个最小实例，避免其余代码面对 null。
@@ -345,8 +302,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
             }
 
             // 关闭向导面板
-            IsAddingTotalField = false;
-            IsAddingGradient = false;
+            Wizard.Close();
 
             SetupPlot();
             _renderTimer.Start();
@@ -764,7 +720,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
         DataPointCount = 0;
         StatisticsText = "暂无数据";
         StatisticsRows = [];
-        ClearIntervalSelection();
+        Interval.ClearIntervalSelection();
         _pausedData = IsPaused ? CapturePlotData(includeAll: true) : null;
         foreach (var config in ChannelConfigs) config.LatestValue = "—";
         foreach (var control in MultiPlotControls)
@@ -809,8 +765,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
             ChannelType = ComputedChannelType.Custom,
             ColorHex = "#FF000000",
         });
-        IsAddingTotalField = false;
-        IsAddingGradient = false;
+        Wizard.Close();
     }
 
     [RelayCommand]
@@ -823,157 +778,16 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
         }
     }
 
-    // ---- 总场向导 ----
-
-    [RelayCommand]
-    private void StartAddTotalField()
+    /// <summary>向导可选的原始通道：协议通道按索引，公式变量为 CH0、CH1…</summary>
+    private IReadOnlyList<SourceOption> ProtocolChannelSources()
     {
-        ComputationError = "";
-        BuildWizardRawSources();
-        WizardSourceA = 0;
-        WizardSourceB = Math.Min(1, WizardRawSources.Count - 1);
-        WizardSourceC = Math.Min(2, WizardRawSources.Count - 1);
-        IsAddingTotalField = true;
-        IsAddingGradient = false;
-    }
-
-    [RelayCommand]
-    private void ConfirmAddTotalField()
-    {
-        ComputationError = "";
-        if (WizardSourceA < 0 || WizardSourceA >= WizardRawSources.Count
-            || WizardSourceB < 0 || WizardSourceB >= WizardRawSources.Count
-            || WizardSourceC < 0 || WizardSourceC >= WizardRawSources.Count)
-        {
-            IsAddingTotalField = false;
-            return;
-        }
-
-        var sources = new[] { WizardRawSources[WizardSourceA], WizardRawSources[WizardSourceB], WizardRawSources[WizardSourceC] };
-        if (sources.Select(s => s.FormulaExpr).Distinct().Count() != 3 || !HaveSameMagneticUnit(sources))
-        { ComputationError = "总场需要三个不同通道，且使用相同的磁场单位。"; return; }
-        var a = WizardRawSources[WizardSourceA].FormulaExpr;
-        var b = WizardRawSources[WizardSourceB].FormulaExpr;
-        var c = WizardRawSources[WizardSourceC].FormulaExpr;
-        var formula = $"sqrt({a}*{a} + {b}*{b} + {c}*{c})";
-
-        int totalCount = ComputedChannels.Count(ch => ch.ChannelType == ComputedChannelType.TotalField) + 1;
-        ComputedChannels.Add(new ComputedChannelDefinition
-        {
-            Name = $"Total{totalCount}",
-            Unit = sources[0].Unit,
-            Formula = formula,
-            ChannelType = ComputedChannelType.TotalField,
-            ColorHex = "#FF000000",
-            LineWidth = 2f,
-        });
-
-        IsAddingTotalField = false;
-    }
-
-    // ---- 梯度向导 ----
-
-    [RelayCommand]
-    private void StartAddGradient()
-    {
-        ComputationError = "";
-        BuildWizardGradientSources();
-        WizardSourceA = 0;
-        WizardSourceB = Math.Min(1, WizardGradientSources.Count - 1);
-        IsAddingTotalField = false;
-        IsAddingGradient = true;
-    }
-
-    [RelayCommand]
-    private void ConfirmAddGradient()
-    {
-        ComputationError = "";
-        if (WizardSourceA < 0 || WizardSourceA >= WizardGradientSources.Count
-            || WizardSourceB < 0 || WizardSourceB >= WizardGradientSources.Count)
-        {
-            IsAddingGradient = false;
-            return;
-        }
-
-        var sources = new[] { WizardGradientSources[WizardSourceA], WizardGradientSources[WizardSourceB] };
-        if (sources[0].FormulaExpr == sources[1].FormulaExpr || !HaveSameMagneticUnit(sources))
-        { ComputationError = "磁场梯度需要两个不同来源，且使用相同的磁场单位。"; return; }
-        var a = WizardGradientSources[WizardSourceA].FormulaExpr;
-        var b = WizardGradientSources[WizardSourceB].FormulaExpr;
-        if (!double.IsFinite(GradientBaselineDistance) || GradientBaselineDistance <= 0)
-        { ComputationError = "梯度基线距离必须为有限正数。"; return; }
-        var formula = GradientBaselineDistance != 1.0
-            ? $"(({a}) - ({b})) / {GradientBaselineDistance.ToString("R", CultureInfo.InvariantCulture)}"
-            : $"({a}) - ({b})";
-
-        int gradCount = ComputedChannels.Count(ch => ch.ChannelType == ComputedChannelType.Gradient) + 1;
-        ComputedChannels.Add(new ComputedChannelDefinition
-        {
-            Name = $"Grad{gradCount}",
-            Unit = sources[0].Unit + "/m",
-            Formula = formula,
-            ChannelType = ComputedChannelType.Gradient,
-            ColorHex = "#FF808080",
-        });
-
-        IsAddingGradient = false;
-    }
-
-    partial void OnIsAddingTotalFieldChanged(bool value) => ComputationError = "";
-    partial void OnIsAddingGradientChanged(bool value) => ComputationError = "";
-
-    [RelayCommand]
-    private void CancelAddWizard()
-    {
-        ComputationError = "";
-        IsAddingTotalField = false;
-        IsAddingGradient = false;
-    }
-
-    private static bool HaveSameMagneticUnit(SourceOption[] sources) =>
-        sources.Select(s => s.Unit).Distinct().Count() == 1
-        && sources[0].Unit is "nT" or "uT" or "µT" or "μT" or "mT" or "T";
-
-    /// <summary>
-    /// 构建向导可选的原始通道列表
-    /// </summary>
-    private void BuildWizardRawSources()
-    {
-        WizardRawSources.Clear();
+        var sources = new List<SourceOption>();
         for (int i = 0; i < _channelCount; i++)
         {
             var label = i < _channelNames.Length ? _channelNames[i] : $"CH{i}";
-            WizardRawSources.Add(new SourceOption { Label = label, FormulaExpr = $"CH{i}", Unit = _channelUnits.ElementAtOrDefault(i) ?? "" });
+            sources.Add(new SourceOption { Label = label, FormulaExpr = $"CH{i}", Unit = _channelUnits.ElementAtOrDefault(i) ?? "" });
         }
-    }
-
-    /// <summary>
-    /// 构建向导可选的梯度源列表（原始通道 + 已有计算通道）
-    /// </summary>
-    private void BuildWizardGradientSources()
-    {
-        WizardGradientSources.Clear();
-
-        // 原始通道
-        for (int i = 0; i < _channelCount; i++)
-        {
-            var label = i < _channelNames.Length ? _channelNames[i] : $"CH{i}";
-            WizardGradientSources.Add(new SourceOption { Label = label, FormulaExpr = $"CH{i}", Unit = _channelUnits.ElementAtOrDefault(i) ?? "" });
-        }
-
-        // 已有计算通道（内联其公式）
-        foreach (var comp in ComputedChannels)
-        {
-            if (!string.IsNullOrWhiteSpace(comp.Formula))
-            {
-                WizardGradientSources.Add(new SourceOption
-                {
-                    Label = comp.Name,
-                    FormulaExpr = comp.Formula,
-                    Unit = comp.Unit,
-                });
-            }
-        }
+        return sources;
     }
 
     // ---- 一键归零 ----
@@ -1228,20 +1042,24 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
             to = Math.Min(to, frame.Times[^1]);
         }
         if (!(to > from)) { RefreshOverlays(); return false; }
-        IntervalStartInput = from.ToString("0.###", CultureInfo.CurrentCulture);
-        IntervalEndInput = to.ToString("0.###", CultureInfo.CurrentCulture);
-        ApplyIntervalSelection();
+        Interval.IntervalStartInput = from.ToString("0.###", CultureInfo.CurrentCulture);
+        Interval.IntervalEndInput = to.ToString("0.###", CultureInfo.CurrentCulture);
+        Interval.ApplyIntervalSelection();
         RefreshOverlays();
-        return CurrentInterval != null;
+        return Interval.CurrentInterval != null;
     }
 
-    partial void OnCurrentIntervalChanged(IntervalSelection? value) => RefreshOverlays();
+    /// <summary>区间选定或清除时重绘阴影。</summary>
+    private void OnIntervalPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(IntervalAnalysisViewModel.CurrentInterval)) RefreshOverlays();
+    }
 
     /// <summary>在一张图上加区间阴影、拖动预览和十字准线读数。channel 为多图模式下这张图对应的通道。</summary>
     private void AddOverlays(ScottPlot.Plot plot, ChannelDisplayConfig? channel)
     {
         var items = new List<ScottPlot.IPlottable>();
-        if (CurrentInterval is { } interval)
+        if (Interval.CurrentInterval is { } interval)
         {
             var span = plot.Add.VerticalSpan(interval.StartTime, interval.EndTime);
             span.FillStyle.Color = OverlayAccent.WithAlpha(.10);
@@ -1294,127 +1112,18 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
         foreach (var control in MultiPlotControls) control.Refresh();
     }
 
-    // ---- 区间分析操作 ----
+    // ---- 区间分析数据 ----
 
-    [RelayCommand]
-    private void ApplyIntervalSelection()
+    /// <summary>曲线缓冲中原始读数的副本，供区间统计与导出。</summary>
+    private ChartRawSnapshot SnapshotRawData()
     {
-        if (!double.TryParse(IntervalStartInput, out double start) ||
-            !double.TryParse(IntervalEndInput, out double end))
-        {
-            return;
-        }
-
-        var interval = new IntervalSelection(start, end);
-        if (!interval.IsValid) return;
-
-        CurrentInterval = interval;
-        ComputeIntervalStatistics();
-    }
-
-    [RelayCommand]
-    private void ClearIntervalSelection()
-    {
-        CurrentInterval = null;
-        IntervalStatistics = null;
-        IntervalStartInput = "";
-        IntervalEndInput = "";
-        IntervalStatisticsText = "";
-    }
-
-    [RelayCommand]
-    private async Task ExportIntervalAsync()
-    {
-        if (CurrentInterval == null || IntervalStatistics == null) return;
-
-        var dialog = new Microsoft.Win32.SaveFileDialog
-        {
-            Title = "导出区间数据",
-            Filter = "CSV 文件 (*.csv)|*.csv",
-            FileName = $"interval_{CurrentInterval.StartTime:F1}s_{CurrentInterval.EndTime:F1}s.csv",
-            DefaultExt = ".csv"
-        };
-
-        if (dialog.ShowDialog() != true) return;
-
-        await ExportIntervalFromBuffersAsync(dialog.FileName);
-    }
-
-    private void ComputeIntervalStatistics()
-    {
-        if (CurrentInterval == null) return;
-
-        double[] times;
-        double[][] channels;
-        string[] names;
-
         lock (_dataLock)
         {
-            times = _timeBuffer.ToArray();
-            channels = new double[_channelCount][];
+            var channels = new double[_channelCount][];
             for (int i = 0; i < _channelCount; i++)
                 channels[i] = _rawChannelBuffers[i].ToArray();
-            names = _channelNames ?? Array.Empty<string>();
+            return new ChartRawSnapshot(_timeBuffer.ToArray(), channels, _channelNames?.ToArray() ?? [], _channelUnits.ToArray());
         }
-
-        IntervalStatistics = IntervalStatisticsResult.Compute(
-            CurrentInterval, times, channels, names);
-
-        if (IntervalStatistics == null || IntervalStatistics.SampleCount == 0)
-        {
-            IntervalStatisticsText = "区间内无数据";
-            return;
-        }
-
-        var sb = new StringBuilder();
-        sb.AppendLine($"区间: {CurrentInterval.StartTime:F2}s - {CurrentInterval.EndTime:F2}s | 采样点: {IntervalStatistics.SampleCount} | 时长: {CurrentInterval.Duration:F2}s");
-        foreach (var stat in IntervalStatistics.ChannelStats)
-        {
-            sb.AppendLine($"  {stat.ChannelName}: 均值={stat.Mean:F3} 标准差={stat.StdDev:F3} 最小={stat.Min:F3} 最大={stat.Max:F3} 峰峰值={stat.PeakToPeak:F3}");
-        }
-        IntervalStatisticsText = sb.ToString().TrimEnd();
-    }
-
-    internal async Task ExportIntervalFromBuffersAsync(string filePath)
-    {
-        if (CurrentInterval == null) return;
-
-        double[] times;
-        double[][] channels;
-        string[] names;
-        string[] units;
-
-        lock (_dataLock)
-        {
-            times = _timeBuffer.ToArray();
-            channels = new double[_channelCount][];
-            for (int i = 0; i < _channelCount; i++)
-                channels[i] = _rawChannelBuffers[i].ToArray();
-            names = _channelNames?.ToArray() ?? Array.Empty<string>();
-            units = _channelUnits.ToArray();
-        }
-
-        var (startIdx, count) = CurrentInterval.GetIndices(times);
-        if (count == 0) return;
-
-        await Task.Run(() =>
-        {
-            using var writer = new System.IO.StreamWriter(filePath, false, new System.Text.UTF8Encoding(true));
-            // Header
-            writer.Write("ElapsedSeconds");
-            for (int ch = 0; ch < names.Length; ch++)
-                writer.Write(",\"" + (names[ch] + " (" + units.ElementAtOrDefault(ch) + ")").Replace("\"", "\"\"") + "\"");
-            writer.WriteLine();
-
-            // Data
-            for (int i = startIdx; i < startIdx + count; i++)
-            {
-                writer.Write(times[i].ToString("R", CultureInfo.InvariantCulture));
-                for (int ch = 0; ch < channels.Length; ch++)
-                    writer.Write("," + channels[ch][i].ToString("R", CultureInfo.InvariantCulture));
-                writer.WriteLine();
-            }
-        });
     }
 
     // ---- 拖拽排序 ----
@@ -1469,6 +1178,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
         _dataBus.ProcessedReadingReceived -= OnReadingReceived;
         _dataBus.AcquisitionStarted -= OnAcquisitionStarted;
         _dataBus.AcquisitionStopped -= OnAcquisitionStopped;
+        Interval.PropertyChanged -= OnIntervalPropertyChanged;
         ChannelConfigs.CollectionChanged -= OnOffsetSourcesChanged;
         ComputedChannels.CollectionChanged -= OnOffsetSourcesChanged;
         foreach (var source in _offsetSources) source.PropertyChanged -= OnOffsetSourcePropertyChanged;

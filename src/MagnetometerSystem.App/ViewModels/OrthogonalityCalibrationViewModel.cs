@@ -3,12 +3,11 @@ using System.Globalization;
 using System.IO;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using Microsoft.Win32;
+using MagnetometerSystem.App.Services;
 using MagnetometerSystem.Core.Calibration;
 using MagnetometerSystem.Core.Models;
 using MagnetometerSystem.Core.Services;
 using MagnetometerSystem.Core.Storage;
-using MagnetometerSystem.Infrastructure.Export;
 
 namespace MagnetometerSystem.App.ViewModels;
 
@@ -57,6 +56,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
     private readonly ICalibrationRepository _calibrationRepository;
     private readonly DataBus _dataBus;
     private readonly IDataStorageService _storageService;
+    private readonly IDialogService _dialogs;
     private readonly List<double[]> _collectedData = new();
     private readonly List<double[]> _collectedDataSecondGroup = new();
     private string _collectedUnit = "";
@@ -299,12 +299,15 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         IOrthogonalityService orthogonalityService,
         ICalibrationRepository calibrationRepository,
         DataBus dataBus,
-        IDataStorageService storageService)
+        IDataStorageService storageService,
+        IDialogService? dialogs = null)
     {
         _orthogonalityService = orthogonalityService;
         _calibrationRepository = calibrationRepository;
         _dataBus = dataBus;
         _storageService = storageService;
+        _dialogs = dialogs ?? new WpfDialogService();
+        Library = new CalibrationLibraryViewModel(calibrationRepository, _dialogs);
 
         ProfileName = $"正交度校正_{DateTime.Now:yyyyMMdd_HHmmss}";
         UpdateStepNavigation();
@@ -344,64 +347,11 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
     {
         if (_isLoaded) return;
         _isLoaded = true;
-        await LoadSavedProfilesAsync();
+        await Library.LoadSavedProfilesAsync();
     }
 
-    // ========== 已保存配置管理 ==========
-
-    [ObservableProperty]
-    private ObservableCollection<OrthogonalityParams> _savedProfiles = new();
-
-    [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(DeleteSavedProfileCommand))]
-    [NotifyCanExecuteChangedFor(nameof(ExportSelectedProfileJsonCommand))]
-    [NotifyCanExecuteChangedFor(nameof(ExportSelectedProfileCsvCommand))]
-    private OrthogonalityParams? _selectedSavedProfile;
-
-    private bool HasSelectedSavedProfile() => SelectedSavedProfile != null;
-
-    /// <summary>配置库的加载 / 删除结果；失败时显示原因，不只写日志。</summary>
-    [ObservableProperty]
-    private string _libraryStatus = string.Empty;
-
-    [RelayCommand]
-    private async Task LoadSavedProfilesAsync()
-    {
-        try
-        {
-            var profiles = await _calibrationRepository.GetOrthogonalityProfilesAsync();
-            SavedProfiles.Clear();
-            foreach (var p in profiles)
-                SavedProfiles.Add(p);
-            LibraryStatus = string.Empty;
-        }
-        catch (Exception ex)
-        {
-            System.Diagnostics.Trace.TraceError($"加载校正配置列表失败: {ex.Message}");
-            LibraryStatus = $"加载配置列表失败：{ex.Message}";
-        }
-    }
-
-    [RelayCommand(CanExecute = nameof(HasSelectedSavedProfile))]
-    private async Task DeleteSavedProfileAsync()
-    {
-        if (SelectedSavedProfile is not { } profile) return;
-        var confirm = System.Windows.MessageBox.Show(
-            $"确定要删除正交度配置“{profile.Name}”吗？此操作不能撤销。",
-            "确认删除", System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Warning);
-        if (confirm != System.Windows.MessageBoxResult.Yes) return;
-        try
-        {
-            await _calibrationRepository.DeleteOrthogonalityProfileAsync(profile.Id);
-            SavedProfiles.Remove(profile);
-            LibraryStatus = $"已删除“{profile.Name}”";
-        }
-        catch (Exception ex)
-        {
-            System.Diagnostics.Trace.TraceError($"删除配置失败: {ex.Message}");
-            LibraryStatus = $"删除失败：{ex.Message}";
-        }
-    }
+    /// <summary>“配置库”页签：已保存配置的列表、删除与导出。</summary>
+    public CalibrationLibraryViewModel Library { get; }
 
     // ========== 步骤控制 (共 4 步) ==========
 
@@ -1126,15 +1076,10 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
     private void ImportFromFile()
     {
         if (ImportUnitOrReport() == null) return;
-        var dialog = new OpenFileDialog
-        {
-            Title = "导入三轴校正数据",
-            Filter = "CSV 文件 (*.csv)|*.csv|文本文件 (*.txt)|*.txt|所有文件 (*.*)|*.*",
-            DefaultExt = ".csv"
-        };
-
-        if (dialog.ShowDialog() != true) return;
-        ImportCsvFile(dialog.FileName);
+        var path = _dialogs.PickOpenFile("导入三轴校正数据",
+            "CSV 文件 (*.csv)|*.csv|文本文件 (*.txt)|*.txt|所有文件 (*.*)|*.*", ".csv");
+        if (path == null) return;
+        ImportCsvFile(path);
     }
 
     /// <summary>导入 CSV 时数值的单位；用户未明确选择时在状态里说明原因并返回 null。</summary>
@@ -1442,7 +1387,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
             }
 
             // 刷新已保存配置列表
-            await LoadSavedProfilesAsync();
+            await Library.LoadSavedProfilesAsync();
 
             // 保存校准记录到历史
             await SaveCalibrationRecordAsync(parameters);
@@ -1509,90 +1454,13 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
     // ========== CSV 导入辅助 + 从数据库选 session ==========
 
     [RelayCommand]
-    private void ShowCsvFormatHelp()
-    {
-        var dlg = new Views.Dialogs.CsvFormatHelpDialog
-        {
-            Owner = System.Windows.Application.Current?.MainWindow
-        };
-        dlg.ShowDialog();
-    }
-
-    [RelayCommand]
-    private void ShowProfileUsageHelp()
-    {
-        var dlg = new Views.Dialogs.ProfileUsageHelpDialog
-        {
-            Owner = System.Windows.Application.Current?.MainWindow
-        };
-        dlg.ShowDialog();
-    }
-
-    [RelayCommand(CanExecute = nameof(HasSelectedSavedProfile))]
-    private async Task ExportSelectedProfileJsonAsync()
-    {
-        if (SelectedSavedProfile == null)
-        {
-            System.Windows.MessageBox.Show("请先在表格中选中一个配置", "提示");
-            return;
-        }
-        var dlg = new Microsoft.Win32.SaveFileDialog
-        {
-            Title = "导出正交度配置 (JSON)",
-            Filter = "JSON 文件 (*.json)|*.json",
-            FileName = $"{OrthogonalityProfileExporter.SanitizeFileName(SelectedSavedProfile.Name)}.json",
-            DefaultExt = ".json"
-        };
-        if (dlg.ShowDialog() != true) return;
-        try
-        {
-            var json = OrthogonalityProfileExporter.BuildJson(SelectedSavedProfile);
-            await File.WriteAllTextAsync(dlg.FileName, json);
-            System.Windows.MessageBox.Show($"已导出: {dlg.FileName}", "成功");
-        }
-        catch (Exception ex)
-        {
-            System.Windows.MessageBox.Show($"导出失败: {ex.Message}", "错误");
-        }
-    }
-
-    [RelayCommand(CanExecute = nameof(HasSelectedSavedProfile))]
-    private async Task ExportSelectedProfileCsvAsync()
-    {
-        if (SelectedSavedProfile == null)
-        {
-            System.Windows.MessageBox.Show("请先在表格中选中一个配置", "提示");
-            return;
-        }
-        var dlg = new Microsoft.Win32.SaveFileDialog
-        {
-            Title = "导出正交度配置 (CSV)",
-            Filter = "CSV 文件 (*.csv)|*.csv",
-            FileName = $"{OrthogonalityProfileExporter.SanitizeFileName(SelectedSavedProfile.Name)}.csv",
-            DefaultExt = ".csv"
-        };
-        if (dlg.ShowDialog() != true) return;
-        try
-        {
-            var csv = OrthogonalityProfileExporter.BuildCsv(SelectedSavedProfile);
-            await File.WriteAllTextAsync(dlg.FileName, csv, new System.Text.UTF8Encoding(true));
-            System.Windows.MessageBox.Show($"已导出: {dlg.FileName}", "成功");
-        }
-        catch (Exception ex)
-        {
-            System.Windows.MessageBox.Show($"导出失败: {ex.Message}", "错误");
-        }
-    }
+    private void ShowCsvFormatHelp() => _dialogs.ShowHelp(HelpTopic.CalibrationCsvFormat);
 
     [RelayCommand]
     private async Task LoadFromSessionAsync()
     {
-        var picker = new Views.Dialogs.SessionPickerDialog(_storageService)
-        {
-            Owner = System.Windows.Application.Current?.MainWindow
-        };
-        if (picker.ShowDialog() != true || picker.SelectedSession == null) return;
-        await LoadSessionDataAsync(picker.SelectedSession);
+        if (_dialogs.PickSession(_storageService) is not { } session) return;
+        await LoadSessionDataAsync(session);
     }
 
     /// <summary>

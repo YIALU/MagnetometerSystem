@@ -153,15 +153,15 @@
                             </ItemsControl>
 
                             <WrapPanel>
-                                <Button Content="+ 总场" Style="{StaticResource SmallButton}" Margin="0,0,6,6" Command="{Binding StartAddTotalFieldCommand}"
+                                <Button Content="+ 总场" Style="{StaticResource SmallButton}" Margin="0,0,6,6" Command="{Binding Wizard.StartAddTotalFieldCommand}"
                                         ToolTip="选择三个相同磁场单位的通道，计算 sqrt(a²+b²+c²)"/>
-                                <Button Content="+ 梯度" Style="{StaticResource SmallButton}" Margin="0,0,6,6" Command="{Binding StartAddGradientCommand}"
+                                <Button Content="+ 梯度" Style="{StaticResource SmallButton}" Margin="0,0,6,6" Command="{Binding Wizard.StartAddGradientCommand}"
                                         ToolTip="两个来源之差除以基线距离"/>
                                 <Button Content="+ 公式" Style="{StaticResource SmallButton}" Margin="0,0,6,6" Command="{Binding AddComputedChannelCommand}"/>
                             </WrapPanel>
 
                             <!-- 总场向导 -->
-                            <Border Style="{StaticResource Callout}" Margin="0,4,0,0" Visibility="{Binding IsAddingTotalField, Converter={StaticResource BoolToVis}}">
+                            <Border DataContext="{Binding Wizard}" Style="{StaticResource Callout}" Margin="0,4,0,0" Visibility="{Binding IsAddingTotalField, Converter={StaticResource BoolToVis}}">
                                 <StackPanel>
                                     <TextBlock Text="总场 = sqrt(A² + B² + C²)" FontWeight="SemiBold" Margin="0,0,0,8"/>
                                     <Grid>
@@ -184,7 +184,7 @@
                             </Border>
 
                             <!-- 梯度向导 -->
-                            <Border Style="{StaticResource Callout}" Margin="0,4,0,0" Visibility="{Binding IsAddingGradient, Converter={StaticResource BoolToVis}}">
+                            <Border DataContext="{Binding Wizard}" Style="{StaticResource Callout}" Margin="0,4,0,0" Visibility="{Binding IsAddingGradient, Converter={StaticResource BoolToVis}}">
                                 <StackPanel>
                                     <TextBlock Text="梯度 = (A − B) / 基线距离" FontWeight="SemiBold" Margin="0,0,0,8"/>
                                     <Grid>
@@ -275,7 +275,7 @@
             </ScrollViewer>
 
             <!-- ===== 区间 ===== -->
-            <ScrollViewer Style="{StaticResource SideScroll}" DataContext="{Binding RealtimeChartVM}"
+            <ScrollViewer Style="{StaticResource SideScroll}" DataContext="{Binding RealtimeChartVM.Interval}"
                           Visibility="{Binding DataContext.WorkspaceLayout.SideTab, RelativeSource={RelativeSource AncestorType=UserControl}, Converter={StaticResource DockTabVisible}, ConverterParameter=2}">
                 <StackPanel Style="{StaticResource SideSection}">
                     <TextBlock Style="{StaticResource Hint}" Margin="0,0,0,10"
