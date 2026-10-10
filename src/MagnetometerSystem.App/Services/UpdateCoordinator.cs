@@ -50,6 +50,7 @@ public sealed class UpdateCoordinator
     private int _sourceGeneration;
     private bool _sourceLoaded;
     private bool _dialogOpen;
+    private readonly object _promptLock = new();
     private string? _promptedVersion;
     private DateTime _promptedAtUtc;
 
@@ -112,7 +113,11 @@ public sealed class UpdateCoordinator
         catch (Exception ex) { Log.Warning(ex, "保存更新平台失败"); }
         finally { _sourceGate.Release(); }
 
-        if (changed) await InvalidateKnownUpdateAsync();
+        if (!changed) return;
+        // 等进行中的检查写完再清，免得旧平台的结果在清除之后又写回来。
+        await _checkGate.WaitAsync();
+        try { await InvalidateKnownUpdateAsync(); }
+        finally { _checkGate.Release(); }
     }
 
     /// <summary>
@@ -226,11 +231,12 @@ public sealed class UpdateCoordinator
     private async Task CheckSilentlyAsync(Func<UpdateInfo, Task> onUpdateFound)
     {
         UpdateCheckResult result;
+        int generation;
         await _checkGate.WaitAsync();
         try
         {
             await GetSourceAsync();
-            var generation = Volatile.Read(ref _sourceGeneration);
+            generation = Volatile.Read(ref _sourceGeneration);
             result = await _updateService.CheckForUpdateAsync();
             if (result.WarningMessage != null) Log.Warning("部分更新平台检查失败: {Message}", result.WarningMessage);
 
@@ -261,19 +267,43 @@ public sealed class UpdateCoordinator
 
         if (!await IsAutoCheckEnabledAsync()) return;
 
+        // 上面几步读偏好期间用户可能换了平台，旧平台的结果不再挂角标、弹窗。
+        if (generation != Volatile.Read(ref _sourceGeneration)) return;
+
         // 部分平台失败时不记检查时间，下一轮仍会联网重试；同一版本 24 小时内只弹一次，
         // 否则"稍后提醒"后每小时都会再弹。
-        var now = UtcNow();
-        if (string.Equals(_promptedVersion, result.Info.Version, StringComparison.OrdinalIgnoreCase)
-            && now - _promptedAtUtc >= TimeSpan.Zero && now - _promptedAtUtc < SilentCheckInterval)
-        {
-            return;
-        }
+        if (!TryMarkPrompted(result.Info.Version)) return;
 
-        _promptedVersion = result.Info.Version;
-        _promptedAtUtc = now;
         Log.Information("发现新版本 v{Version}", result.Info.Version);
         await onUpdateFound(result.Info);
+    }
+
+    /// <summary>同一版本 24 小时内已弹过窗（自动或手动）时返回 false；否则记下本次并返回 true。</summary>
+    private bool TryMarkPrompted(string version)
+    {
+        lock (_promptLock)
+        {
+            var now = UtcNow();
+            var sinceLast = now - _promptedAtUtc;
+            if (string.Equals(_promptedVersion, version, StringComparison.OrdinalIgnoreCase)
+                && sinceLast >= TimeSpan.Zero && sinceLast < SilentCheckInterval)
+            {
+                return false;
+            }
+
+            _promptedVersion = version;
+            _promptedAtUtc = now;
+            return true;
+        }
+    }
+
+    private void MarkPrompted(string version)
+    {
+        lock (_promptLock)
+        {
+            _promptedVersion = version;
+            _promptedAtUtc = UtcNow();
+        }
     }
 
     private async Task<bool> IsCheckDueAsync()
@@ -348,6 +378,8 @@ public sealed class UpdateCoordinator
             dialog.Owner = owner;
         }
 
+        // 用户从"关于"或角标看过的版本，定时检查 24 小时内也不再自动弹。
+        MarkPrompted(info.Version);
         _dialogOpen = true;
         try { dialog.ShowDialog(); }
         finally { _dialogOpen = false; }

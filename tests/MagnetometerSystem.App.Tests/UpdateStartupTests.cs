@@ -301,13 +301,17 @@ public class UpdateStartupTests
         var preferences = new Preferences();
         var coordinator = new UpdateCoordinator(service, preferences);
         var pending = coordinator.CheckManuallyAsync();
+        Task switching;
         try
         {
             await service.CheckEntered.Task.WaitAsync(TimeSpan.FromSeconds(15));
-            await coordinator.SetSourceAsync(UpdateSource.GitHub);
+            // 切换立即生效，清除缓存要等这次检查结束。
+            switching = coordinator.SetSourceAsync(UpdateSource.GitHub);
+            Assert.False(switching.IsCompleted);
         }
         finally { response.TrySetResult(UpdateCheckResult.Available(Info())); }
         await pending;
+        await switching.WaitAsync(TimeSpan.FromSeconds(15));
         Assert.Null(coordinator.LastKnownUpdate);
         Assert.Null(await preferences.GetPreferenceAsync<UpdateInfo>(UpdateCoordinator.KeyKnownUpdate));
         Assert.Null(await preferences.GetPreferenceAsync<DateTime?>(UpdateCoordinator.KeyLastCheckUtc));
@@ -335,6 +339,46 @@ public class UpdateStartupTests
     }
 
     [Fact]
+    public Task ManuallyShownVersionIsNotAutoPromptedAgainWithinInterval() => WpfTestHost.RunAsync(async () =>
+    {
+        var service = new RecordingService { Result = UpdateCheckResult.Available(Info()) with { WarningMessage = "GitHub 无法连接" } };
+        var coordinator = new UpdateCoordinator(service, new Preferences()) { StartupDelay = TimeSpan.Zero };
+
+        // "关于"里手动检查发现新版本并弹窗，用户点"稍后提醒"关掉。
+        var manual = await coordinator.CheckManuallyAsync();
+        var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
+        timer.Tick += (_, _) => { timer.Stop(); Application.Current.Windows.OfType<UpdateDialog>().Single().Close(); };
+        try { timer.Start(); await coordinator.ShowUpdateDialogAsync(null, manual.Info!); }
+        finally { timer.Stop(); }
+
+        // 部分平台失败没记检查时间，随后的自动检查仍会联网，但不再弹同一版本。
+        var prompts = 0;
+        await coordinator.RunStartupCheckAsync(_ => { prompts++; return Task.CompletedTask; });
+        Assert.Equal(2, service.CheckCalls);
+        Assert.Equal(0, prompts);
+    });
+
+    [Fact]
+    public async Task SourceSwitchAfterRecordingSuppressesPromptAndClearsResult()
+    {
+        var preferences = new Preferences();
+        var service = new RecordingService();
+        UpdateCoordinator coordinator = null!;
+        var gate = new SwitchingPreferences(preferences, UpdateCoordinator.KeySkippedVersion,
+            () => coordinator.SetSourceAsync(UpdateSource.GitHub));
+        coordinator = new UpdateCoordinator(service, gate) { StartupDelay = TimeSpan.Zero };
+        var prompts = 0;
+
+        await coordinator.RunStartupCheckAsync(_ => { prompts++; return Task.CompletedTask; });
+        await gate.Switched!.WaitAsync(TimeSpan.FromSeconds(15));
+
+        Assert.Equal(0, prompts);
+        Assert.Null(coordinator.LastKnownUpdate);
+        Assert.Null(await preferences.GetPreferenceAsync<UpdateInfo>(UpdateCoordinator.KeyKnownUpdate));
+        Assert.Null(await preferences.GetPreferenceAsync<DateTime?>(UpdateCoordinator.KeyLastCheckUtc));
+    }
+
+    [Fact]
     public async Task LastCheckInTheFutureIsTreatedAsDue()
     {
         var preferences = new Preferences();
@@ -358,6 +402,22 @@ public class UpdateStartupTests
         public Task<T?> GetPreferenceAsync<T>(string key) =>
             Task.FromResult(_values.TryGetValue(key, out var value) ? (T?)value : default);
         public Task SetPreferenceAsync<T>(string key, T value) { _values[key] = value!; return Task.CompletedTask; }
+    }
+
+    /// <summary>第一次读到指定键时完成一次平台切换，模拟用户在结果写入后、弹窗前换平台。</summary>
+    private sealed class SwitchingPreferences(Preferences inner, string triggerKey, Func<Task> onTrigger) : IUserPreferencesService
+    {
+        public Task? Switched { get; private set; }
+        public async Task<T?> GetPreferenceAsync<T>(string key)
+        {
+            if (key == triggerKey && Switched is null)
+            {
+                Switched = onTrigger();
+                await Switched;
+            }
+            return await inner.GetPreferenceAsync<T>(key);
+        }
+        public Task SetPreferenceAsync<T>(string key, T value) => inner.SetPreferenceAsync(key, value);
     }
 
     private sealed class SequenceService(params UpdateCheckResult[] results) : IUpdateService
