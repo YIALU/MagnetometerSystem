@@ -14,7 +14,7 @@ The project centers on **customizable protocols, data recording, and live plotti
 - **Communication diagnostics:** the data-link strip at the top of the window always shows receive → parse → save counters and the measured rate. Raw frames gives a verdict and rejection reason for each frame, a pasted sample can be test-parsed with the current protocol without connecting, and the command log records reply verdicts and latency.
 - **Data management:** browse saved sessions, replay them by recorded timestamps (unavailable while connected), and export CSV by time range, channel, and precision; analyze noise, drift, and data quality for saved sessions.
 - **Optional correction:** orthogonality fitting and offset/gain parameters for live or historical data; original values are always preserved.
-- **Feedback:** submit problems and requests anonymously from within the application, with no login; name and contact are optional and visible only to the maintainer.
+- **Feedback:** submit problems and requests anonymously from within the application, with no login; name, contact and optional program logs (with user and computer names removed) are visible only to the maintainer.
 
 See the [user guide](docs/user-guide.en.md) for details.
 

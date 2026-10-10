@@ -76,6 +76,7 @@ public partial class App : Application
                 new HttpClient { Timeout = TimeSpan.FromSeconds(30) }, FeedbackCoordinator.Endpoint));
             services.AddSingleton(new Infrastructure.Feedback.FeedbackDraftStore(System.IO.Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MagnetometerSystem", "feedback", "draft.json")));
+            services.AddSingleton<Core.Feedback.IFeedbackLogSource>(_ => new Infrastructure.Feedback.FeedbackLogCollector(() => GlobalErrorHandler.LogDirectory));
             services.AddSingleton<FeedbackCoordinator>();
 
             services.AddTransient<SensorCalibrationViewModel>();
