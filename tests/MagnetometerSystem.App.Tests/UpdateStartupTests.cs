@@ -29,6 +29,8 @@ public class UpdateStartupTests
             ThrowOnCheck = scenario == "exception"
         };
         if (scenario == "skipped") await preferences.SetPreferenceAsync(UpdateCoordinator.KeySkippedVersion, "2.0.0");
+        // 切换到 GitHub 时写完平台偏好就退出，留下 Gitee 的缓存。
+        if (scenario == "otherSource") await preferences.SetPreferenceAsync(UpdateCoordinator.KeySource, "GitHub");
         var coordinator = new UpdateCoordinator(service, preferences);
         var prompts = 0;
         await coordinator.RunStartupCheckAsync(_ => { prompts++; return Task.CompletedTask; });
@@ -157,6 +159,7 @@ public class UpdateStartupTests
     [InlineData("skipped")]
     [InlineData("installed")]
     [InlineData("upToDate")]
+    [InlineData("otherSource")]
     public async Task SavedVersionIsNotRestoredWhenSkippedInstalledOrSuperseded(string scenario)
     {
         var preferences = new Preferences();
@@ -529,6 +532,20 @@ public class UpdateStartupTests
         }
         finally { cts.Cancel(); }
         await loop.WaitAsync(TimeSpan.FromSeconds(15));
+    }
+
+    [Fact]
+    public async Task SameVersionFromNewerCheckSupersedesOlderResult()
+    {
+        var gitee = Info();
+        var github = Info() with { Source = UpdateSource.GitHub, DownloadUrl = "https://example.invalid/gh.exe" };
+        var coordinator = new UpdateCoordinator(
+            new SequenceService(UpdateCheckResult.Available(gitee), UpdateCheckResult.Available(github)), new Preferences());
+        await coordinator.CheckManuallyAsync();
+        Assert.True(coordinator.IsCurrentUpdate(gitee));
+        await coordinator.CheckManuallyAsync();
+        Assert.False(coordinator.IsCurrentUpdate(gitee)); // 同版本、另一平台的新结果取代了旧结果。
+        Assert.True(coordinator.IsCurrentUpdate(github));
     }
 
     [Fact]

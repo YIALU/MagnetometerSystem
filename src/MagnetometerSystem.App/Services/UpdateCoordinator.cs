@@ -70,12 +70,11 @@ public sealed class UpdateCoordinator
     public UpdateInfo? LastKnownUpdate { get; private set; }
 
     /// <summary>
-    /// 这个版本是否仍是当前记下的新版本。静默检查的回调在 UI 线程挂角标前用它做最后确认：
+    /// 这个检查结果是否仍是当前记下的那一个（按对象判断，同版本但来自另一平台或另一次检查的不算）。静默检查的回调在 UI 线程挂角标前用它做最后确认：
     /// 清除总是先置空 <see cref="LastKnownUpdate"/> 再通知撤角标，所以无论两者在 UI 线程上
     /// 谁先执行，最终都不会留下已作废的角标。
     /// </summary>
-    public bool IsCurrentUpdate(UpdateInfo info) =>
-        string.Equals(LastKnownUpdate?.Version, info.Version, StringComparison.OrdinalIgnoreCase);
+    public bool IsCurrentUpdate(UpdateInfo info) => ReferenceEquals(LastKnownUpdate, info);
 
     /// <summary>
     /// 之后的检查确认已是最新（例如发布被撤回或换了平台），以前记下的新版本作废。
@@ -471,7 +470,13 @@ public sealed class UpdateCoordinator
         catch (Exception ex) { Log.Warning(ex, "读取上次发现的新版本失败"); return null; }
         if (known is null) return null;
 
-        if (!IsNewerThanCurrent(known.Version))
+        // 切换平台时先写平台偏好再清缓存，中途退出会留下旧平台的记录；与当前平台不符的不恢复。
+        var source = await GetSourceAsync();
+        var matchesSource = source == UpdateSource.Automatic
+            || known.Source == source
+            || known.Mirrors.Any(m => m.Source == source);
+
+        if (!matchesSource || !IsNewerThanCurrent(known.Version))
         {
             await TrySetKnownUpdateAsync(null);
             return null;
