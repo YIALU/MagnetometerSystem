@@ -57,6 +57,10 @@ public sealed class UpdateCoordinator
     private readonly object _promptLock = new();
     private string? _promptedVersion;
     private DateTime _promptedAtUtc;
+    // 静默检查先占下冷却、再交给 UI 发布；UI 判定结果已作废时据此退回占用前的记录。
+    private string? _reservedVersion;
+    private string? _versionBeforeReservation;
+    private DateTime _atBeforeReservation;
 
     public UpdateCoordinator(IUpdateService updateService, IUserPreferencesService preferences)
     {
@@ -303,6 +307,13 @@ public sealed class UpdateCoordinator
             return;
         }
 
+        // 保存冷却记录期间结果作废了：没弹窗就不能留下冷却，否则同一版本之后只挂角标。
+        if (published != Volatile.Read(ref _resultGeneration))
+        {
+            ReleasePromptReservation(result.Info);
+            return;
+        }
+
         Log.Information("发现新版本 v{Version}", result.Info.Version);
         await onUpdateFound(result.Info);
     }
@@ -321,11 +332,32 @@ public sealed class UpdateCoordinator
                 return false;
             }
 
+            _versionBeforeReservation = _promptedVersion;
+            _atBeforeReservation = _promptedAtUtc;
+            _reservedVersion = version;
             _promptedVersion = version;
             _promptedAtUtc = now;
         }
         await TrySaveLastPromptAsync(version, now);
         return true;
+    }
+
+    /// <summary>
+    /// 静默检查占下的冷却最终没有弹窗（结果已被更新的检查或切换平台作废）时调用，
+    /// 退回占用前的记录。期间真正弹过窗（<see cref="MarkPrompted"/>）则保留。
+    /// </summary>
+    public void ReleasePromptReservation(UpdateInfo info)
+    {
+        string? version;
+        DateTime at;
+        lock (_promptLock)
+        {
+            if (!string.Equals(_reservedVersion, info.Version, StringComparison.OrdinalIgnoreCase)) return;
+            _reservedVersion = null;
+            _promptedVersion = version = _versionBeforeReservation;
+            _promptedAtUtc = at = _atBeforeReservation;
+        }
+        _ = version is null ? TryClearLastPromptAsync() : TrySaveLastPromptAsync(version, at);
     }
 
     private void MarkPrompted(string version)
@@ -334,6 +366,7 @@ public sealed class UpdateCoordinator
         lock (_promptLock)
         {
             now = UtcNow();
+            _reservedVersion = null;
             _promptedVersion = version;
             _promptedAtUtc = now;
         }
@@ -363,6 +396,12 @@ public sealed class UpdateCoordinator
     {
         try { await _preferences.SetPreferenceAsync(KeyLastPrompt, new LastPrompt(version, atUtc)); }
         catch (Exception ex) { Log.Warning(ex, "保存更新提示记录失败"); }
+    }
+
+    private async Task TryClearLastPromptAsync()
+    {
+        try { await _preferences.SetPreferenceAsync<LastPrompt?>(KeyLastPrompt, null); }
+        catch (Exception ex) { Log.Warning(ex, "清除更新提示记录失败"); }
     }
 
     internal sealed record LastPrompt(string Version, DateTime AtUtc);
@@ -475,7 +514,16 @@ public sealed class UpdateCoordinator
         var source = await GetSourceAsync();
         var matchesSource = source == UpdateSource.Automatic || known.Source == source;
 
-        if (!matchesSource || !IsNewerThanCurrent(known.Version))
+        if (!matchesSource)
+        {
+            // 检查时间也属于旧平台，留着会让新平台 24 小时内都不联网。
+            await TrySetKnownUpdateAsync(null);
+            try { await _preferences.SetPreferenceAsync<DateTime?>(KeyLastCheckUtc, null); }
+            catch (Exception ex) { Log.Warning(ex, "清除检查更新时间失败"); }
+            return null;
+        }
+
+        if (!IsNewerThanCurrent(known.Version))
         {
             await TrySetKnownUpdateAsync(null);
             return null;

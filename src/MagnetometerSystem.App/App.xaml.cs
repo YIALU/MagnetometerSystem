@@ -166,7 +166,11 @@ public partial class App : Application
             async info => await Current.Dispatcher.Invoke(() =>
             {
                 // 回调排到 UI 线程时，这个版本可能已被更新的检查或切换平台作废。
-                if (!coordinator.IsCurrentUpdate(info)) return Task.CompletedTask;
+                if (!coordinator.IsCurrentUpdate(info))
+                {
+                    coordinator.ReleasePromptReservation(info);
+                    return Task.CompletedTask;
+                }
                 mainVm.AvailableUpdateVersion = info.Version;
                 return coordinator.ShowUpdateDialogAsync(Current.MainWindow, info);
             }),

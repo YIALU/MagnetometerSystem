@@ -157,7 +157,6 @@ public class UpdateStartupTests
     [InlineData("skipped")]
     [InlineData("installed")]
     [InlineData("upToDate")]
-    [InlineData("otherSource")]
     public async Task SavedVersionIsNotRestoredWhenSkippedInstalledOrSuperseded(string scenario)
     {
         var preferences = new Preferences();
@@ -170,8 +169,6 @@ public class UpdateStartupTests
         }
         else await preferences.SetPreferenceAsync(UpdateCoordinator.KeyLastCheckUtc, DateTime.UtcNow);
         if (scenario == "skipped") await preferences.SetPreferenceAsync(UpdateCoordinator.KeySkippedVersion, "2.0.0");
-        // 切换到 GitHub 时写完平台偏好就退出，留下 Gitee 的缓存。
-        if (scenario == "otherSource") await preferences.SetPreferenceAsync(UpdateCoordinator.KeySource, "GitHub");
 
         var service = new RecordingService
         {
@@ -185,6 +182,56 @@ public class UpdateStartupTests
         Assert.Equal(0, service.CheckCalls);
         Assert.Equal(0, restored);
         Assert.Equal(scenario == "skipped", await preferences.GetPreferenceAsync<UpdateInfo>(UpdateCoordinator.KeyKnownUpdate) is not null);
+    }
+
+    [Fact]
+    public async Task CacheLeftByInterruptedSourceSwitchIsDroppedAndNewSourceCheckedNow()
+    {
+        // 切换到 GitHub 时写完平台偏好就退出，留下旧平台的缓存和检查时间。
+        var preferences = new Preferences();
+        await preferences.SetPreferenceAsync(UpdateCoordinator.KeyKnownUpdate, Info());
+        await preferences.SetPreferenceAsync(UpdateCoordinator.KeyLastCheckUtc, DateTime.UtcNow);
+        await preferences.SetPreferenceAsync(UpdateCoordinator.KeySource, "GitHub");
+
+        var service = new RecordingService { Result = UpdateCheckResult.UpToDate() };
+        var coordinator = new UpdateCoordinator(service, preferences) { StartupDelay = TimeSpan.Zero };
+        var restored = 0;
+        await coordinator.RunStartupCheckAsync(_ => throw new InvalidOperationException("unexpected prompt"),
+            _ => { restored++; return Task.CompletedTask; });
+
+        Assert.Equal(0, restored);
+        Assert.Equal(1, service.CheckCalls);
+        Assert.Null(await preferences.GetPreferenceAsync<UpdateInfo>(UpdateCoordinator.KeyKnownUpdate));
+    }
+
+    [Fact]
+    public async Task ResultInvalidatedWhileSavingCooldownDoesNotSuppressLaterPrompt()
+    {
+        var saving = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var preferences = new BlockingSetPreferences(new Preferences(), UpdateCoordinator.KeyLastPrompt, saving.Task);
+        var coordinator = new UpdateCoordinator(new RecordingService(), preferences) { StartupDelay = TimeSpan.Zero };
+        var prompts = 0;
+        var badges = 0;
+        Func<UpdateInfo, Task> onFound = _ => { prompts++; return Task.CompletedTask; };
+        Func<UpdateInfo, Task> onBadge = _ => { badges++; return Task.CompletedTask; };
+
+        var checking = coordinator.RunStartupCheckAsync(onFound, onBadge);
+        Task switching;
+        try
+        {
+            await preferences.Entered.Task.WaitAsync(TimeSpan.FromSeconds(15));
+            switching = coordinator.SetSourceAsync(UpdateSource.GitHub); // 保存冷却记录期间换平台。
+        }
+        finally { saving.TrySetResult(); }
+        await switching.WaitAsync(TimeSpan.FromSeconds(15));
+        await checking.WaitAsync(TimeSpan.FromSeconds(15));
+        Assert.Equal(0, prompts);
+        Assert.Null(await preferences.GetPreferenceAsync<UpdateCoordinator.LastPrompt>(UpdateCoordinator.KeyLastPrompt));
+
+        // 用户没见过这个版本：新平台查到它时仍应弹窗，而不是只挂角标。
+        await coordinator.RunStartupCheckAsync(onFound, onBadge);
+        Assert.Equal(1, prompts);
+        Assert.Equal(0, badges);
     }
 
     [Fact]
@@ -593,10 +640,11 @@ public class UpdateStartupTests
     /// <summary>写指定键时等外部放行，模拟切换平台时保存偏好较慢。</summary>
     private sealed class BlockingSetPreferences(Preferences inner, string blockedKey, Task release) : IUserPreferencesService
     {
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Task<T?> GetPreferenceAsync<T>(string key) => inner.GetPreferenceAsync<T>(key);
         public async Task SetPreferenceAsync<T>(string key, T value)
         {
-            if (key == blockedKey) await release;
+            if (key == blockedKey) { Entered.TrySetResult(); await release; }
             await inner.SetPreferenceAsync(key, value);
         }
     }
