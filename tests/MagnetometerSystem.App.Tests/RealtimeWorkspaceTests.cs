@@ -477,6 +477,131 @@ public class RealtimeWorkspaceTests
         bus.PublishAcquisitionStopped(); await WpfTestHost.PumpAsync();
     });
 
+    [Fact]
+    public Task MultiPlotKeepsNameUnitAndDataTogetherAfterReorder() => WpfTestHost.RunAsync(async () =>
+    {
+        var bus = new DataBus();
+        using var vm = new RealtimeChartViewModel(bus);
+        var view = new RealtimeChartView { DataContext = vm };
+        var window = new Window { Content = view, Width = 800, Height = 700, Left = -10000, Top = -10000, ShowActivated = false, ShowInTaskbar = false };
+        try
+        {
+            window.Show(); await WpfTestHost.PumpAsync();
+            bus.PublishAcquisitionStarted(Configuration()); await WpfTestHost.PumpAsync();
+            vm.StopRenderTimer();
+            var start = new DateTime(2020, 1, 1);
+            for (int i = 0; i < 5; i++)
+                bus.PublishProcessedReading(new MagnetometerReading
+                {
+                    Timestamp = start.AddSeconds(i), ChannelValues = [100 + i, 200 + i, 300 + i, 25 + i],
+                });
+            vm.IsMultiPlotMode = true;
+            // 拖动排序把温度移到最前，再隐藏 CH1：视图按显示顺序建图，每张图的名称、单位和数据仍是同一个通道。
+            vm.ReorderChannels(3, 0);
+            vm.ChannelConfigs.Single(c => c.ChannelIndex == 1).Visible = false;
+            vm.RefreshPlot();
+
+            var grid = Assert.IsType<Grid>(Assert.Single(((Panel)view.FindName("MultiPlotPanel")).Children));
+            var plots = grid.Children.OfType<ScottPlot.WPF.WpfPlot>().OrderBy(Grid.GetRow).ToArray();
+            (string Label, double Base)[] expected = [("温度 (°C)", 25), ("CH0 (nT)", 100), ("CH2 (nT)", 300)];
+            Assert.Equal(expected.Length, plots.Length);
+            for (int p = 0; p < plots.Length; p++)
+            {
+                Assert.Equal(expected[p].Label, plots[p].Plot.Axes.Left.Label.Text);
+                var line = Assert.Single(plots[p].Plot.GetPlottables().OfType<ScottPlot.Plottables.Scatter>());
+                var points = line.Data.GetScatterPoints();
+                Assert.Equal([0d, 1, 2, 3, 4], points.Select(point => point.X));
+                Assert.Equal(Enumerable.Range(0, 5).Select(i => expected[p].Base + i), points.Select(point => point.Y));
+            }
+        }
+        finally
+        {
+            window.Close();
+            bus.PublishAcquisitionStopped(); await WpfTestHost.PumpAsync();
+        }
+    });
+
+    [Fact]
+    public Task IntervalExportWritesRawValuesWithQuotedNamesAndRoundTripPrecision() => WpfTestHost.RunAsync(async () =>
+    {
+        var bus = new DataBus();
+        using var vm = new RealtimeChartViewModel(bus);
+        bus.PublishAcquisitionStarted(new SensorConfig
+        {
+            Type = SensorType.Generic, ChannelCountOverride = 2,
+            ChannelNamesOverride = ["Bx, \"探头 A\"", "温度"], ChannelUnitsOverride = ["nT", "°C"],
+        });
+        await WpfTestHost.PumpAsync();
+        vm.StopRenderTimer();
+        var start = new DateTime(2020, 1, 1);
+        for (int i = 0; i <= 10; i++)
+            bus.PublishProcessedReading(new MagnetometerReading
+            {
+                Timestamp = start.AddSeconds(i), ChannelValues = [1000 + i, 20 + i],
+                OriginalChannelValues = [i / 3.0, 25.125 + i], IsOrthogonalityCorrected = true,
+            });
+        vm.IntervalStartInput = "2"; vm.IntervalEndInput = "4";
+        vm.ApplyIntervalSelectionCommand.Execute(null);
+        var path = Path.Combine(Path.GetTempPath(), $"interval-{Guid.NewGuid():N}.csv");
+        try
+        {
+            await vm.ExportIntervalFromBuffersAsync(path);
+            // 导出校正前的原始值；R 格式能读回同一个 double；含逗号、引号的通道名按 CSV 规则加引号并转义。
+            Assert.Equal(
+            [
+                "ElapsedSeconds,\"Bx, \"\"探头 A\"\" (nT)\",\"温度 (°C)\"",
+                "2,0.6666666666666666,27.125",
+                "3,1,28.125",
+                "4,1.3333333333333333,29.125",
+            ], File.ReadAllLines(path));
+        }
+        finally
+        {
+            File.Delete(path);
+            bus.PublishAcquisitionStopped(); await WpfTestHost.PumpAsync();
+        }
+    });
+
+    [Fact]
+    public Task ChannelOrderIsRestoredOnNextStartOnlyForTheSameChannelCount() => WpfTestHost.RunAsync(async () =>
+    {
+        var preferences = new MemoryPreferences();
+        // 每次用新的视图模型开始采集，相当于重新打开程序；返回开始后（及可选操作后）的通道顺序。
+        async Task<int[]> StartAsync(SensorConfig config, Action<RealtimeChartViewModel>? change = null)
+        {
+            var bus = new DataBus();
+            using var vm = new RealtimeChartViewModel(bus, preferences);
+            bus.PublishAcquisitionStarted(config); await WpfTestHost.PumpAsync();
+            change?.Invoke(vm);
+            var order = vm.ChannelConfigs.Select(c => c.ChannelIndex).ToArray();
+            bus.PublishAcquisitionStopped(); await WpfTestHost.PumpAsync();
+            return order;
+        }
+
+        Assert.Equal([3, 0, 1, 2], await StartAsync(Configuration(), vm => vm.ReorderChannels(3, 0)));
+        Assert.Equal([3, 0, 1, 2], preferences.Get<int[]>("ChartOrder"));
+        Assert.Equal([3, 0, 1, 2], await StartAsync(Configuration()));
+        // 通道数变了，保存的顺序不再适用，按协议顺序显示。
+        Assert.Equal([0, 1, 2, 3, 4], await StartAsync(Configuration(5)));
+    });
+
+    /// <summary>内存中的偏好设置，按 JSON 保存，读回的是新对象。</summary>
+    private sealed class MemoryPreferences : IUserPreferencesService
+    {
+        private readonly Dictionary<string, string> _json = new();
+
+        public T? Get<T>(string key) =>
+            _json.TryGetValue(key, out var json) ? System.Text.Json.JsonSerializer.Deserialize<T>(json) : default;
+
+        public Task<T?> GetPreferenceAsync<T>(string key) => Task.FromResult(Get<T>(key));
+
+        public Task SetPreferenceAsync<T>(string key, T value)
+        {
+            _json[key] = System.Text.Json.JsonSerializer.Serialize(value);
+            return Task.CompletedTask;
+        }
+    }
+
     private static T? FindVisualChild<T>(DependencyObject parent) where T : DependencyObject
     {
         if (parent is T match) return match;

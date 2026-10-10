@@ -641,7 +641,8 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         UpdateStepNavigation();
     }
 
-    private void OnCalibrationDataReceived(MagnetometerReading reading)
+    /// <summary>接收线程上的读数回调。测试直接调用它，模拟退订前已经开始、停止采集后才执行完的回调。</summary>
+    internal void OnCalibrationDataReceived(MagnetometerReading reading)
     {
         // 连接的通道布局与开始采集时不同，或读数通道数与协议不符：不混入这批数据，在界面线程停止采集。
         var generation = Interlocked.Read(ref _collectedGeneration);
@@ -745,6 +746,12 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
     private List<double[]> SnapshotSamples()
     {
         lock (_sampleLock) return _collectedData.ToList();
+    }
+
+    /// <summary>双三轴第二组样本的副本（诊断与测试用）。</summary>
+    internal List<double[]> SnapshotSecondGroupSamples()
+    {
+        lock (_sampleLock) return _collectedDataSecondGroup.ToList();
     }
 
     private void UpdateCoverageEstimate()
@@ -1011,6 +1018,12 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
     [ObservableProperty]
     private bool _rawFileFailed;
 
+    /// <summary>当前的原始 CSV 写入器，未在写入时为 null（诊断与测试用：测试据此模拟写入器失效）。</summary>
+    internal StreamWriter? CurrentRawWriter
+    {
+        get { lock (_sampleLock) return _rawWriter; }
+    }
+
     private void OpenRawCsv(CalibrationCollectionMode mode)
     {
         if (_rawWriter != null) return;
@@ -1160,12 +1173,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
     [RelayCommand]
     private void ImportFromFile()
     {
-        var importUnit = OrthogonalityParams.CanonicalUnit(FittingUnit);
-        if (importUnit.Length == 0)
-        {
-            CollectionStatus = "请先明确选择 CSV 数值的磁场单位；不会自动猜测或换算。";
-            return;
-        }
+        if (ImportUnitOrReport() == null) return;
         var dialog = new OpenFileDialog
         {
             Title = "导入三轴校正数据",
@@ -1174,10 +1182,25 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         };
 
         if (dialog.ShowDialog() != true) return;
+        ImportCsvFile(dialog.FileName);
+    }
 
+    /// <summary>导入 CSV 时数值的单位；用户未明确选择时在状态里说明原因并返回 null。</summary>
+    private string? ImportUnitOrReport()
+    {
+        var importUnit = OrthogonalityParams.CanonicalUnit(FittingUnit);
+        if (importUnit.Length > 0) return importUnit;
+        CollectionStatus = "请先明确选择 CSV 数值的磁场单位；不会自动猜测或换算。";
+        return null;
+    }
+
+    /// <summary>从已选定的文件导入拟合样本：文件对话框之后的全部步骤（测试直接调用）。</summary>
+    internal void ImportCsvFile(string path)
+    {
+        if (ImportUnitOrReport() is not { } importUnit) return;
         try
         {
-            var lines = File.ReadAllLines(dialog.FileName);
+            var lines = File.ReadAllLines(path);
             var importedData = new List<double[]>();
             var importedDataSecond = new List<double[]>();
             int skippedLines = 0;
@@ -1269,7 +1292,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
     }
 
     /// <summary>用导入的样本替换当前样本（文件或会话来源）。只在未采集时调用。</summary>
-    private void ReplaceSamples(List<double[]> first, List<double[]> second, string unit, int channelCount)
+    internal void ReplaceSamples(List<double[]> first, List<double[]> second, string unit, int channelCount)
     {
         if (IsCollecting) StopCollecting();
         SetCollectedUnit(unit, channelCount);
@@ -1770,7 +1793,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
     /// 从会话读取拟合样本：按“拟合通道”中所选的通道（换了会话时先按名称重新建议）。
     /// 通道元数据不一致、所选通道无效或单位不同时不加载，保留原有样本。
     /// </summary>
-    private async Task LoadSessionDataAsync(SessionInfo session)
+    internal async Task LoadSessionDataAsync(SessionInfo session)
     {
         if (!ReferenceEquals(_loadedSession, session))
         {

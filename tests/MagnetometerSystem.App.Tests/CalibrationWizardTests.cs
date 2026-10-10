@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Windows;
 using System.Windows.Media;
@@ -91,6 +92,12 @@ public class CalibrationWizardTests
         var until = DateTime.UtcNow.AddSeconds(5);
         while (!ready() && DateTime.UtcNow < until) await Task.Delay(10);
         Assert.True(ready(), "等待界面状态更新超时");
+    }
+
+    private static void AssertSamples(IReadOnlyList<double[]> actual, params double[][] expected)
+    {
+        Assert.Equal(expected.Length, actual.Count);
+        for (int i = 0; i < expected.Length; i++) Assert.Equal(expected[i], actual[i]);
     }
 
     [Fact]
@@ -235,14 +242,75 @@ public class CalibrationWizardTests
         // 原始 CSV 只追加：撤销、清空前写入的 3 行仍在，加上之后的 3 行。
         Assert.Equal("采集已结束 · 共 6 行", vm.RawFileStatus);
         // 退订前已在进行的读数回调在停止之后才执行：不能把链路条状态改回“采集中”。
-        typeof(OrthogonalityCalibrationViewModel)
-            .GetMethod("OnCalibrationDataReceived", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
-            .Invoke(vm, [Reading([1, 2, 3, 4, 5, 6])]);
+        vm.OnCalibrationDataReceived(Reading([1, 2, 3, 4, 5, 6]));
         Assert.False(f.Bus.ManualOrthoState.IsActive);
         // 停止后链路条的请求不再记录。
         f.Bus.RaiseManualOrthoRecord();
         Assert.Equal(3, vm.CollectedSampleCount);
         await WpfTestHost.PumpAsync();
+    });
+
+    [Fact]
+    public Task ManualDualPoints_KeepGroupsAlignedAndRawCsvRecordsUndoAndClear() => WpfTestHost.RunAsync(async () =>
+    {
+        using var f = await Fixture.CreateAsync();
+        var vm = f.Ortho;
+        vm.SelectedSensorType = SensorType.DualTriaxialFluxgate;
+        vm.CurrentStep = 2;
+        vm.SelectedMode = CalibrationCollectionMode.Manual48;
+        await f.PrepareLiveAsync(6);
+        vm.StartCollectingCommand.Execute(null);
+        Assert.True(vm.IsCollecting, vm.CollectionStatus);
+        var rawPath = Assert.IsType<string>(vm.RawFilePath);
+        // 每个点是最近 10 条读数的均值：送满 10 条同一方位的读数再记录，第二组比第一组大 10。
+        void RecordPoint(double v)
+        {
+            for (int i = 0; i < 10; i++) f.Bus.PublishReading(Reading([v, v + 1, v + 2, v + 10, v + 11, v + 12]));
+            vm.RecordCurrentPointCommand.Execute(null);
+        }
+
+        foreach (var v in new double[] { 100, 200, 300 }) RecordPoint(v);
+        AssertSamples(vm.CollectedData, [100, 101, 102], [200, 201, 202], [300, 301, 302]);
+        AssertSamples(vm.SnapshotSecondGroupSamples(), [110, 111, 112], [210, 211, 212], [310, 311, 312]);
+        // 撤销与清空同时作用于两组，第二组始终与第一组逐点对应。
+        vm.UndoLastPointCommand.Execute(null);
+        AssertSamples(vm.CollectedData, [100, 101, 102], [200, 201, 202]);
+        AssertSamples(vm.SnapshotSecondGroupSamples(), [110, 111, 112], [210, 211, 212]);
+        vm.ClearManualPointsCommand.Execute(null);
+        Assert.Empty(vm.CollectedData);
+        Assert.Empty(vm.SnapshotSecondGroupSamples());
+        foreach (var v in new double[] { 400, 500 }) RecordPoint(v);
+        AssertSamples(vm.CollectedData, [400, 401, 402], [500, 501, 502]);
+        AssertSamples(vm.SnapshotSecondGroupSamples(), [410, 411, 412], [510, 511, 512]);
+        vm.StopCollectingCommand.Execute(null);
+        Assert.Equal("采集已结束 · 共 5 行", vm.RawFileStatus);
+
+        var lines = File.ReadAllLines(rawPath);
+        Assert.Contains("# Sensor Type         : DualTriaxialFluxgate", lines);
+        Assert.Contains("# Unit                : nT", lines);
+        Assert.Contains("# Collection Mode     : Manual48", lines);
+        Assert.Contains("# Source Channels     : X1=B0, Y1=B1, Z1=B2, X2=B3, Y2=B4, Z2=B5", lines);
+        var body = lines.SkipWhile(l => !l.StartsWith("point_index,")).ToArray();
+        Assert.Equal("point_index,timestamp,X1,Y1,Z1,X2,Y2,Z2", body[0]);
+        // 时间戳之外逐行核对。原始 CSV 只追加：撤销、清空写成注释行，已写的行不改，行号接着已写入的行数。
+        static string WithoutTimestamp(string line)
+        {
+            if (line.StartsWith('#')) return "# " + line.Split(' ', 4)[3];
+            var fields = line.Split(',');
+            Assert.True(DateTime.TryParseExact(fields[1], "yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture,
+                DateTimeStyles.None, out _), line);
+            return string.Join(",", fields.Where((_, i) => i != 1));
+        }
+        Assert.Equal(
+        [
+            "1,100,101,102,110,111,112",
+            "2,200,201,202,210,211,212",
+            "3,300,301,302,310,311,312",
+            "# 已撤销第 3 点",
+            "# 已清空之前的 2 点，重新记录",
+            "4,400,401,402,410,411,412",
+            "5,500,501,502,510,511,512",
+        ], body.Skip(1).Select(WithoutTimestamp));
     });
 
     [Fact]
@@ -268,9 +336,7 @@ public class CalibrationWizardTests
         // 写入中途失败（此处让写入器失效）：停止写这个文件并说明原因，拟合样本照常累积。
         for (int i = 0; i < 2; i++) f.Bus.PublishReading(Reading([1, 2, 3 + i]));
         await WaitForAsync(() => vm.CollectedSampleCount == 2);
-        var writer = (StreamWriter)typeof(OrthogonalityCalibrationViewModel)
-            .GetField("_rawWriter", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(vm)!;
-        writer.Dispose();
+        Assert.IsType<StreamWriter>(vm.CurrentRawWriter).Dispose();
         for (int i = 0; i < 3; i++) f.Bus.PublishReading(Reading([1, 2, 5 + i]));
         await WaitForAsync(() => vm.CollectedSampleCount == 5);
         Assert.True(vm.RawFileFailed);
@@ -336,5 +402,53 @@ public class CalibrationWizardTests
         await producer.WaitAsync(TimeSpan.FromSeconds(5));
         await WaitForAsync(() => vm.CollectedSampleCount == count);
         vm.StopCollectingCommand.Execute(null);
+    });
+
+    [Fact]
+    public Task CsvImport_MapsHeaderAliasesTimestampsAndDelimiters_AndReportsSkippedLines() => WpfTestHost.RunAsync(async () =>
+    {
+        using var f = await Fixture.CreateAsync();
+        var vm = f.Ortho;
+        vm.CurrentStep = 2;
+        vm.DataSource = CalibrationDataSource.File;
+        Directory.CreateDirectory(f.RawDir);
+        string Write(string name, params string[] lines)
+        {
+            var path = Path.Combine(f.RawDir, name);
+            File.WriteAllLines(path, lines);
+            return path;
+        }
+
+        // 不猜测单位：没有明确选择单位时不读取文件。
+        var aliases = Write("aliases.csv", "time,BZ,bx,by", "t0,3,1,2", "t1,6,4,5", "t2,oops,7,8", "", "t3,9,7,8");
+        vm.ImportCsvFile(aliases);
+        Assert.Contains("请先明确选择", vm.CollectionStatus);
+        Assert.Equal(0, vm.CollectedSampleCount);
+
+        // 表头按列名（不分大小写的别名）而不是列位置取 X、Y、Z；解析失败的行计入跳过，空行不计。
+        vm.FittingUnit = "uT";
+        vm.ImportCsvFile(aliases);
+        Assert.Equal("已从文件导入 3 个样本（跳过 1 行）", vm.CollectionStatus);
+        Assert.Equal("uT", vm.CollectedUnit);
+        AssertSamples(vm.CollectedData, [1, 2, 3], [4, 5, 6], [7, 8, 9]);
+
+        // 双三轴、分号分隔。两组各自拟合：第二组缺列的行只计入第一组。
+        vm.SelectedSensorType = SensorType.DualTriaxialFluxgate;
+        vm.ImportCsvFile(Write("dual.csv", "X1;Y1;Z1;X2;Y2;Z2", "1;2;3;4;5;6", "7;8;9;;;", "10;11;12;13;14;15"));
+        Assert.Equal("已从文件导入 3 个样本", vm.CollectionStatus);
+        AssertSamples(vm.CollectedData, [1, 2, 3], [7, 8, 9], [10, 11, 12]);
+        AssertSamples(vm.SnapshotSecondGroupSamples(), [4, 5, 6], [13, 14, 15]);
+
+        // 无表头、制表符分隔、第一列是时间戳：跳过时间戳列，数值按不变区域性解析（含指数）。
+        vm.SelectedSensorType = SensorType.TriaxialFluxgate;
+        vm.ImportCsvFile(Write("timestamps.txt", "2026-01-01 00:00:00.000\t1.5\t-2.5\t3e2", "2026-01-01 00:00:00.100\t4\t5\t6"));
+        Assert.Equal("已从文件导入 2 个样本", vm.CollectionStatus);
+        AssertSamples(vm.CollectedData, [1.5, -2.5, 300], [4, 5, 6]);
+
+        // 没有一行有效：报告失败，保留之前导入的样本。
+        vm.ImportCsvFile(Write("invalid.csv", "x,y,z", "1,2", "1,two,3"));
+        Assert.StartsWith("导入失败：文件中未找到有效的三轴数据", vm.CollectionStatus);
+        AssertSamples(vm.CollectedData, [1.5, -2.5, 300], [4, 5, 6]);
+        Assert.Equal(2, vm.CollectedSampleCount);
     });
 }

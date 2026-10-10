@@ -261,6 +261,9 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
             _renderTimer.Interval = TimeSpan.FromMilliseconds(1000.0 / value);
     }
 
+    /// <summary>停止定时刷新，由调用方用 <see cref="RefreshPlot"/> 显式驱动（测试用，避免与定时器竞争）。</summary>
+    internal void StopRenderTimer() => _renderTimer.Stop();
+
     /// <summary>
     /// 确保通道缓冲至少覆盖 <paramref name="required"/> 个通道。
     /// 已有缓冲原样保留（避免丢掉正在显示的数据），只补齐缺少的部分。
@@ -1544,7 +1547,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
         IntervalStatisticsText = sb.ToString().TrimEnd();
     }
 
-    private async Task ExportIntervalFromBuffersAsync(string filePath)
+    internal async Task ExportIntervalFromBuffersAsync(string filePath)
     {
         if (CurrentInterval == null) return;
 
