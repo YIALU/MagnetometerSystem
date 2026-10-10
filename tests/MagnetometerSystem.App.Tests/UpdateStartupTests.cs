@@ -29,8 +29,6 @@ public class UpdateStartupTests
             ThrowOnCheck = scenario == "exception"
         };
         if (scenario == "skipped") await preferences.SetPreferenceAsync(UpdateCoordinator.KeySkippedVersion, "2.0.0");
-        // 切换到 GitHub 时写完平台偏好就退出，留下 Gitee 的缓存。
-        if (scenario == "otherSource") await preferences.SetPreferenceAsync(UpdateCoordinator.KeySource, "GitHub");
         var coordinator = new UpdateCoordinator(service, preferences);
         var prompts = 0;
         await coordinator.RunStartupCheckAsync(_ => { prompts++; return Task.CompletedTask; });
@@ -172,6 +170,8 @@ public class UpdateStartupTests
         }
         else await preferences.SetPreferenceAsync(UpdateCoordinator.KeyLastCheckUtc, DateTime.UtcNow);
         if (scenario == "skipped") await preferences.SetPreferenceAsync(UpdateCoordinator.KeySkippedVersion, "2.0.0");
+        // 切换到 GitHub 时写完平台偏好就退出，留下 Gitee 的缓存。
+        if (scenario == "otherSource") await preferences.SetPreferenceAsync(UpdateCoordinator.KeySource, "GitHub");
 
         var service = new RecordingService
         {

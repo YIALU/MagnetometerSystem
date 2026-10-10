@@ -470,11 +470,10 @@ public sealed class UpdateCoordinator
         catch (Exception ex) { Log.Warning(ex, "读取上次发现的新版本失败"); return null; }
         if (known is null) return null;
 
-        // 切换平台时先写平台偏好再清缓存，中途退出会留下旧平台的记录；与当前平台不符的不恢复。
+        // 切换平台时先写平台偏好再清缓存，中途退出会留下旧平台的记录。固定平台时只恢复
+        // 主结果就来自该平台的记录：更新窗口默认用主结果下载，镜像匹配也不算。
         var source = await GetSourceAsync();
-        var matchesSource = source == UpdateSource.Automatic
-            || known.Source == source
-            || known.Mirrors.Any(m => m.Source == source);
+        var matchesSource = source == UpdateSource.Automatic || known.Source == source;
 
         if (!matchesSource || !IsNewerThanCurrent(known.Version))
         {
