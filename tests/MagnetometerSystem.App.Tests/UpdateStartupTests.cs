@@ -379,6 +379,26 @@ public class UpdateStartupTests
     }
 
     [Fact]
+    public async Task NewerManualResultSuppressesPendingSilentPrompt()
+    {
+        var preferences = new Preferences();
+        var service = new SequenceService(UpdateCheckResult.Available(Info()), UpdateCheckResult.UpToDate());
+        UpdateCoordinator coordinator = null!;
+        Task<UpdateCheckResult>? manual = null;
+        var gate = new SwitchingPreferences(preferences, UpdateCoordinator.KeySkippedVersion,
+            async () => { manual = coordinator.CheckManuallyAsync(); await manual; });
+        coordinator = new UpdateCoordinator(service, gate) { StartupDelay = TimeSpan.Zero };
+        var prompts = 0;
+
+        // 定时检查写入"有新版本"后、弹窗前，手动检查确认已是最新。
+        await coordinator.RunStartupCheckAsync(_ => { prompts++; return Task.CompletedTask; });
+
+        Assert.Equal(UpdateCheckStatus.UpToDate, (await manual!).Status);
+        Assert.Equal(0, prompts);
+        Assert.Null(coordinator.LastKnownUpdate);
+    }
+
+    [Fact]
     public async Task LastCheckInTheFutureIsTreatedAsDue()
     {
         var preferences = new Preferences();

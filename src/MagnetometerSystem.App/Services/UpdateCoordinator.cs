@@ -48,6 +48,9 @@ public sealed class UpdateCoordinator
 
     /// <summary>每次切换更新平台加一；切换前发出、切换后才返回的检查结果作废。</summary>
     private int _sourceGeneration;
+
+    /// <summary>每写入一次检查结果或切换一次平台加一；静默检查弹窗前据此确认自己仍是最新结果。</summary>
+    private int _resultGeneration;
     private bool _sourceLoaded;
     private bool _dialogOpen;
     private readonly object _promptLock = new();
@@ -105,7 +108,11 @@ public sealed class UpdateCoordinator
                 previous = Enum.TryParse<UpdateSource>(saved, out var parsed) && Enum.IsDefined(parsed) ? parsed : UpdateSource.Automatic;
             }
             changed = previous != source;
-            if (changed) Interlocked.Increment(ref _sourceGeneration);
+            if (changed)
+            {
+                Interlocked.Increment(ref _sourceGeneration);
+                Interlocked.Increment(ref _resultGeneration);
+            }
             _updateService.Options.PreferredSource = source;
             _sourceLoaded = true;
             await _preferences.SetPreferenceAsync(KeySource, source.ToString());
@@ -231,12 +238,12 @@ public sealed class UpdateCoordinator
     private async Task CheckSilentlyAsync(Func<UpdateInfo, Task> onUpdateFound)
     {
         UpdateCheckResult result;
-        int generation;
+        int published;
         await _checkGate.WaitAsync();
         try
         {
             await GetSourceAsync();
-            generation = Volatile.Read(ref _sourceGeneration);
+            var generation = Volatile.Read(ref _sourceGeneration);
             result = await _updateService.CheckForUpdateAsync();
             if (result.WarningMessage != null) Log.Warning("部分更新平台检查失败: {Message}", result.WarningMessage);
 
@@ -248,6 +255,7 @@ public sealed class UpdateCoordinator
             }
 
             if (!await RecordResultAsync(result, generation)) return;
+            published = Volatile.Read(ref _resultGeneration);
         }
         finally { _checkGate.Release(); }
 
@@ -267,8 +275,9 @@ public sealed class UpdateCoordinator
 
         if (!await IsAutoCheckEnabledAsync()) return;
 
-        // 上面几步读偏好期间用户可能换了平台，旧平台的结果不再挂角标、弹窗。
-        if (generation != Volatile.Read(ref _sourceGeneration)) return;
+        // 上面几步读偏好期间，用户可能换了平台或手动检查得到了更新的结果；
+        // 这次结果已不是最新的，就不再挂角标、弹窗。
+        if (published != Volatile.Read(ref _resultGeneration)) return;
 
         // 部分平台失败时不记检查时间，下一轮仍会联网重试；同一版本 24 小时内只弹一次，
         // 否则"稍后提醒"后每小时都会再弹。
@@ -345,6 +354,8 @@ public sealed class UpdateCoordinator
             Log.Information("检查期间更新平台已切换，忽略这次结果");
             return false;
         }
+
+        Interlocked.Increment(ref _resultGeneration);
 
         if (result.Status == UpdateCheckStatus.UpdateAvailable && result.Info is not null)
         {
