@@ -231,6 +231,7 @@ public partial class SessionListViewModel : ObservableObject
             var connectionConfig = _dataBus.AcquisitionConnectionConfig ?? new ConnectionConfig();
             _savedBaseline = _storageService.WriteStatus.SavedReadings;
             var sessionId = await _storageService.StartSessionAsync(name, config, connectionConfig);
+            Serilog.Log.Information("采集会话已创建 {SessionId}（{SessionName}）", sessionId, name);
 
             OnUi(() =>
             {
@@ -254,7 +255,7 @@ public partial class SessionListViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Trace.TraceError($"创建会话失败: {ex.Message}");
+            Serilog.Log.Error(ex, "创建会话失败，本次不打开连接");
             // 重新抛出：让连接流程在打开端口之前中止。否则数据库不可用时仍会打开连接，
             // 而 ActiveSessionId 为 null 导致读数被静默丢弃。
             throw;
@@ -278,6 +279,10 @@ public partial class SessionListViewModel : ObservableObject
             await FlushBufferAsync();
             await _storageService.WaitForPendingWritesAsync();
             await _storageService.EndSessionAsync(sessionId);
+            // 接纳 = 进入本会话缓冲的条数；已提交 = 本会话期间存储服务确认写入数据库的条数。
+            Serilog.Log.Information("采集会话已结束 {SessionId}: 接纳 {Accepted} 条，已提交 {Saved} 条",
+                sessionId, Interlocked.Read(ref _acceptedReadingCount),
+                Math.Max(0, _storageService.WriteStatus.SavedReadings - _savedBaseline));
             OnUi(() =>
             {
                 ActiveSessionId = null;
@@ -380,6 +385,7 @@ public partial class SessionListViewModel : ObservableObject
         long generation = writeGeneration ?? Volatile.Read(ref _sessionGeneration);
         if (generation != Volatile.Read(ref _sessionGeneration)) return;
         if (Volatile.Read(ref _acceptingReadings)) _dataBus.PublishAcquisitionFault(ex);
+        Serilog.Log.Error(ex, "会话 {SessionId} 保存失败，采集停止，数据待重试", ActiveSessionId);
         // 不同步阻塞后台写入线程：UI 可能正在等待停止/退出。
         void Update()
         {
@@ -414,6 +420,7 @@ public partial class SessionListViewModel : ObservableObject
         string? recoveredSessionId = ActiveSessionId;
         try
         {
+            Serilog.Log.Information("重试保存会话 {SessionId}，待保存 {Pending} 条", recoveredSessionId, _storageService.WriteStatus.PendingReadings);
             await _storageService.RetryPendingWritesAsync();
             if (generation != Volatile.Read(ref _sessionGeneration)) return;
             await FlushBufferAsync();
@@ -426,6 +433,7 @@ public partial class SessionListViewModel : ObservableObject
                 await _dataBus.PublishAcquisitionRecoveryCompletedAsync(recoveredSessionId);
             }
             OnStorageWriteStatusChanged(_storageService.WriteStatus);
+            Serilog.Log.Information("重试保存完成，剩余待保存 {Pending} 条", _storageService.WriteStatus.PendingReadings);
         }
         catch (Exception ex) { ReportStorageError(ex, generation); }
     }

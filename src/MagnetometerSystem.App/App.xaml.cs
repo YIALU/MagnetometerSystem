@@ -105,6 +105,7 @@ public partial class App : Application
         {
             var dbInit = Services.GetRequiredService<DatabaseInitializer>();
             await dbInit.InitializeAsync();
+            Serilog.Log.Information("数据库就绪: {DatabasePath}", dbInit.DatabasePath);
 
             AppSettings? loadedSettings = null;
             try

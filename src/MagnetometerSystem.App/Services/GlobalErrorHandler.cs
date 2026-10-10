@@ -1,6 +1,9 @@
+using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Threading;
+using MagnetometerSystem.Infrastructure.Diagnostics;
 using Serilog;
 
 namespace MagnetometerSystem.App.Services;
@@ -10,6 +13,11 @@ namespace MagnetometerSystem.App.Services;
 /// </summary>
 public static class GlobalErrorHandler
 {
+    /// <summary>单个日志文件上限；超过后当天滚动到新文件，总数仍受保留个数限制。</summary>
+    private const long LogFileSizeLimitBytes = 10 * 1024 * 1024;
+
+    private static SerilogTraceListener? _traceListener;
+
     /// <summary>
     /// 初始化全局错误处理。在 App.OnStartup 中调用。
     /// 配置 Serilog 日志，注册全局异常处理器。
@@ -23,15 +31,23 @@ public static class GlobalErrorHandler
                 Path.Combine(LogDirectory = ResolveLogDirectory(), "app-.log"),
                 rollingInterval: RollingInterval.Day,
                 retainedFileCountLimit: 30,
+                fileSizeLimitBytes: LogFileSizeLimitBytes,
+                rollOnFileSizeLimit: true,
                 outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] {Message:lj}{NewLine}{Exception}")
             .CreateLogger();
+
+        // Core / Infrastructure 通过 Trace 报告连接、解析和保存错误，转写进同一个日志文件。
+        _traceListener = new SerilogTraceListener(Log.Logger);
+        Trace.Listeners.Add(_traceListener);
 
         // 注册全局异常处理器
         app.DispatcherUnhandledException += OnUnhandledException;
         TaskScheduler.UnobservedTaskException += OnUnobservedTaskException;
         AppDomain.CurrentDomain.UnhandledException += OnDomainUnhandledException;
 
-        Log.Information("应用程序启动");
+        Log.Information("应用程序启动 {Version}（{Package}），{OS}，.NET {Runtime} {Arch}，日志目录 {LogDirectory}",
+            AppVersion.DiagnosticVersion, AppVersion.PackageKindDisplay, RuntimeInformation.OSDescription,
+            Environment.Version, RuntimeInformation.ProcessArchitecture, LogDirectory);
     }
 
     /// <summary>实际使用的日志目录；初始化前为 null。</summary>
@@ -112,6 +128,12 @@ public static class GlobalErrorHandler
     public static void Shutdown()
     {
         Log.Information("应用程序关闭");
+        if (_traceListener is { } listener)
+        {
+            Trace.Listeners.Remove(listener);
+            listener.Dispose(); // 补写仍在计数中的省略条数
+            _traceListener = null;
+        }
         Log.CloseAndFlush();
     }
 }
