@@ -223,14 +223,15 @@ public sealed class UpdateCoordinator
                 return;
             }
 
-            if (!await IsCheckDueAsync())
-            {
-                // 24 小时内已查过：不联网，但把上次发现的版本挂回角标，
-                // 否则当天重启后"稍后提醒"的版本就找不回来了。
-                var known = await TryRestoreKnownUpdateAsync();
-                if (known is not null && onUpdateRestored is not null) await onUpdateRestored(known);
-                return;
-            }
+            // 先把上次发现的版本挂回角标：24 小时内重启不联网，到期了联网又可能失败，
+            // 两种情况下"稍后提醒"的版本都不该找不回来。之后的检查结果会再覆盖它。
+            UpdateInfo? known;
+            await _checkGate.WaitAsync();
+            try { known = await TryRestoreKnownUpdateAsync(); }
+            finally { _checkGate.Release(); }
+            if (known is not null && onUpdateRestored is not null) await onUpdateRestored(known);
+
+            if (!await IsCheckDueAsync()) return;
 
             await Task.Delay(StartupDelay);
 

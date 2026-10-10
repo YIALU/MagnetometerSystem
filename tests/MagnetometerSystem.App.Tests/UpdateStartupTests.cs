@@ -427,6 +427,24 @@ public class UpdateStartupTests
     }
 
     [Fact]
+    public async Task SavedVersionIsRestoredWhenDueCheckFails()
+    {
+        var preferences = new Preferences();
+        await preferences.SetPreferenceAsync(UpdateCoordinator.KeyLastCheckUtc, DateTime.UtcNow.AddHours(-30));
+        await preferences.SetPreferenceAsync(UpdateCoordinator.KeyKnownUpdate, Info());
+        var service = new RecordingService { Result = UpdateCheckResult.Failed("offline") };
+        var coordinator = new UpdateCoordinator(service, preferences) { StartupDelay = TimeSpan.Zero };
+        UpdateInfo? restored = null;
+
+        await coordinator.RunStartupCheckAsync(_ => throw new InvalidOperationException("unexpected prompt"),
+            info => { restored = info; return Task.CompletedTask; });
+
+        Assert.Equal(1, service.CheckCalls);
+        Assert.Equal("2.0.0", restored?.Version);
+        Assert.True(coordinator.IsCurrentUpdate(restored!));
+    }
+
+    [Fact]
     public async Task LastCheckInTheFutureIsTreatedAsDue()
     {
         var preferences = new Preferences();
