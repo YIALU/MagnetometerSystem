@@ -481,6 +481,57 @@ public class UpdateStartupTests
     }
 
     [Fact]
+    public async Task PromptCooldownStillPublishesBadgeAfterSourceSwitch()
+    {
+        var preferences = new Preferences();
+        var coordinator = new UpdateCoordinator(new RecordingService(), preferences) { StartupDelay = TimeSpan.Zero };
+        var prompts = 0;
+        var badges = 0;
+        await coordinator.RunStartupCheckAsync(_ => { prompts++; return Task.CompletedTask; }, _ => { badges++; return Task.CompletedTask; });
+        Assert.Equal(1, prompts);
+
+        // 换平台撤下角标；新平台查到同一版本，冷却内不再弹窗，但角标要挂回来。
+        await coordinator.SetSourceAsync(UpdateSource.GitHub);
+        await coordinator.RunStartupCheckAsync(_ => { prompts++; return Task.CompletedTask; }, _ => { badges++; return Task.CompletedTask; });
+        Assert.Equal(1, prompts);
+        Assert.Equal(1, badges);
+        Assert.NotNull(coordinator.LastKnownUpdate);
+    }
+
+    [Fact]
+    public async Task PromptCooldownLoadsEvenWhenAutoCheckDisabledAtStartup()
+    {
+        var preferences = new Preferences();
+        var partial = UpdateCheckResult.Available(Info()) with { WarningMessage = "GitHub 无法连接" };
+        var first = new UpdateCoordinator(new RecordingService { Result = partial }, preferences) { StartupDelay = TimeSpan.Zero };
+        var prompts = 0;
+        await first.RunStartupCheckAsync(_ => { prompts++; return Task.CompletedTask; });
+        Assert.Equal(1, prompts);
+
+        await preferences.SetPreferenceAsync(UpdateCoordinator.KeyAutoCheck, false);
+        var ticks = DateTime.UtcNow.Ticks;
+        var service = new RecordingService { Result = partial };
+        var restarted = new UpdateCoordinator(service, preferences)
+        {
+            StartupDelay = TimeSpan.Zero,
+            PollInterval = TimeSpan.FromMilliseconds(20),
+            UtcNow = () => new DateTime(Interlocked.Read(ref ticks), DateTimeKind.Utc)
+        };
+        using var cts = new CancellationTokenSource();
+        var loop = restarted.RunAutoCheckLoopAsync(_ => { prompts++; return Task.CompletedTask; }, null, cts.Token);
+        try
+        {
+            await restarted.SetAutoCheckEnabledAsync(true); // 运行中重新打开自动检查。
+            var deadline = DateTime.UtcNow.AddSeconds(15);
+            while (service.CheckCalls < 2 && DateTime.UtcNow < deadline) await Task.Delay(20);
+            Assert.True(service.CheckCalls >= 2);
+            Assert.Equal(1, prompts);
+        }
+        finally { cts.Cancel(); }
+        await loop.WaitAsync(TimeSpan.FromSeconds(15));
+    }
+
+    [Fact]
     public async Task LastCheckInTheFutureIsTreatedAsDue()
     {
         var preferences = new Preferences();

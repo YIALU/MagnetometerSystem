@@ -186,7 +186,7 @@ public sealed class UpdateCoordinator
     /// 常年不关的实例也能收到新版本提示；"稍后提醒"的版本次日会再提示一次。
     /// </summary>
     /// <param name="onUpdateFound">联网发现新版本时的回调（挂角标并弹窗），由调用方负责切到 UI 线程。</param>
-    /// <param name="onUpdateRestored">未到检查时间、沿用上次发现的新版本时的回调（只挂角标）。</param>
+    /// <param name="onUpdateRestored">只挂角标不弹窗的回调：启动时恢复上次发现的版本，或同一版本还在 24 小时提示冷却内。</param>
     public async Task RunAutoCheckLoopAsync(
         Func<UpdateInfo, Task> onUpdateFound, Func<UpdateInfo, Task>? onUpdateRestored, CancellationToken ct = default)
     {
@@ -199,7 +199,7 @@ public sealed class UpdateCoordinator
             try
             {
                 if (!await IsAutoCheckEnabledAsync() || !await IsCheckDueAsync()) continue;
-                await CheckSilentlyAsync(onUpdateFound);
+                await CheckSilentlyAsync(onUpdateFound, onUpdateRestored);
             }
             catch (Exception ex)
             {
@@ -213,20 +213,21 @@ public sealed class UpdateCoordinator
     /// 这套软件常年跑在没有外网的工业现场，检查不到更新是常态而非异常。
     /// </summary>
     /// <param name="onUpdateFound">发现新版本时的回调，由调用方负责切到 UI 线程。</param>
-    /// <param name="onUpdateRestored">未到检查时间、沿用上次发现的新版本时的回调。</param>
+    /// <param name="onUpdateRestored">只挂角标不弹窗的回调，见 <see cref="RunAutoCheckLoopAsync"/>。</param>
     public async Task RunStartupCheckAsync(Func<UpdateInfo, Task> onUpdateFound, Func<UpdateInfo, Task>? onUpdateRestored = null)
     {
         try
         {
             _updateService.CleanupDownloads();
 
+            // 即使这次启动时关着自动检查也要读回：运行中重新打开后，定时检查同样受 24 小时提示冷却约束。
+            await LoadLastPromptAsync();
+
             if (!await IsAutoCheckEnabledAsync())
             {
                 Log.Information("自动检查更新已关闭，跳过");
                 return;
             }
-
-            await LoadLastPromptAsync();
 
             // 先把上次发现的版本挂回角标：24 小时内重启不联网，到期了联网又可能失败，
             // 两种情况下"稍后提醒"的版本都不该找不回来。之后的检查结果会再覆盖它。
@@ -243,7 +244,7 @@ public sealed class UpdateCoordinator
             // 用户可能在启动延迟期间关闭了自动检查。
             if (!await IsAutoCheckEnabledAsync()) return;
 
-            await CheckSilentlyAsync(onUpdateFound);
+            await CheckSilentlyAsync(onUpdateFound, onUpdateRestored);
         }
         catch (Exception ex)
         {
@@ -251,7 +252,7 @@ public sealed class UpdateCoordinator
         }
     }
 
-    private async Task CheckSilentlyAsync(Func<UpdateInfo, Task> onUpdateFound)
+    private async Task CheckSilentlyAsync(Func<UpdateInfo, Task> onUpdateFound, Func<UpdateInfo, Task>? onBadgeOnly)
     {
         UpdateCheckResult result;
         int published;
@@ -296,7 +297,12 @@ public sealed class UpdateCoordinator
 
         // 部分平台失败时不记检查时间，下一轮仍会联网重试；同一版本 24 小时内只弹一次，
         // 否则"稍后提醒"后每小时都会再弹。
-        if (!await TryMarkPromptedAsync(result.Info.Version)) return;
+        if (!await TryMarkPromptedAsync(result.Info.Version))
+        {
+            // 冷却内不再弹窗，但角标照挂：例如换平台后角标已撤下，新平台查到的仍是同一版本。
+            if (onBadgeOnly is not null) await onBadgeOnly(result.Info);
+            return;
+        }
 
         Log.Information("发现新版本 v{Version}", result.Info.Version);
         await onUpdateFound(result.Info);
