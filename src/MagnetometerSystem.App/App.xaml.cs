@@ -29,6 +29,7 @@ public partial class App : Application
     private const string SingleInstanceMutexName = "MagnetometerSystem.SingleInstance";
 
     private Mutex? _singleInstanceMutex;
+    private static readonly CancellationTokenSource UpdateLoopCts = new();
 
     private void OnStartup(object sender, StartupEventArgs e)
     {
@@ -151,18 +152,22 @@ public partial class App : Application
     }
 
     /// <summary>
-    /// 启动后在后台检查更新。发现新版本时弹一次提示窗，同时在状态栏挂上常驻角标，
-    /// 用户点"稍后提醒"关掉后仍能随时点角标回来。
+    /// 启动后在后台检查更新，之后在运行期间每 24 小时再查一次。发现新版本时弹一次提示窗，
+    /// 同时在状态栏挂上常驻角标，用户点"稍后提醒"关掉后仍能随时点角标回来；
+    /// 当天重启不再联网，但角标会按上次发现的版本恢复。
     /// </summary>
     private static async Task RunStartupUpdateCheckAsync(MainViewModel mainVm)
     {
         var coordinator = Services.GetRequiredService<UpdateCoordinator>();
 
-        await coordinator.RunStartupCheckAsync(async info =>
-        {
-            await Current.Dispatcher.InvokeAsync(() => mainVm.AvailableUpdateVersion = info.Version);
-            await Current.Dispatcher.Invoke(() => coordinator.ShowUpdateDialogAsync(Current.MainWindow, info));
-        });
+        await coordinator.RunAutoCheckLoopAsync(
+            async info =>
+            {
+                await Current.Dispatcher.InvokeAsync(() => mainVm.AvailableUpdateVersion = info.Version);
+                await Current.Dispatcher.Invoke(() => coordinator.ShowUpdateDialogAsync(Current.MainWindow, info));
+            },
+            async info => await Current.Dispatcher.InvokeAsync(() => mainVm.AvailableUpdateVersion = info.Version),
+            UpdateLoopCts.Token);
     }
 
     /// <summary>
@@ -205,6 +210,8 @@ public partial class App : Application
 
     private void OnExit(object sender, ExitEventArgs e)
     {
+        UpdateLoopCts.Cancel();
+
         _singleInstanceMutex?.Dispose();
         _singleInstanceMutex = null;
 

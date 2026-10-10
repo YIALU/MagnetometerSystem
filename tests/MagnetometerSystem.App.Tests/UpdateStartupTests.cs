@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.IO;
 using System.Net.Http;
 using System.Windows;
 using System.Windows.Controls;
@@ -6,6 +7,7 @@ using System.Windows.Threading;
 using MagnetometerSystem.App.Services;
 using MagnetometerSystem.App.Views.Dialogs;
 using MagnetometerSystem.Core.Services;
+using MagnetometerSystem.Infrastructure.Database;
 using IUserPreferencesService = MagnetometerSystem.Infrastructure.Services.IUserPreferencesService;
 
 namespace MagnetometerSystem.App.Tests;
@@ -119,6 +121,114 @@ public class UpdateStartupTests
         Assert.Equal(skip ? "2.0.0" : null, await preferences.GetPreferenceAsync<string>(UpdateCoordinator.KeySkippedVersion));
     });
 
+    [Fact]
+    public async Task SameDayRestartRestoresBadgeFromSavedVersionWithoutNetwork()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "update-known-" + Guid.NewGuid());
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var db = new DatabaseInitializer(Path.Combine(directory, "test.db")); await db.InitializeAsync();
+            var found = Info() with { Mirrors = [Info() with { Source = UpdateSource.GitHub, DownloadUrl = "https://example.invalid/gh.exe" }] };
+            var first = new UpdateCoordinator(new RecordingService { Result = UpdateCheckResult.Available(found) }, new MagnetometerSystem.Infrastructure.Services.UserPreferencesService(db))
+            { StartupDelay = TimeSpan.Zero };
+            var prompts = 0;
+            await first.RunStartupCheckAsync(_ => { prompts++; return Task.CompletedTask; });
+            Assert.Equal(1, prompts); // 用户点"稍后提醒"关掉，随后当天重启。
+
+            var service = new RecordingService();
+            var restarted = new UpdateCoordinator(service, new MagnetometerSystem.Infrastructure.Services.UserPreferencesService(db));
+            UpdateInfo? restored = null;
+            await restarted.RunStartupCheckAsync(_ => throw new InvalidOperationException("unexpected prompt"),
+                info => { restored = info; return Task.CompletedTask; });
+
+            Assert.Equal(0, service.CheckCalls);
+            Assert.NotNull(restored);
+            Assert.Equal("2.0.0", restored!.Version);
+            Assert.Equal(found.DownloadUrl, restored.DownloadUrl);
+            Assert.Equal(found.ReleaseNotes, restored.ReleaseNotes);
+            Assert.Equal("https://example.invalid/gh.exe", Assert.Single(restored.Mirrors).DownloadUrl);
+            Assert.Same(restored, restarted.LastKnownUpdate); // 角标点开直接用它，不重新联网。
+        }
+        finally { Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools(); Directory.Delete(directory, true); }
+    }
+
+    [Theory]
+    [InlineData("skipped")]
+    [InlineData("installed")]
+    [InlineData("upToDate")]
+    public async Task SavedVersionIsNotRestoredWhenSkippedInstalledOrSuperseded(string scenario)
+    {
+        var preferences = new Preferences();
+        await preferences.SetPreferenceAsync(UpdateCoordinator.KeyKnownUpdate, Info());
+        if (scenario == "upToDate")
+        {
+            var checking = new UpdateCoordinator(new RecordingService { Result = UpdateCheckResult.UpToDate() }, preferences)
+            { StartupDelay = TimeSpan.Zero };
+            await checking.RunStartupCheckAsync(_ => throw new InvalidOperationException("unexpected prompt"));
+        }
+        else await preferences.SetPreferenceAsync(UpdateCoordinator.KeyLastCheckUtc, DateTime.UtcNow);
+        if (scenario == "skipped") await preferences.SetPreferenceAsync(UpdateCoordinator.KeySkippedVersion, "2.0.0");
+
+        var service = new RecordingService
+        {
+            Options = new() { CurrentVersion = scenario == "installed" ? "2.0.0" : "1.0.0", PackageKind = AppPackageKind.Installer }
+        };
+        var coordinator = new UpdateCoordinator(service, preferences);
+        var restored = 0;
+        await coordinator.RunStartupCheckAsync(_ => throw new InvalidOperationException("unexpected prompt"),
+            _ => { restored++; return Task.CompletedTask; });
+
+        Assert.Equal(0, service.CheckCalls);
+        Assert.Equal(0, restored);
+        Assert.Equal(scenario == "skipped", await preferences.GetPreferenceAsync<UpdateInfo>(UpdateCoordinator.KeyKnownUpdate) is not null);
+    }
+
+    [Fact]
+    public async Task LongRunningInstanceRechecksEveryIntervalAndRemindsAgain()
+    {
+        var ticks = new DateTime(2026, 10, 10, 0, 0, 0, DateTimeKind.Utc).Ticks;
+        var service = new RecordingService();
+        var coordinator = new UpdateCoordinator(service, new Preferences())
+        {
+            StartupDelay = TimeSpan.Zero,
+            PollInterval = TimeSpan.FromMilliseconds(20),
+            UtcNow = () => new DateTime(Interlocked.Read(ref ticks), DateTimeKind.Utc)
+        };
+        var prompts = new SemaphoreSlim(0);
+        using var cts = new CancellationTokenSource();
+        var loop = coordinator.RunAutoCheckLoopAsync(_ => { prompts.Release(); return Task.CompletedTask; }, null, cts.Token);
+        try
+        {
+            Assert.True(await prompts.WaitAsync(TimeSpan.FromSeconds(15)));
+            Assert.Equal(1, service.CheckCalls);
+
+            // 未满 24 小时：轮询多次也不联网。
+            Interlocked.Add(ref ticks, TimeSpan.FromHours(23).Ticks);
+            await Task.Delay(300);
+            Assert.Equal(1, service.CheckCalls);
+
+            // 满 24 小时后重新检查，"稍后提醒"的版本再提示一次。
+            Interlocked.Add(ref ticks, TimeSpan.FromHours(2).Ticks);
+            Assert.True(await prompts.WaitAsync(TimeSpan.FromSeconds(15)));
+            Assert.Equal(2, service.CheckCalls);
+        }
+        finally { cts.Cancel(); }
+        await loop.WaitAsync(TimeSpan.FromSeconds(15));
+        Assert.Equal(0, service.DownloadCalls); Assert.Equal(0, service.ApplyCalls);
+    }
+
+    [Fact]
+    public async Task LastCheckInTheFutureIsTreatedAsDue()
+    {
+        var preferences = new Preferences();
+        await preferences.SetPreferenceAsync(UpdateCoordinator.KeyLastCheckUtc, DateTime.UtcNow.AddDays(30));
+        var service = new RecordingService { Result = UpdateCheckResult.UpToDate() };
+        var coordinator = new UpdateCoordinator(service, preferences) { StartupDelay = TimeSpan.Zero };
+        await coordinator.RunStartupCheckAsync(_ => throw new InvalidOperationException("unexpected prompt"));
+        Assert.Equal(1, service.CheckCalls);
+    }
+
     private static UpdateInfo Info() => new()
     {
         Version = "2.0.0", TagName = "v2.0.0", HtmlUrl = "https://example.invalid/release",
@@ -136,7 +246,7 @@ public class UpdateStartupTests
 
     private sealed class RecordingService : IUpdateService
     {
-        public UpdateOptions Options { get; } = new() { CurrentVersion = "1.0.0", PackageKind = AppPackageKind.Installer };
+        public UpdateOptions Options { get; init; } = new() { CurrentVersion = "1.0.0", PackageKind = AppPackageKind.Installer };
         public UpdateCheckResult Result { get; init; } = UpdateCheckResult.Available(Info());
         public bool ThrowOnCheck { get; init; }
         public Task<UpdateCheckResult>? PendingResponse { get; init; }
