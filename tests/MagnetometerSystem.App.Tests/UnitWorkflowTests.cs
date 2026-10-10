@@ -53,33 +53,34 @@ public class UnitWorkflowTests
             ChannelUnitsOverride = ["nT", "nT", "nT", "°C", "µT", "µT", "µT"],
         });
         await WpfTestHost.PumpAsync();
-        chart.StartAddTotalFieldCommand.Execute(null);
-        chart.WizardSourceA = 0; chart.WizardSourceB = 1; chart.WizardSourceC = 3;
-        chart.ConfirmAddTotalFieldCommand.Execute(null);
+        var wizard = chart.Wizard;
+        wizard.StartAddTotalFieldCommand.Execute(null);
+        wizard.WizardSourceA = 0; wizard.WizardSourceB = 1; wizard.WizardSourceC = 3;
+        wizard.ConfirmAddTotalFieldCommand.Execute(null);
         Assert.Empty(chart.ComputedChannels);
-        Assert.Contains("相同的磁场单位", chart.ComputationError);
-        chart.WizardSourceC = 2;
-        chart.ConfirmAddTotalFieldCommand.Execute(null);
+        Assert.Contains("相同的磁场单位", wizard.ComputationError);
+        wizard.WizardSourceC = 2;
+        wizard.ConfirmAddTotalFieldCommand.Execute(null);
         Assert.Equal("nT", Assert.Single(chart.ComputedChannels).Unit);
-        chart.StartAddTotalFieldCommand.Execute(null);
-        chart.WizardSourceA = 4; chart.WizardSourceB = 5; chart.WizardSourceC = 6;
-        chart.ConfirmAddTotalFieldCommand.Execute(null);
+        wizard.StartAddTotalFieldCommand.Execute(null);
+        wizard.WizardSourceA = 4; wizard.WizardSourceB = 5; wizard.WizardSourceC = 6;
+        wizard.ConfirmAddTotalFieldCommand.Execute(null);
         Assert.Equal("µT", chart.ComputedChannels[1].Unit);
-        chart.StartAddGradientCommand.Execute(null);
-        chart.WizardSourceA = 0; chart.WizardSourceB = 3;
-        chart.ConfirmAddGradientCommand.Execute(null);
+        wizard.StartAddGradientCommand.Execute(null);
+        wizard.WizardSourceA = 0; wizard.WizardSourceB = 3;
+        wizard.ConfirmAddGradientCommand.Execute(null);
         Assert.Equal(2, chart.ComputedChannels.Count);
-        chart.WizardSourceB = 1;
-        chart.GradientBaselineDistance = 0;
-        chart.ConfirmAddGradientCommand.Execute(null);
+        wizard.WizardSourceB = 1;
+        wizard.GradientBaselineDistance = 0;
+        wizard.ConfirmAddGradientCommand.Execute(null);
         Assert.Equal(2, chart.ComputedChannels.Count);
-        Assert.Contains("有限正数", chart.ComputationError);
+        Assert.Contains("有限正数", wizard.ComputationError);
         var originalCulture = CultureInfo.CurrentCulture;
         try
         {
             CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("fr-FR");
-            chart.GradientBaselineDistance = 0.5;
-            chart.ConfirmAddGradientCommand.Execute(null);
+            wizard.GradientBaselineDistance = 0.5;
+            wizard.ConfirmAddGradientCommand.Execute(null);
         }
         finally { CultureInfo.CurrentCulture = originalCulture; }
         Assert.Equal("nT/m", chart.ComputedChannels[2].Unit);

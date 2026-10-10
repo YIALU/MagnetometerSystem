@@ -4,12 +4,14 @@ using System.IO;
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using MagnetometerSystem.App.Services;
 using MagnetometerSystem.App.ViewModels;
 using MagnetometerSystem.App.Views;
 using MagnetometerSystem.Core.Calibration;
 using MagnetometerSystem.Core.Communication;
 using MagnetometerSystem.Core.Models;
 using MagnetometerSystem.Core.Services;
+using MagnetometerSystem.Core.Storage;
 using MagnetometerSystem.Infrastructure.Database;
 using Microsoft.Data.Sqlite;
 
@@ -39,14 +41,14 @@ public class CalibrationWizardTests
         public OrthogonalityCalibrationViewModel Ortho { get; private set; } = null!;
         public SqliteCalibrationRepository Repository { get; private set; } = null!;
 
-        public static async Task<Fixture> CreateAsync()
+        public static async Task<Fixture> CreateAsync(IDialogService? dialogs = null)
         {
             var f = new Fixture();
             f.Database = new DatabaseInitializer(f._path);
             await f.Database.InitializeAsync();
             f.Storage = new SqliteStorageService(f.Database, f.Bus);
             f.Repository = new SqliteCalibrationRepository(f.Database);
-            f.Ortho = new OrthogonalityCalibrationViewModel(new OrthogonalityCalculator(), f.Repository, f.Bus, f.Storage)
+            f.Ortho = new OrthogonalityCalibrationViewModel(new OrthogonalityCalculator(), f.Repository, f.Bus, f.Storage, dialogs)
             {
                 RawDataDirectory = f.RawDir,
             };
@@ -179,13 +181,13 @@ public class CalibrationWizardTests
             await vm.SaveProfileCommand.ExecuteAsync(null);
             Assert.Contains("配置库", vm.SaveStatus);
             Assert.DoesNotContain("应用", vm.SaveStatus);
-            var saved = Assert.Single(vm.SavedProfiles);
+            var saved = Assert.Single(vm.Library.SavedProfiles);
             Assert.Equal("测试探头", saved.Name);
             Assert.Equal(count, saved.SampleCount);
 
             page.SelectedTab = CalibrationPage.LibraryTab;
-            vm.SelectedSavedProfile = saved;
-            Assert.True(vm.ExportSelectedProfileCsvCommand.CanExecute(null));
+            vm.Library.SelectedSavedProfile = saved;
+            Assert.True(vm.Library.ExportSelectedProfileCsvCommand.CanExecute(null));
             window.UpdateLayout(); await WpfTestHost.PumpAsync();
             Assert.DoesNotContain("System.Windows.Data Error", errors.ToString());
         }
@@ -242,7 +244,7 @@ public class CalibrationWizardTests
         // 原始 CSV 只追加：撤销、清空前写入的 3 行仍在，加上之后的 3 行。
         Assert.Equal("采集已结束 · 共 6 行", vm.RawFileStatus);
         // 退订前已在进行的读数回调在停止之后才执行：不能把链路条状态改回“采集中”。
-        vm.OnCalibrationDataReceived(Reading([1, 2, 3, 4, 5, 6]));
+        vm.Collector.OnReadingReceived(Reading([1, 2, 3, 4, 5, 6]));
         Assert.False(f.Bus.ManualOrthoState.IsActive);
         // 停止后链路条的请求不再记录。
         f.Bus.RaiseManualOrthoRecord();
@@ -336,7 +338,7 @@ public class CalibrationWizardTests
         // 写入中途失败（此处让写入器失效）：停止写这个文件并说明原因，拟合样本照常累积。
         for (int i = 0; i < 2; i++) f.Bus.PublishReading(Reading([1, 2, 3 + i]));
         await WaitForAsync(() => vm.CollectedSampleCount == 2);
-        Assert.IsType<StreamWriter>(vm.CurrentRawWriter).Dispose();
+        Assert.IsType<StreamWriter>(vm.RawRecorder.CurrentWriter).Dispose();
         for (int i = 0; i < 3; i++) f.Bus.PublishReading(Reading([1, 2, 5 + i]));
         await WaitForAsync(() => vm.CollectedSampleCount == 5);
         Assert.True(vm.RawFileFailed);
@@ -450,5 +452,50 @@ public class CalibrationWizardTests
         Assert.StartsWith("导入失败：文件中未找到有效的三轴数据", vm.CollectionStatus);
         AssertSamples(vm.CollectedData, [1.5, -2.5, 300], [4, 5, 6]);
         Assert.Equal(2, vm.CollectedSampleCount);
+    });
+
+    [Fact]
+    public Task FileSessionAndHelpCommandsGoThroughTheDialogService() => WpfTestHost.RunAsync(async () =>
+    {
+        var dialogs = new FakeDialogService();
+        using var f = await Fixture.CreateAsync(dialogs);
+        var vm = f.Ortho;
+        vm.CurrentStep = 2;
+        vm.DataSource = CalibrationDataSource.File;
+
+        // 没有明确选择单位时不打开文件对话框。
+        vm.ImportFromFileCommand.Execute(null);
+        Assert.Empty(dialogs.OpenFileRequests);
+        Assert.Contains("请先明确选择", vm.CollectionStatus);
+
+        // 取消文件对话框：什么都不导入。
+        vm.FittingUnit = "nT";
+        vm.ImportFromFileCommand.Execute(null);
+        Assert.Equal("导入三轴校正数据", Assert.Single(dialogs.OpenFileRequests).Title);
+        Assert.Equal(0, vm.CollectedSampleCount);
+
+        Directory.CreateDirectory(f.RawDir);
+        var path = Path.Combine(f.RawDir, "picked.csv");
+        File.WriteAllLines(path, ["x,y,z", "1,2,3", "4,5,6", "7,8,9"]);
+        dialogs.OpenFilePath = path;
+        vm.ImportFromFileCommand.Execute(null);
+        Assert.Equal("已从文件导入 3 个样本", vm.CollectionStatus);
+        Assert.Equal(3, vm.CollectedSampleCount);
+
+        vm.ShowCsvFormatHelpCommand.Execute(null);
+        Assert.Equal(HelpTopic.CalibrationCsvFormat, Assert.Single(dialogs.HelpTopics));
+
+        // 取消选择会话：来源和样本不变。
+        await vm.LoadFromSessionCommand.ExecuteAsync(null);
+        Assert.Same(f.Storage, Assert.Single(dialogs.SessionRequests));
+        Assert.Equal(CalibrationDataSource.File, vm.DataSource);
+        Assert.Equal(3, vm.CollectedSampleCount);
+
+        // 选中的会话交给会话导入：来源切到会话；通道元数据不完整时不加载，保留原有样本。
+        dialogs.Session = new SessionInfo { Name = "缺通道名", ChannelCount = 3 };
+        await vm.LoadFromSessionCommand.ExecuteAsync(null);
+        Assert.Equal(CalibrationDataSource.Session, vm.DataSource);
+        Assert.Contains("通道数不一致", vm.CollectionStatus);
+        Assert.Equal(3, vm.CollectedSampleCount);
     });
 }

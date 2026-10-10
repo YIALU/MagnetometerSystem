@@ -57,9 +57,9 @@ public class RealtimeWorkspaceTests
         var temperature = Assert.Single(lines.Where(p => p.LegendText.StartsWith("温度")));
         Assert.NotSame(vm.PlotControl.Plot.Axes.Left, temperature.Axes.YAxis);
         Assert.Equal("°C", temperature.Axes.YAxis.Label.Text);
-        vm.IntervalStartInput = "0"; vm.IntervalEndInput = "60";
-        vm.ApplyIntervalSelectionCommand.Execute(null);
-        Assert.Equal(30, vm.IntervalStatistics!.ChannelStats[0].Mean, 8);
+        vm.Interval.IntervalStartInput = "0"; vm.Interval.IntervalEndInput = "60";
+        vm.Interval.ApplyIntervalSelectionCommand.Execute(null);
+        Assert.Equal(30, vm.Interval.IntervalStatistics!.ChannelStats[0].Mean, 8);
         vm.IsPaused = true;
         Publish(bus, start, 61, 61, true);
         vm.RefreshPlot();
@@ -68,7 +68,7 @@ public class RealtimeWorkspaceTests
         vm.RefreshPlot();
         Assert.Equal(62, vm.DataPointCount);
         Assert.StartsWith("61 ", vm.ChannelConfigs.Single(c => c.ChannelIndex == 0).LatestValue);
-        vm.AutoOffsetChannelCommand.Execute(0);
+        vm.Offsets.AutoOffsetChannelCommand.Execute(0);
         Assert.Equal(-1030.5, vm.ChannelConfigs.Single(c => c.ChannelIndex == 0).DisplayOffset);
         Assert.Equal(0, vm.ChannelConfigs.Single(c => c.ChannelIndex == 3).DisplayOffset);
         bus.PublishAcquisitionStopped();
@@ -92,17 +92,17 @@ public class RealtimeWorkspaceTests
         await WpfTestHost.PumpAsync(); // 拖动预览合并到界面空闲时重绘
         Assert.Single(Spans()); // 拖动中的预览
         Assert.True(vm.EndPlotSelection(20.4));
-        Assert.Equal(10.2, vm.CurrentInterval!.StartTime, 9);
-        Assert.Equal(20.4, vm.CurrentInterval.EndTime, 9);
-        Assert.Equal(10, vm.IntervalStatistics!.SampleCount); // 11..20 秒
-        Assert.Equal(15.5, vm.IntervalStatistics.ChannelStats[0].Mean, 9); // 原始值，不含校正后的 +1000
+        Assert.Equal(10.2, vm.Interval.CurrentInterval!.StartTime, 9);
+        Assert.Equal(20.4, vm.Interval.CurrentInterval.EndTime, 9);
+        Assert.Equal(10, vm.Interval.IntervalStatistics!.SampleCount); // 11..20 秒
+        Assert.Equal(15.5, vm.Interval.IntervalStatistics.ChannelStats[0].Mean, 9); // 原始值，不含校正后的 +1000
         Assert.Single(Spans());
         vm.RefreshPlot(); // 下一次刷新仍保留区间阴影
         Assert.Single(Spans());
 
         // 拖出数据范围时夹到已有数据；原地点击不产生区间。
         vm.BeginPlotSelection(55); Assert.True(vm.EndPlotSelection(500));
-        Assert.Equal(60, vm.CurrentInterval!.EndTime, 9);
+        Assert.Equal(60, vm.Interval.CurrentInterval!.EndTime, 9);
         vm.BeginPlotSelection(70); Assert.False(vm.EndPlotSelection(80));
 
         // 连续鼠标移动只触发一次叠加层重绘，显示最后的位置。
@@ -120,7 +120,7 @@ public class RealtimeWorkspaceTests
         await WpfTestHost.PumpAsync();
         Assert.Empty(vm.PlotControl.Plot.GetPlottables().OfType<ScottPlot.Plottables.Annotation>());
 
-        vm.ClearIntervalSelectionCommand.Execute(null);
+        vm.Interval.ClearIntervalSelectionCommand.Execute(null);
         Assert.Empty(Spans());
         bus.PublishAcquisitionStopped();
         await WpfTestHost.PumpAsync();
@@ -238,7 +238,24 @@ public class RealtimeWorkspaceTests
             chart.IsMultiPlotMode = true;
             chart.MultiPlotColumnCount = 2;
             if (!string.IsNullOrEmpty(screenshot)) SaveScreenshot((FrameworkElement)window.Content, Path.Combine(screenshot, "workspace-expanded.png"));
+            // 展开的总场、梯度向导和算出的区间统计也渲染一遍，其中的下拉框和列表项绑定同样要检查。
+            chart.Wizard.StartAddTotalFieldCommand.Execute(null);
+            main.WorkspaceLayout.SideTab = 0; window.UpdateLayout(); await WpfTestHost.PumpAsync();
+            chart.Wizard.StartAddGradientCommand.Execute(null);
+            window.UpdateLayout(); await WpfTestHost.PumpAsync();
+            chart.Interval.IntervalStartInput = "0"; chart.Interval.IntervalEndInput = "60";
+            chart.Interval.ApplyIntervalSelectionCommand.Execute(null);
+            Assert.NotEmpty(chart.Interval.IntervalStatistics!.ChannelStats);
+            // 有显示偏移时工具栏出现“取消归零”（按钮绑定在 Offsets 上）。
+            var clearZero = FindVisualChild<Button>(view, b => Equals(b.Content, "取消归零"));
+            Assert.NotNull(clearZero);
+            Assert.Equal(Visibility.Collapsed, clearZero.Visibility);
+            chart.ChannelConfigs[0].DisplayOffset = 7;
+            Assert.True(chart.Offsets.HasDisplayOffsets);
+            Assert.Equal(Visibility.Visible, clearZero.Visibility);
             foreach (var tab in new[] { 0, 1, 2, 3, 4 }) { main.WorkspaceLayout.SideTab = tab; window.UpdateLayout(); await WpfTestHost.PumpAsync(); }
+            chart.Wizard.CancelAddWizardCommand.Execute(null);
+            chart.Offsets.ClearDisplayOffsetsCommand.Execute(null);
             foreach (var tab in new[] { 0, 1, 2 }) { main.WorkspaceLayout.DockTab = tab; window.UpdateLayout(); await WpfTestHost.PumpAsync(); }
             window.Height = 680; window.Width = 1100;
             window.UpdateLayout(); await WpfTestHost.PumpAsync();
@@ -465,14 +482,17 @@ public class RealtimeWorkspaceTests
         config.ChannelUnitsOverride[3] = "°C";
         bus.PublishAcquisitionStarted(config); await WpfTestHost.PumpAsync();
         Assert.Equal(65, vm.ChannelConfigs.Count);
-        vm.StartAddTotalFieldCommand.Execute(null);
-        vm.WizardSourceA = 0; vm.WizardSourceB = 1; vm.WizardSourceC = 3;
-        vm.ConfirmAddTotalFieldCommand.Execute(null); Assert.Empty(vm.ComputedChannels);
-        vm.WizardSourceC = 2; vm.ConfirmAddTotalFieldCommand.Execute(null);
+        var wizard = vm.Wizard;
+        wizard.StartAddTotalFieldCommand.Execute(null);
+        Assert.Equal(65, wizard.WizardRawSources.Count);
+        wizard.WizardSourceA = 0; wizard.WizardSourceB = 1; wizard.WizardSourceC = 3;
+        wizard.ConfirmAddTotalFieldCommand.Execute(null); Assert.Empty(vm.ComputedChannels);
+        wizard.WizardSourceC = 2; wizard.ConfirmAddTotalFieldCommand.Execute(null);
         Assert.Equal("uT", Assert.Single(vm.ComputedChannels).Unit);
-        vm.StartAddGradientCommand.Execute(null);
-        vm.WizardSourceA = 0; vm.WizardSourceB = 1;
-        vm.ConfirmAddGradientCommand.Execute(null);
+        wizard.StartAddGradientCommand.Execute(null);
+        Assert.Equal(66, wizard.WizardGradientSources.Count); // 原始通道 + 刚加的总场
+        wizard.WizardSourceA = 0; wizard.WizardSourceB = 1;
+        wizard.ConfirmAddGradientCommand.Execute(null);
         Assert.Equal("uT/m", vm.ComputedChannels[1].Unit);
         bus.PublishAcquisitionStopped(); await WpfTestHost.PumpAsync();
     });
@@ -540,12 +560,12 @@ public class RealtimeWorkspaceTests
                 Timestamp = start.AddSeconds(i), ChannelValues = [1000 + i, 20 + i],
                 OriginalChannelValues = [i / 3.0, 25.125 + i], IsOrthogonalityCorrected = true,
             });
-        vm.IntervalStartInput = "2"; vm.IntervalEndInput = "4";
-        vm.ApplyIntervalSelectionCommand.Execute(null);
+        vm.Interval.IntervalStartInput = "2"; vm.Interval.IntervalEndInput = "4";
+        vm.Interval.ApplyIntervalSelectionCommand.Execute(null);
         var path = Path.Combine(Path.GetTempPath(), $"interval-{Guid.NewGuid():N}.csv");
         try
         {
-            await vm.ExportIntervalFromBuffersAsync(path);
+            await vm.Interval.ExportToFileAsync(path);
             // 导出校正前的原始值；R 格式能读回同一个 double；含逗号、引号的通道名按 CSV 规则加引号并转义。
             Assert.Equal(
             [
@@ -558,6 +578,45 @@ public class RealtimeWorkspaceTests
         finally
         {
             File.Delete(path);
+            bus.PublishAcquisitionStopped(); await WpfTestHost.PumpAsync();
+        }
+    });
+
+    [Fact]
+    public Task IntervalExportAsksWhereToSaveAndWritesThePickedFile() => WpfTestHost.RunAsync(async () =>
+    {
+        var bus = new DataBus();
+        var dialogs = new FakeDialogService();
+        using var vm = new RealtimeChartViewModel(bus, dialogs: dialogs);
+        bus.PublishAcquisitionStarted(Configuration());
+        await WpfTestHost.PumpAsync();
+        vm.StopRenderTimer();
+        var start = new DateTime(2020, 1, 1);
+        for (int i = 0; i <= 10; i++) Publish(bus, start, i, i, corrected: true);
+        var dir = Directory.CreateTempSubdirectory("interval-export-");
+        try
+        {
+            // 还没有区间时不弹保存对话框。
+            await vm.Interval.ExportIntervalCommand.ExecuteAsync(null);
+            Assert.Empty(dialogs.SaveFileRequests);
+
+            // 有区间后先问保存位置，建议的文件名带起止秒数；这里取消。
+            vm.Interval.IntervalStartInput = "2"; vm.Interval.IntervalEndInput = "4";
+            vm.Interval.ApplyIntervalSelectionCommand.Execute(null);
+            await vm.Interval.ExportIntervalCommand.ExecuteAsync(null);
+            var request = Assert.Single(dialogs.SaveFileRequests);
+            Assert.Equal($"interval_{2.0:F1}s_{4.0:F1}s.csv", request.FileName);
+
+            var path = Path.Combine(dir.FullName, "picked.csv");
+            dialogs.SaveFilePath = path;
+            await vm.Interval.ExportIntervalCommand.ExecuteAsync(null);
+            var lines = File.ReadAllLines(path);
+            Assert.Equal(4, lines.Length); // 表头 + 第 2、3、4 秒
+            Assert.StartsWith("2,2,20,30,", lines[1]); // 原始值，不含校正后的 +1000
+        }
+        finally
+        {
+            dir.Delete(recursive: true);
             bus.PublishAcquisitionStopped(); await WpfTestHost.PumpAsync();
         }
     });
@@ -602,11 +661,11 @@ public class RealtimeWorkspaceTests
         }
     }
 
-    private static T? FindVisualChild<T>(DependencyObject parent) where T : DependencyObject
+    private static T? FindVisualChild<T>(DependencyObject parent, Func<T, bool>? predicate = null) where T : DependencyObject
     {
-        if (parent is T match) return match;
+        if (parent is T match && (predicate is null || predicate(match))) return match;
         for (int i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
-            if (FindVisualChild<T>(VisualTreeHelper.GetChild(parent, i)) is { } found) return found;
+            if (FindVisualChild(VisualTreeHelper.GetChild(parent, i), predicate) is { } found) return found;
         return null;
     }
 
