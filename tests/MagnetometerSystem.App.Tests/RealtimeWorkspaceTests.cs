@@ -9,6 +9,7 @@ using System.Windows.Media.Imaging;
 using MagnetometerSystem.App.Services;
 using MagnetometerSystem.App.ViewModels;
 using MagnetometerSystem.App.Views;
+using MagnetometerSystem.App.Views.Charting;
 using MagnetometerSystem.Core.Calibration;
 using MagnetometerSystem.Core.Communication;
 using MagnetometerSystem.Core.Models;
@@ -45,17 +46,19 @@ public class RealtimeWorkspaceTests
     public Task SinglePlotUsesTemperatureAxisAndStatisticsStayRawAcrossPauseAndReorder() => WpfTestHost.RunAsync(async () =>
     {
         var bus = new DataBus();
-        using var vm = new RealtimeChartViewModel(bus) { PlotControl = new ScottPlot.WPF.WpfPlot() };
+        using var vm = new RealtimeChartViewModel(bus);
+        using var renderer = new ChartRenderer(new ScottPlot.WPF.WpfPlot());
+        renderer.Attach(vm);
         bus.PublishAcquisitionStarted(Configuration());
         await WpfTestHost.PumpAsync();
         var start = new DateTime(2020, 1, 1);
         for (int i = 0; i < 61; i++) Publish(bus, start, i, i, true);
         vm.ChannelConfigs.Move(3, 0);
         vm.RefreshPlot();
-        var lines = vm.PlotControl.Plot.GetPlottables().OfType<ScottPlot.Plottables.Scatter>().ToArray();
+        var lines = renderer.SinglePlot.Plot.GetPlottables().OfType<ScottPlot.Plottables.Scatter>().ToArray();
         Assert.Equal(4, lines.Length);
         var temperature = Assert.Single(lines.Where(p => p.LegendText.StartsWith("温度")));
-        Assert.NotSame(vm.PlotControl.Plot.Axes.Left, temperature.Axes.YAxis);
+        Assert.NotSame(renderer.SinglePlot.Plot.Axes.Left, temperature.Axes.YAxis);
         Assert.Equal("°C", temperature.Axes.YAxis.Label.Text);
         vm.Interval.IntervalStartInput = "0"; vm.Interval.IntervalEndInput = "60";
         vm.Interval.ApplyIntervalSelectionCommand.Execute(null);
@@ -79,13 +82,15 @@ public class RealtimeWorkspaceTests
     public Task DraggingOnPlotSelectsIntervalAndCrosshairShowsRawValues() => WpfTestHost.RunAsync(async () =>
     {
         var bus = new DataBus();
-        using var vm = new RealtimeChartViewModel(bus) { PlotControl = new ScottPlot.WPF.WpfPlot() };
+        using var vm = new RealtimeChartViewModel(bus);
+        using var renderer = new ChartRenderer(new ScottPlot.WPF.WpfPlot());
+        renderer.Attach(vm);
         bus.PublishAcquisitionStarted(Configuration());
         await WpfTestHost.PumpAsync();
         var start = new DateTime(2020, 1, 1);
         for (int i = 0; i < 61; i++) Publish(bus, start, i, i, corrected: true);
         vm.RefreshPlot();
-        ScottPlot.Plottables.VerticalSpan[] Spans() => vm.PlotControl.Plot.GetPlottables().OfType<ScottPlot.Plottables.VerticalSpan>().ToArray();
+        ScottPlot.Plottables.VerticalSpan[] Spans() => renderer.SinglePlot.Plot.GetPlottables().OfType<ScottPlot.Plottables.VerticalSpan>().ToArray();
 
         vm.BeginPlotSelection(10.2);
         vm.UpdatePlotSelection(20.4);
@@ -112,13 +117,13 @@ public class RealtimeWorkspaceTests
         Assert.Equal(refreshes, vm.OverlayRefreshCount);
         await WpfTestHost.PumpAsync();
         Assert.Equal(refreshes + 1, vm.OverlayRefreshCount);
-        var readout = Assert.Single(vm.PlotControl.Plot.GetPlottables().OfType<ScottPlot.Plottables.Annotation>());
+        var readout = Assert.Single(renderer.SinglePlot.Plot.GetPlottables().OfType<ScottPlot.Plottables.Annotation>());
         Assert.StartsWith("30.000 s", readout.Text);
         Assert.Contains("CH0  30 nT", readout.Text);
         Assert.Contains("温度  26.03 °C", readout.Text);
         vm.SetHoverTime(null);
         await WpfTestHost.PumpAsync();
-        Assert.Empty(vm.PlotControl.Plot.GetPlottables().OfType<ScottPlot.Plottables.Annotation>());
+        Assert.Empty(renderer.SinglePlot.Plot.GetPlottables().OfType<ScottPlot.Plottables.Annotation>());
 
         vm.Interval.ClearIntervalSelectionCommand.Execute(null);
         Assert.Empty(Spans());
@@ -142,12 +147,13 @@ public class RealtimeWorkspaceTests
             vm.RefreshPlot();
             vm.SetHoverTime(5);
             await WpfTestHost.PumpAsync();
-            Assert.Equal(1, vm.OverlayPlotCount);
+            Assert.True(vm.HasChartRenderer);
+            Assert.Equal(1, view.Renderer.OverlayPlotCount);
 
             // 切页卸载视图后，视图模型不再留住旧图（及其曲线数据）。
             window.Content = null; await WpfTestHost.PumpAsync();
-            Assert.Null(vm.PlotControl);
-            Assert.Equal(0, vm.OverlayPlotCount);
+            Assert.False(vm.HasChartRenderer);
+            Assert.Equal(0, view.Renderer.OverlayPlotCount);
         }
         finally
         {
@@ -205,18 +211,21 @@ public class RealtimeWorkspaceTests
             bus.PublishAcquisitionStarted(Configuration()); await WpfTestHost.PumpAsync();
             var t = DateTime.Now; for (int i = 0; i < 80; i++) Publish(bus, t, i, Math.Sin(i * .12));
             chart.RefreshPlot(); window.UpdateLayout();
-            Assert.NotNull(chart.PlotControl);
+            var chartView = FindVisualChild<RealtimeChartView>(view);
+            Assert.NotNull(chartView);
+            Assert.True(chart.HasChartRenderer);
+            var plot = chartView.Renderer.SinglePlot;
             // 未连接但曲线有数据（例如刚断开）：空状态不遮住曲线。
             Assert.Equal(Visibility.Collapsed, emptyState.Visibility);
             // 默认侧栏和停靠区展开；专注后两者收起，曲线获得更多高度和宽度。
             Assert.True(main.WorkspaceLayout.SidePanelOpen && main.WorkspaceLayout.DockOpen);
-            var dockedHeight = chart.PlotControl.ActualHeight;
-            var dockedWidth = chart.PlotControl.ActualWidth;
+            var dockedHeight = plot.ActualHeight;
+            var dockedWidth = plot.ActualWidth;
             chart.FilterWindowSize = 17;
             main.WorkspaceLayout.ToggleFocusCommand.Execute(null);
             window.UpdateLayout(); await WpfTestHost.PumpAsync();
-            Assert.True(chart.PlotControl.ActualHeight > dockedHeight + 100);
-            Assert.True(chart.PlotControl.ActualWidth > dockedWidth + 300);
+            Assert.True(plot.ActualHeight > dockedHeight + 100);
+            Assert.True(plot.ActualWidth > dockedWidth + 300);
             var screenshot = Environment.GetEnvironmentVariable("MAGNETOMETER_TEST_SCREENSHOTS");
             if (!string.IsNullOrEmpty(screenshot)) SaveScreenshot((FrameworkElement)window.Content, Path.Combine(screenshot, "workspace-focus.png"));
             main.WorkspaceLayout.ToggleFocusCommand.Execute(null);
@@ -225,16 +234,16 @@ public class RealtimeWorkspaceTests
             Assert.Equal(17, chart.FilterWindowSize);
             chart.IsMultiPlotMode = true;
             chart.MultiPlotColumnCount = 2;
-            await WpfTestHost.PumpAsync(); Assert.Equal(4, chart.MultiPlotControls.Count);
+            await WpfTestHost.PumpAsync(); Assert.Equal(4, chartView.Renderer.MultiPlots.Count);
             chart.ComputedChannels.Add(new ComputedChannelDefinition { Name = "总场", Formula = "sqrt(CH0*CH0+CH1*CH1+CH2*CH2)" });
-            Assert.Equal(5, chart.MultiPlotControls.Count);
+            Assert.Equal(5, chartView.Renderer.MultiPlots.Count);
             chart.ComputedChannels[0].Enabled = false;
-            Assert.Equal(4, chart.MultiPlotControls.Count);
+            Assert.Equal(4, chartView.Renderer.MultiPlots.Count);
             chart.IsPaused = true;
             chart.MultiPlotColumnCount = 1;
-            Assert.All(chart.MultiPlotControls, p => Assert.NotEmpty(p.Plot.GetPlottables()));
+            Assert.All(chartView.Renderer.MultiPlots, p => Assert.NotEmpty(p.Plot.GetPlottables()));
             chart.IsMultiPlotMode = false;
-            Assert.Equal(4, chart.PlotControl.Plot.GetPlottables().OfType<ScottPlot.Plottables.Scatter>().Count());
+            Assert.Equal(4, plot.Plot.GetPlottables().OfType<ScottPlot.Plottables.Scatter>().Count());
             chart.IsMultiPlotMode = true;
             chart.MultiPlotColumnCount = 2;
             if (!string.IsNullOrEmpty(screenshot)) SaveScreenshot((FrameworkElement)window.Content, Path.Combine(screenshot, "workspace-expanded.png"));
@@ -259,9 +268,9 @@ public class RealtimeWorkspaceTests
             foreach (var tab in new[] { 0, 1, 2 }) { main.WorkspaceLayout.DockTab = tab; window.UpdateLayout(); await WpfTestHost.PumpAsync(); }
             window.Height = 680; window.Width = 1100;
             window.UpdateLayout(); await WpfTestHost.PumpAsync();
-            Assert.All(chart.MultiPlotControls, p => Assert.True(p.ActualHeight >= 140));
+            Assert.All(chartView.Renderer.MultiPlots, p => Assert.True(p.ActualHeight >= 140));
             chart.ClearChartCommand.Execute(null);
-            Assert.All(chart.MultiPlotControls, p => Assert.Empty(p.Plot.GetPlottables()));
+            Assert.All(chartView.Renderer.MultiPlots, p => Assert.Empty(p.Plot.GetPlottables()));
             Assert.Equal(Visibility.Visible, emptyState.Visibility);
             foreach (var page in new object[] { connection, sessions, commands, history, settings, analysis, ortho })
             {

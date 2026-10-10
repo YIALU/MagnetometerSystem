@@ -1,4 +1,5 @@
 using MagnetometerSystem.App.ViewModels;
+using MagnetometerSystem.App.Views.Charting;
 using MagnetometerSystem.Core.Models;
 using MagnetometerSystem.Core.Services;
 using ScottPlot.WPF;
@@ -15,7 +16,9 @@ public class ZdzUnitAxesTests
         var protocol = ProtocolConfig.CreateZdzC08();
         var bus = new DataBus();
         using var vm = new RealtimeChartViewModel(bus) { AutoScaleY = autoScale };
-        vm.PlotControl = new WpfPlot();
+        using var renderer = new ChartRenderer(new WpfPlot());
+        renderer.Attach(vm);
+        var plot = renderer.SinglePlot.Plot;
         bus.PublishAcquisitionStarted(new SensorConfig
         {
             ChannelCountOverride = protocol.DerivedChannelCount,
@@ -32,17 +35,17 @@ public class ZdzUnitAxesTests
                 ChannelValues = Enumerable.Range(0, 21).Select(ch => ch * 1000.0 + i).ToArray(),
             });
         vm.RefreshPlot();
-        var lines = vm.PlotControl.Plot.GetPlottables().OfType<ScottPlot.Plottables.Scatter>().ToArray();
+        var lines = plot.GetPlottables().OfType<ScottPlot.Plottables.Scatter>().ToArray();
         Assert.Equal(21, lines.Length);
         if (!autoScale)
         {
-            Assert.Equal(vm.YMin, vm.PlotControl.Plot.Axes.Left.Range.Min);
-            Assert.Equal(vm.YMax, vm.PlotControl.Plot.Axes.Left.Range.Max);
+            Assert.Equal(vm.YMin, plot.Axes.Left.Range.Min);
+            Assert.Equal(vm.YMax, plot.Axes.Left.Range.Max);
         }
         for (int ch = 0; ch < lines.Length; ch++)
         {
             Assert.Equal(protocol.DerivedChannelUnits[ch], lines[ch].Axes.YAxis.Label.Text);
-            if (autoScale || !ReferenceEquals(lines[ch].Axes.YAxis, vm.PlotControl.Plot.Axes.Left))
+            if (autoScale || !ReferenceEquals(lines[ch].Axes.YAxis, plot.Axes.Left))
             {
                 var range = lines[ch].Axes.YAxis.Range;
                 Assert.True(range.Min <= ch * 1000.0 && range.Max >= ch * 1000.0 + 3,
@@ -57,8 +60,8 @@ public class ZdzUnitAxesTests
         Assert.Equal("m", lines[20].Axes.YAxis.Label.Text);
         foreach (var config in vm.ChannelConfigs) config.Visible = config.Unit == "nT";
         vm.RefreshPlot();
-        Assert.Equal(9, vm.PlotControl.Plot.GetPlottables().OfType<ScottPlot.Plottables.Scatter>().Count());
-        Assert.Single(vm.PlotControl.Plot.GetPlottables().OfType<ScottPlot.Plottables.Scatter>().Select(s => s.Axes.YAxis).Distinct());
+        Assert.Equal(9, plot.GetPlottables().OfType<ScottPlot.Plottables.Scatter>().Count());
+        Assert.Single(plot.GetPlottables().OfType<ScottPlot.Plottables.Scatter>().Select(s => s.Axes.YAxis).Distinct());
         bus.PublishAcquisitionStopped();
         await WpfTestHost.PumpAsync();
     });

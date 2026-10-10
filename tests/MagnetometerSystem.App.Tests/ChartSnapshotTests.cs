@@ -1,4 +1,5 @@
 using MagnetometerSystem.App.ViewModels;
+using MagnetometerSystem.App.Views.Charting;
 using MagnetometerSystem.Core.Models;
 using MagnetometerSystem.Core.Services;
 using ScottPlot.Plottables;
@@ -22,10 +23,11 @@ public class ChartSnapshotTests
             var bus = new DataBus();
             using var vm = new RealtimeChartViewModel(bus)
             {
-                PlotControl = new ScottPlot.WPF.WpfPlot(),
                 TimeWindowSeconds = displayWindow,
                 DownsampleTargetCount = 0,
             };
+            using var renderer = new ChartRenderer(new ScottPlot.WPF.WpfPlot());
+            renderer.Attach(vm);
             await StartChartAsync(bus, vm, 2);
             ConfigureStatistics(vm, statisticsWindow);
             vm.ChannelConfigs[0].DisplayOffset = 7;
@@ -46,7 +48,7 @@ public class ChartSnapshotTests
             vm.RefreshPlot();
 
             Assert.Equal(11, vm.DataPointCount);
-            var lines = vm.PlotControl.Plot.GetPlottables().OfType<Scatter>().ToArray();
+            var lines = renderer.SinglePlot.Plot.GetPlottables().OfType<Scatter>().ToArray();
             Assert.Equal(2, lines.Length);
             var expectedTimes = Enumerable.Range(firstDisplayPoint, 11 - firstDisplayPoint).Select(i => (double)i).ToArray();
             AssertLine(Assert.Single(lines.Where(p => p.LegendText.StartsWith("CH0"))),
@@ -66,10 +68,11 @@ public class ChartSnapshotTests
             var bus = new DataBus();
             using var vm = new RealtimeChartViewModel(bus)
             {
-                PlotControl = new ScottPlot.WPF.WpfPlot(),
                 TimeWindowSeconds = 2,
                 DownsampleTargetCount = 0,
             };
+            using var renderer = new ChartRenderer(new ScottPlot.WPF.WpfPlot());
+            renderer.Attach(vm);
             await StartChartAsync(bus, vm, 1);
             ConfigureStatistics(vm, 6);
             var reading = new MagnetometerReading
@@ -91,18 +94,18 @@ public class ChartSnapshotTests
             Feed(0, 100004);
             vm.RefreshPlot();
             Assert.Equal(100000, vm.DataPointCount);
-            AssertLine(SingleLine(vm), [100002, 100003, 100004], [101002, 101003, 101004]);
+            AssertLine(SingleLine(renderer), [100002, 100003, 100004], [101002, 101003, 101004]);
             Assert.Contains($"CH0 Avg:{100001d:F2}", vm.StatisticsText);
 
             vm.IsPaused = true;
             Feed(100005, 100014);
             vm.TimeWindowSeconds = 0;
             vm.StatisticsConfig.WindowSeconds = 0;
-            vm.PlotControl.Plot.Clear();
+            renderer.SinglePlot.Plot.Clear();
             vm.RefreshPlot();
 
             // Pausing freezes the complete retained history once, not just the old 2 s window.
-            var frozen = SingleLine(vm).Data.GetScatterPoints().ToArray();
+            var frozen = SingleLine(renderer).Data.GetScatterPoints().ToArray();
             Assert.Equal(100000, frozen.Length);
             Assert.Equal(5, frozen[0].X);
             Assert.Equal(1005, frozen[0].Y);
@@ -116,7 +119,7 @@ public class ChartSnapshotTests
             vm.StatisticsConfig.WindowSeconds = 6;
             vm.IsPaused = false;
             vm.RefreshPlot();
-            AssertLine(SingleLine(vm), [100012, 100013, 100014], [101012, 101013, 101014]);
+            AssertLine(SingleLine(renderer), [100012, 100013, 100014], [101012, 101013, 101014]);
             Assert.Equal(100000, vm.DataPointCount);
             Assert.Equal("100014 nT", vm.ChannelConfigs[0].LatestValue);
             Assert.Contains($"CH0 Avg:{100011d:F2}", vm.StatisticsText);
@@ -161,7 +164,7 @@ public class ChartSnapshotTests
             Assert.Equal(channels, vm.ChannelConfigs.Count);
             Assert.Equal("64 nT", vm.ChannelConfigs[64].LatestValue);
             Assert.Contains($"CH64 Avg:{64d:F2}", vm.StatisticsText);
-            // No PlotControl is needed: actual RefreshPlot still captures all 65 channels
+            // No renderer is attached: actual RefreshPlot still captures all 65 channels
             // and computes raw statistics. Input retains every point; display downsampling is off.
             // Allow small runtime bookkeeping differences, but never a full-history copy
             // (the old implementation allocated over 100 MB per refresh in this case).
@@ -192,8 +195,8 @@ public class ChartSnapshotTests
         vm.StatisticsConfig.ShowPeakToPeak = false;
     }
 
-    private static Scatter SingleLine(RealtimeChartViewModel vm) =>
-        Assert.Single(vm.PlotControl!.Plot.GetPlottables().OfType<Scatter>());
+    private static Scatter SingleLine(ChartRenderer renderer) =>
+        Assert.Single(renderer.SinglePlot.Plot.GetPlottables().OfType<Scatter>());
 
     private static void AssertLine(Scatter line, IEnumerable<double> times, IEnumerable<double> values)
     {
