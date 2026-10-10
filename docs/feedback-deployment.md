@@ -69,9 +69,10 @@ for ident, state, payload, url in c.execute('SELECT id,state,payload,issue_url F
 PY
 ```
 
-按反馈编号导出附带日志（Issue 中注明了编号）：
+按反馈编号导出附带日志（Issue 中注明了编号）。先用 `install` 建好仅自己可读写（0600）的空文件，已存在的文件也会被清空并收紧权限：
 
 ```bash
+install -m 600 /dev/null feedback-logs.txt
 sudo python3 - '<反馈编号>' > feedback-logs.txt <<'PY'
 import sqlite3, json, sys, base64, gzip
 c = sqlite3.connect('file:/var/lib/magnetometer-feedback/feedback.db?mode=ro', uri=True)
