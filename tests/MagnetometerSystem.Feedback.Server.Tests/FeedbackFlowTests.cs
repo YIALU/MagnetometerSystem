@@ -147,6 +147,40 @@ public sealed class FeedbackFlowTests : IDisposable
         Assert.Equal("synced", (await store.ReceiptAsync(request.FeedbackId))!.State);
     }
 
+    [Fact]
+    public async Task AttachedLogsAreStoredPrivatelyAndOnlyNotedInIssue()
+    {
+        var random = new Random(7);
+        // 不可压缩的最大日志 + 最长中文正文，验证请求体上限足够。
+        var noise = new string(Enumerable.Range(0, FeedbackLogPayload.MaxTextBytes - 64).Select(_ => (char)random.Next(33, 127)).ToArray());
+        var logText = "[ERR] 保存失败 C:\\Users\\<用户>\n" + noise;
+        var request = Request() with { Scenario = new string('场', 5000), Description = new string('述', 20000), Logs = FeedbackLogPayload.Encode(logText) };
+        using var factory = Factory(); using var client = factory.CreateClient();
+        using var result = await client.PostAsJsonAsync("/api/feedback", request);
+        Assert.Equal(HttpStatusCode.Accepted, result.StatusCode);
+
+        using var connection = new SqliteConnection($"Data Source={Database}"); connection.Open();
+        using var command = connection.CreateCommand(); command.CommandText = "SELECT payload FROM feedback";
+        var stored = JsonSerializer.Deserialize<FeedbackSubmission>((string)command.ExecuteScalar()!)!;
+        Assert.True(FeedbackLogPayload.TryDecode(stored.Logs!, out var decoded)); Assert.Equal(logText, decoded);
+
+        var issue = GitHubFeedbackWorker.IssueBody(request);
+        Assert.DoesNotContain(request.Logs!, issue); Assert.DoesNotContain("保存失败", issue);
+        Assert.Contains("已附带程序日志", issue); Assert.Contains(request.FeedbackId.ToString(), issue);
+        Assert.DoesNotContain("已附带程序日志", GitHubFeedbackWorker.IssueBody(request with { Logs = "" }));
+        Assert.DoesNotContain("已附带程序日志", GitHubFeedbackWorker.IssueBody(request with { Logs = null }));
+    }
+
+    [Fact]
+    public async Task RejectsMalformedOrOversizedLogs()
+    {
+        using var factory = Factory(); using var client = factory.CreateClient();
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.PostAsJsonAsync("/api/feedback", Request() with { Logs = "not-gzip" })).StatusCode);
+        var tooLong = new string('A', FeedbackLogPayload.MaxEncodedLength + 4);
+        var status = (await client.PostAsJsonAsync("/api/feedback", Request() with { Logs = tooLong })).StatusCode;
+        Assert.True(status is HttpStatusCode.BadRequest or HttpStatusCode.RequestEntityTooLarge, status.ToString());
+    }
+
     private GitHubFeedbackWorker Worker(FeedbackStore store, Handler handler)
     {
         var file = Path.Combine(_directory, "fake-token"); File.WriteAllText(file, "test-only-not-a-credential");

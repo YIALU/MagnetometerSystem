@@ -90,6 +90,88 @@ public sealed class FeedbackUiTests
         }
         finally { File.Delete(blockingFile); }
     });
+    [Fact]
+    public Task AttachedLogsAreFixedOnFirstSubmitAndResentUnchangedAfterRestart() => WpfTestHost.RunAsync(async () =>
+    {
+        var path = Path.Combine(Path.GetTempPath(), "feedback-logs-" + Guid.NewGuid(), "draft.json");
+        try
+        {
+            var logs = new LogSource("第一次读取的日志");
+            var client = new Client { Fail = true }; var first = new FeedbackViewModel(client, new(path), logs); await first.InitializeAsync();
+            Assert.True(first.IncludeLogs);
+            first.Scenario = "长时间采集"; first.Description = "断开后数据少了"; await first.SaveDraftAsync();
+            await first.SubmitCommand.ExecuteAsync(null);
+            var sent = client.Last!;
+            Assert.True(FeedbackLogPayload.TryDecode(sent.Logs!, out var text)); Assert.Equal("第一次读取的日志", text);
+
+            logs.Text = "之后又写入的日志"; client.Fail = false;
+            var restarted = new FeedbackViewModel(client, new(path), logs); await restarted.InitializeAsync();
+            Assert.True(restarted.IncludeLogs);
+            Assert.Equal("第一次读取的日志", await restarted.PreviewLogsAsync());
+            await restarted.SubmitCommand.ExecuteAsync(null);
+            Assert.True(restarted.HasSubmitted);
+            Assert.Equal(sent, client.Last);
+            Assert.Equal(1, logs.Calls);
+        }
+        finally { if (Directory.Exists(Path.GetDirectoryName(path))) Directory.Delete(Path.GetDirectoryName(path)!, true); }
+    });
+
+    [Fact]
+    public Task OptOutSurvivesRestartAndRetrySendsNoLogs() => WpfTestHost.RunAsync(async () =>
+    {
+        var path = Path.Combine(Path.GetTempPath(), "feedback-optout-" + Guid.NewGuid(), "draft.json");
+        try
+        {
+            var logs = new LogSource("不应发送");
+            var client = new Client { Fail = true }; var first = new FeedbackViewModel(client, new(path), logs); await first.InitializeAsync();
+            first.IncludeLogs = false; first.Scenario = "采集"; first.Description = "结果不明";
+            await first.SubmitCommand.ExecuteAsync(null);
+            var sent = client.Last!; Assert.Null(sent.Logs);
+
+            client.Fail = false;
+            var restarted = new FeedbackViewModel(client, new(path), logs); await restarted.InitializeAsync();
+            Assert.False(restarted.IncludeLogs);
+            await restarted.SubmitCommand.ExecuteAsync(null);
+            Assert.Equal(sent, client.Last); Assert.Equal(0, logs.Calls);
+        }
+        finally { if (Directory.Exists(Path.GetDirectoryName(path))) Directory.Delete(Path.GetDirectoryName(path)!, true); }
+    });
+
+    [Fact]
+    public Task UncheckedOrUnavailableLogsStillSubmitText() => WpfTestHost.RunAsync(async () =>
+    {
+        var path = Path.Combine(Path.GetTempPath(), "feedback-nologs-" + Guid.NewGuid(), "draft.json");
+        var owner = new Window { Width = 200, Height = 200, Left = -10000, Top = -10000, ShowActivated = false };
+        try
+        {
+            var client = new Client(); var vm = new FeedbackViewModel(client, new(path), new LogSource("不应发送"));
+            owner.Show();
+            var dialog = new FeedbackDialog(vm) { Owner = owner, Left = -10000, Top = -10000, ShowActivated = false };
+            dialog.Show(); await WpfTestHost.PumpAsync();
+            var checkbox = (CheckBox)dialog.FindName("IncludeLogsInput");
+            Assert.True(checkbox.IsVisible); Assert.True(checkbox.IsChecked);
+            checkbox.IsChecked = false; vm.Scenario = "导出"; vm.Description = "问题";
+            await vm.SubmitCommand.ExecuteAsync(null);
+            Assert.Null(client.Last!.Logs); Assert.True(vm.HasSubmitted);
+            dialog.Close(); await WpfTestHost.PumpAsync();
+
+            var failing = new FeedbackViewModel(client, new(path), new LogSource(null) { Fail = true }); await failing.InitializeAsync();
+            failing.Scenario = "导出"; failing.Description = "日志读不到";
+            await failing.SubmitCommand.ExecuteAsync(null);
+            Assert.True(failing.HasSubmitted); Assert.Equal("", client.Last!.Logs);
+
+            var withoutSource = new FeedbackViewModel(client, new(path)); await withoutSource.InitializeAsync();
+            Assert.False(withoutSource.CanAttachLogs); Assert.False(withoutSource.IncludeLogs);
+        }
+        finally { owner.Close(); if (Directory.Exists(Path.GetDirectoryName(path))) Directory.Delete(Path.GetDirectoryName(path)!, true); }
+    });
+
+    private sealed class LogSource(string? text) : IFeedbackLogSource
+    {
+        public string? Text { get; set; } = text; public bool Fail { get; set; } public int Calls { get; private set; }
+        public Task<string?> CollectAsync(CancellationToken ct = default)
+        { Calls++; return Fail ? Task.FromException<string?>(new IOException("locked")) : Task.FromResult(Text); }
+    }
     private sealed class Client : IFeedbackClient
     {
         public FeedbackSubmission? Last { get; private set; } public bool Fail { get; set; }

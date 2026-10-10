@@ -1,8 +1,8 @@
 # 匿名反馈服务维护
 
-用户窗口只包含使用场景、问题或需求描述，以及选填姓名和联系方式。入口位于主窗口状态栏「反馈与建议」和「关于」。非模态窗口允许继续操作主窗口；草稿独立保存在用户 AppData 的 `MagnetometerSystem/feedback/draft.json`，不占采集数据库写锁。
+用户窗口只包含使用场景、问题或需求描述、选填姓名和联系方式，以及「附带最近 3 天的程序日志」选项（默认勾选，可预览）。入口位于主窗口状态栏「反馈与建议」和「关于」。非模态窗口允许继续操作主窗口；草稿独立保存在用户 AppData 的 `MagnetometerSystem/feedback/draft.json`，不占采集数据库写锁。
 
-场景、描述和软件版本用于公开 GitHub Issue，姓名和联系方式只留在服务器私有数据库。公开回执仅包含随机编号、同步状态和已创建的 Issue 链接。
+场景、描述和软件版本用于公开 GitHub Issue，姓名、联系方式和附带日志只留在服务器私有数据库；Issue 里只注明“已附带程序日志”和反馈编号。日志由客户端从最新往前取，最多 512 KB 文本，去掉 Windows 用户名（含用户目录路径）和计算机名，gzip 后以 Base64 放在请求的 `Logs` 字段；局域网 IP 等连接参数保留。公开回执仅包含随机编号、同步状态和已创建的 Issue 链接。
 
 ## 当前部署
 
@@ -69,7 +69,20 @@ for ident, state, payload, url in c.execute('SELECT id,state,payload,issue_url F
 PY
 ```
 
-该终端结果包含用户个人信息，不能复制到公开 Issue 或共享日志。备份使用 SQLite backup API，不只复制正在写入的单个 `.db` 文件：
+按反馈编号导出附带日志（Issue 中注明了编号）。先用 `install` 建好仅自己可读写（0600）的空文件，已存在的文件也会被清空并收紧权限：
+
+```bash
+install -m 600 /dev/null feedback-logs.txt
+sudo python3 - '<反馈编号>' > feedback-logs.txt <<'PY'
+import sqlite3, json, sys, base64, gzip
+c = sqlite3.connect('file:/var/lib/magnetometer-feedback/feedback.db?mode=ro', uri=True)
+row = c.execute('SELECT payload FROM feedback WHERE id=?', (sys.argv[1],)).fetchone()
+logs = json.loads(row[0]).get('Logs') if row else None
+sys.stdout.write(gzip.decompress(base64.b64decode(logs)).decode('utf-8') if logs else '（未附带日志）\n')
+PY
+```
+
+该终端结果和导出的日志包含用户个人信息或现场细节，不能复制到公开 Issue 或共享日志。备份使用 SQLite backup API，不只复制正在写入的单个 `.db` 文件：
 
 ```bash
 sudo python3 - <<'PY'
@@ -93,6 +106,8 @@ PY
 dotnet publish src/MagnetometerSystem.Feedback.Server/MagnetometerSystem.Feedback.Server.csproj -c Release -r linux-x64 --self-contained true -o .codex_tmp/feedback/server-publish
 tar -czf .codex_tmp/feedback/server-bundle.tar.gz -C .codex_tmp/feedback/server-publish .
 ```
+
+请求体上限为 1 MB（含附带日志）。**带日志的客户端发布前必须先部署新版服务**：旧服务的上限是 200 KB，带日志的请求会被拒收（用户看到“反馈服务暂时无法接收”）。
 
 服务器部署文件包括两个 systemd unit、安装脚本及首次 HTTPS 配置脚本。安装脚本更新新服务的 current 链接并重启它们，保留反馈数据库和现有代理配置；不要对服务器已有服务目录运行该脚本。首次 HTTPS 配置用 `configure-https.sh <public IPv4>`。服务单实例运行；不能启动第二个进程共享同一反馈数据库。
 
