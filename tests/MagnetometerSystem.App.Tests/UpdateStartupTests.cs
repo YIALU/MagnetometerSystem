@@ -269,6 +269,72 @@ public class UpdateStartupTests
     }
 
     [Fact]
+    public async Task SwitchingSourceDropsCachedUpdateAndMakesCheckDue()
+    {
+        var preferences = new Preferences();
+        await preferences.SetPreferenceAsync(UpdateCoordinator.KeyLastCheckUtc, DateTime.UtcNow);
+        await preferences.SetPreferenceAsync(UpdateCoordinator.KeyKnownUpdate, Info() with { Source = UpdateSource.GitHub });
+        var service = new RecordingService { Result = UpdateCheckResult.UpToDate() };
+        var coordinator = new UpdateCoordinator(service, preferences) { StartupDelay = TimeSpan.Zero };
+        var cleared = 0;
+        coordinator.KnownUpdateCleared += () => cleared++;
+        await coordinator.RunStartupCheckAsync(_ => throw new InvalidOperationException("unexpected prompt"), _ => Task.CompletedTask);
+        Assert.NotNull(coordinator.LastKnownUpdate);
+
+        await coordinator.SetSourceAsync(UpdateSource.Automatic); // 未变化：缓存保留。
+        Assert.NotNull(coordinator.LastKnownUpdate);
+        await coordinator.SetSourceAsync(UpdateSource.Gitee);
+
+        Assert.Null(coordinator.LastKnownUpdate);
+        Assert.Equal(1, cleared);
+        Assert.Null(await preferences.GetPreferenceAsync<UpdateInfo>(UpdateCoordinator.KeyKnownUpdate));
+        Assert.Null(await preferences.GetPreferenceAsync<DateTime?>(UpdateCoordinator.KeyLastCheckUtc));
+        await coordinator.RunStartupCheckAsync(_ => throw new InvalidOperationException("unexpected prompt"));
+        Assert.Equal(1, service.CheckCalls);
+    }
+
+    [Fact]
+    public async Task ResultFromBeforeSourceSwitchIsDiscarded()
+    {
+        var response = new TaskCompletionSource<UpdateCheckResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var service = new RecordingService { PendingResponse = response.Task };
+        var preferences = new Preferences();
+        var coordinator = new UpdateCoordinator(service, preferences);
+        var pending = coordinator.CheckManuallyAsync();
+        try
+        {
+            await service.CheckEntered.Task.WaitAsync(TimeSpan.FromSeconds(15));
+            await coordinator.SetSourceAsync(UpdateSource.GitHub);
+        }
+        finally { response.TrySetResult(UpdateCheckResult.Available(Info())); }
+        await pending;
+        Assert.Null(coordinator.LastKnownUpdate);
+        Assert.Null(await preferences.GetPreferenceAsync<UpdateInfo>(UpdateCoordinator.KeyKnownUpdate));
+        Assert.Null(await preferences.GetPreferenceAsync<DateTime?>(UpdateCoordinator.KeyLastCheckUtc));
+    }
+
+    [Fact]
+    public async Task ConcurrentChecksRunOneAtATime()
+    {
+        var response = new TaskCompletionSource<UpdateCheckResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var service = new RecordingService { PendingResponse = response.Task };
+        var coordinator = new UpdateCoordinator(service, new Preferences());
+        var first = coordinator.CheckManuallyAsync();
+        Task<UpdateCheckResult>? second = null;
+        try
+        {
+            await service.CheckEntered.Task.WaitAsync(TimeSpan.FromSeconds(15));
+            second = coordinator.CheckManuallyAsync();
+            await Task.Delay(200);
+            Assert.Equal(1, service.CheckCalls);
+        }
+        finally { response.TrySetResult(UpdateCheckResult.Available(Info())); }
+        await first;
+        await second!.WaitAsync(TimeSpan.FromSeconds(15));
+        Assert.Equal(2, service.CheckCalls);
+    }
+
+    [Fact]
     public async Task LastCheckInTheFutureIsTreatedAsDue()
     {
         var preferences = new Preferences();

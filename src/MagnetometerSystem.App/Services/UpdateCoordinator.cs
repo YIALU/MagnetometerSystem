@@ -42,6 +42,12 @@ public sealed class UpdateCoordinator
     private readonly IUpdateService _updateService;
     private readonly IUserPreferencesService _preferences;
     private readonly SemaphoreSlim _sourceGate = new(1, 1);
+
+    /// <summary>定时检查与手动检查串行执行，慢的旧结果不会覆盖新结果。</summary>
+    private readonly SemaphoreSlim _checkGate = new(1, 1);
+
+    /// <summary>每次切换更新平台加一；切换前发出、切换后才返回的检查结果作废。</summary>
+    private int _sourceGeneration;
     private bool _sourceLoaded;
     private bool _dialogOpen;
     private string? _promptedVersion;
@@ -87,15 +93,40 @@ public sealed class UpdateCoordinator
     public async Task SetSourceAsync(UpdateSource source)
     {
         if (!Enum.IsDefined(source)) throw new ArgumentOutOfRangeException(nameof(source));
+        var changed = false;
         await _sourceGate.WaitAsync();
         try
         {
+            var previous = _updateService.Options.PreferredSource;
+            if (!_sourceLoaded)
+            {
+                var saved = await _preferences.GetPreferenceAsync<string>(KeySource);
+                previous = Enum.TryParse<UpdateSource>(saved, out var parsed) && Enum.IsDefined(parsed) ? parsed : UpdateSource.Automatic;
+            }
+            changed = previous != source;
+            if (changed) Interlocked.Increment(ref _sourceGeneration);
             _updateService.Options.PreferredSource = source;
             _sourceLoaded = true;
             await _preferences.SetPreferenceAsync(KeySource, source.ToString());
         }
         catch (Exception ex) { Log.Warning(ex, "保存更新平台失败"); }
         finally { _sourceGate.Release(); }
+
+        if (changed) await InvalidateKnownUpdateAsync();
+    }
+
+    /// <summary>
+    /// 换了更新平台后，以前记下的新版本和检查时间都不再作数：撤下角标，
+    /// 下一轮定时检查按新平台重新联网。
+    /// </summary>
+    private async Task InvalidateKnownUpdateAsync()
+    {
+        var hadUpdate = LastKnownUpdate is not null;
+        LastKnownUpdate = null;
+        await TrySetKnownUpdateAsync(null);
+        try { await _preferences.SetPreferenceAsync<DateTime?>(KeyLastCheckUtc, null); }
+        catch (Exception ex) { Log.Warning(ex, "清除检查更新时间失败"); }
+        if (hadUpdate) KnownUpdateCleared?.Invoke();
     }
 
     public async Task<bool> IsAutoCheckEnabledAsync()
@@ -194,18 +225,25 @@ public sealed class UpdateCoordinator
 
     private async Task CheckSilentlyAsync(Func<UpdateInfo, Task> onUpdateFound)
     {
-        await GetSourceAsync();
-        var result = await _updateService.CheckForUpdateAsync();
-        if (result.WarningMessage != null) Log.Warning("部分更新平台检查失败: {Message}", result.WarningMessage);
-
-        if (result.Status == UpdateCheckStatus.Failed)
+        UpdateCheckResult result;
+        await _checkGate.WaitAsync();
+        try
         {
-            // 不记录本次检查时间，否则断网一次要等 24 小时才会再试
-            Log.Warning("静默检查更新失败: {Message}", result.ErrorMessage);
-            return;
-        }
+            await GetSourceAsync();
+            var generation = Volatile.Read(ref _sourceGeneration);
+            result = await _updateService.CheckForUpdateAsync();
+            if (result.WarningMessage != null) Log.Warning("部分更新平台检查失败: {Message}", result.WarningMessage);
 
-        await RecordResultAsync(result);
+            if (result.Status == UpdateCheckStatus.Failed)
+            {
+                // 不记录本次检查时间，否则断网一次要等 24 小时才会再试
+                Log.Warning("静默检查更新失败: {Message}", result.ErrorMessage);
+                return;
+            }
+
+            if (!await RecordResultAsync(result, generation)) return;
+        }
+        finally { _checkGate.Release(); }
 
         if (result.Status != UpdateCheckStatus.UpdateAvailable || result.Info is null)
         {
@@ -252,19 +290,32 @@ public sealed class UpdateCoordinator
     /// <summary>"关于"窗口里的手动检查。结果原样返回，由调用方决定怎么提示。</summary>
     public async Task<UpdateCheckResult> CheckManuallyAsync(CancellationToken ct = default)
     {
-        await GetSourceAsync();
-        ct.ThrowIfCancellationRequested();
-        var result = await _updateService.CheckForUpdateAsync(ct);
-        if (result.Status != UpdateCheckStatus.Failed) await RecordResultAsync(result);
-        return result;
+        await _checkGate.WaitAsync(ct);
+        try
+        {
+            await GetSourceAsync();
+            ct.ThrowIfCancellationRequested();
+            var generation = Volatile.Read(ref _sourceGeneration);
+            var result = await _updateService.CheckForUpdateAsync(ct);
+            if (result.Status != UpdateCheckStatus.Failed) await RecordResultAsync(result, generation);
+            return result;
+        }
+        finally { _checkGate.Release(); }
     }
 
     /// <summary>
     /// 记录一次成功的检查。只有所有平台都答复时才写检查时间和"已是最新"；
     /// 部分平台失败时发现的新版本照样记下，但不清除以前记下的版本。
+    /// 检查期间换过平台时整条结果作废，返回 false。
     /// </summary>
-    private async Task RecordResultAsync(UpdateCheckResult result)
+    private async Task<bool> RecordResultAsync(UpdateCheckResult result, int generation)
     {
+        if (generation != Volatile.Read(ref _sourceGeneration))
+        {
+            Log.Information("检查期间更新平台已切换，忽略这次结果");
+            return false;
+        }
+
         if (result.Status == UpdateCheckStatus.UpdateAvailable && result.Info is not null)
         {
             LastKnownUpdate = result.Info;
@@ -279,6 +330,7 @@ public sealed class UpdateCoordinator
         }
 
         if (result.WarningMessage == null) await TrySetLastCheckAsync(UtcNow());
+        return true;
     }
 
     /// <summary>
