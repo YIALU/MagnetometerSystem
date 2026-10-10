@@ -74,8 +74,15 @@ public partial class AboutDialog : Window
             switch (result.Status)
             {
                 case UpdateCheckStatus.UpdateAvailable when result.Info is not null:
-                    UpdateStatusText.Text = $"发现新版本 v{result.Info.Version}（{result.Info.SourceDisplay}）";
-                    await _updateCoordinator.ShowUpdateDialogAsync(this, result.Info);
+                    // 回到 UI 线程前，排队的定时检查可能已写入更新的结果；以最新结果为准。
+                    var info = _updateCoordinator.IsCurrentUpdate(result.Info) ? result.Info : _updateCoordinator.LastKnownUpdate;
+                    if (info is null)
+                    {
+                        UpdateStatusText.Text = "检查结果已有变化，请重新检查。";
+                        break;
+                    }
+                    UpdateStatusText.Text = $"发现新版本 v{info.Version}（{info.SourceDisplay}）";
+                    await _updateCoordinator.ShowUpdateDialogAsync(this, info);
                     break;
 
                 case UpdateCheckStatus.UpToDate:
