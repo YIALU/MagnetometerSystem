@@ -1,12 +1,10 @@
 using System.Collections.ObjectModel;
-using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Globalization;
 using System.Windows;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using MagnetometerSystem.Core.Helpers;
 using MagnetometerSystem.Core.Models;
 using MagnetometerSystem.Core.Processing;
 using MagnetometerSystem.Core.Services;
@@ -35,25 +33,17 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
     private readonly IUserPreferencesService? _preferencesService;
     public WorkspaceLayoutViewModel WorkspaceLayout { get; } = new();
 
-    // 每个通道的数据缓冲（时间戳 + 值）
-    private readonly CircularBuffer<double> _timeBuffer = new(100000);
-    private CircularBuffer<double>[] _channelBuffers;
-    private CircularBuffer<double>[] _rawChannelBuffers = [];
-    private readonly object _dataLock = new();
+    // 时间轴 + 每通道显示值与原始值的环形缓冲，以及通道布局
+    private readonly ChartSampleBuffer _samples = new();
 
-    /// <summary>每通道环形缓冲的容量（点数）</summary>
-    private const int ChannelBufferCapacity = 100000;
-
-    private int _channelCount;
-    private string[] _channelNames = [];
-    private string[] _channelUnits = [];
     private readonly Dictionary<string, ScottPlot.IYAxis> _unitAxes = new();
     private int _layoutRefreshPending;
-    private DateTime _startTime;
     private bool _isAcquiring;
     private bool _disposed;
-    private sealed record PlotDataSnapshot(double[] Times, double[][] Channels, double[][] Raw, int TotalCount);
-    private PlotDataSnapshot? _pausedData;
+    private ChartSampleSnapshot? _pausedData;
+
+    /// <summary>当前通道布局（通道数、名称、单位）；读数的通道多于协议时会扩展。</summary>
+    private ChartChannelLayout Layout => _samples.Layout;
 
     // ---- 图表设置 ----
 
@@ -99,6 +89,8 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
 
     [ObservableProperty]
     private long _dataPointCount;
+
+    partial void OnDataPointCountChanged(long value) => Offsets.SetDataPointCount(value);
 
     // 每通道显示配置（偏移、颜色、可见性）
     [ObservableProperty]
@@ -188,17 +180,20 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
     /// <summary>总场与梯度向导，确认后添加到 <see cref="ComputedChannels"/>。</summary>
     public ComputedChannelWizardViewModel Wizard { get; }
 
+    // ---- 显示偏移 ----
+
+    /// <summary>一键归零、取消归零和单个通道的显示偏移。</summary>
+    public DisplayOffsetViewModel Offsets { get; }
+
     public RealtimeChartViewModel(DataBus dataBus, IUserPreferencesService? preferencesService = null, IDialogService? dialogs = null)
     {
         _dataBus = dataBus;
         _preferencesService = preferencesService;
         Wizard = new ComputedChannelWizardViewModel(ComputedChannels, ProtocolChannelSources);
-        Interval = new IntervalAnalysisViewModel(SnapshotRawData, dialogs ?? new WpfDialogService());
+        Interval = new IntervalAnalysisViewModel(_samples.SnapshotRaw, dialogs ?? new WpfDialogService());
         Interval.PropertyChanged += OnIntervalPropertyChanged;
-
-        // 通道缓冲按实际协议通道数惰性分配（见 EnsureChannelBuffers），
-        // 这里先建一个最小实例，避免其余代码面对 null。
-        _channelBuffers = [];
+        Offsets = new DisplayOffsetViewModel(ChannelConfigs, ComputedChannels, _samples, _computedEvaluator, _displayPipeline,
+            CurrentDisplayedSamples, autoScaleY => { if (autoScaleY) AutoScaleY = true; RefreshPlot(); });
 
         _dataBus.ProcessedReadingReceived += OnReadingReceived;
         _dataBus.AcquisitionStarted += OnAcquisitionStarted;
@@ -209,9 +204,6 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
             Interval = TimeSpan.FromMilliseconds(1000.0 / _refreshRate),
         };
         _renderTimer.Tick += OnRenderTick;
-
-        ChannelConfigs.CollectionChanged += OnOffsetSourcesChanged;
-        ComputedChannels.CollectionChanged += OnOffsetSourcesChanged;
     }
 
     partial void OnRefreshRateChanged(int value)
@@ -223,49 +215,11 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
     /// <summary>停止定时刷新，由调用方用 <see cref="RefreshPlot"/> 显式驱动（测试用，避免与定时器竞争）。</summary>
     internal void StopRenderTimer() => _renderTimer.Stop();
 
-    /// <summary>
-    /// 确保通道缓冲至少覆盖 <paramref name="required"/> 个通道。
-    /// 已有缓冲原样保留（避免丢掉正在显示的数据），只补齐缺少的部分。
-    /// 调用方需持有 _dataLock。
-    /// </summary>
-    private void EnsureChannelBuffers(int required)
-    {
-        if (required <= _channelBuffers.Length)
-            return;
-
-        var grown = new CircularBuffer<double>[required];
-        Array.Copy(_channelBuffers, grown, _channelBuffers.Length);
-        for (int i = _channelBuffers.Length; i < required; i++)
-            grown[i] = new CircularBuffer<double>(ChannelBufferCapacity);
-        _channelBuffers = grown;
-        var raw = new CircularBuffer<double>[required];
-        Array.Copy(_rawChannelBuffers, raw, _rawChannelBuffers.Length);
-        for (int i = _rawChannelBuffers.Length; i < required; i++)
-            raw[i] = new CircularBuffer<double>(ChannelBufferCapacity);
-        _rawChannelBuffers = raw;
-    }
-
     private void OnAcquisitionStarted(SensorConfig config)
     {
-        int channelCount = config.ChannelCount;
-        string[] channelNames = config.ChannelNames;
-        bool unitsChanged = !_channelUnits.SequenceEqual(config.ChannelUnits);
-        _startTime = DateTime.Now;
+        bool unitsChanged = !Layout.Units.SequenceEqual(config.ChannelUnits);
         _isAcquiring = true;
-
-        lock (_dataLock)
-        {
-            _channelCount = channelCount;
-            _channelNames = channelNames;
-            _channelUnits = config.ChannelUnits;
-            EnsureChannelBuffers(channelCount);
-            _timeBuffer.Clear();
-            for (int i = 0; i < _channelBuffers.Length; i++)
-            {
-                _channelBuffers[i].Clear();
-                _rawChannelBuffers[i].Clear();
-            }
-        }
+        _samples.Reset(config.ChannelCount, config.ChannelNames, config.ChannelUnits);
 
         Application.Current?.Dispatcher.BeginInvoke(() =>
         {
@@ -273,21 +227,22 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
             IsPaused = false;
 
             // 初始化通道显示配置：仅当通道数量或名称发生变化时才重建，否则保留现有 Visible 等用户配置
+            var layout = Layout;
             bool channelLayoutChanged = unitsChanged ||
-                ChannelConfigs.Count != _channelCount ||
-                !Enumerable.Range(0, _channelCount).All(i =>
+                ChannelConfigs.Count != layout.Count ||
+                !Enumerable.Range(0, layout.Count).All(i =>
                     i < ChannelConfigs.Count &&
-                    i < _channelNames.Length &&
+                    i < layout.Names.Length &&
                     ChannelConfigs.FirstOrDefault(c => c.ChannelIndex == i) is { } cfg &&
-                    cfg.Name == _channelNames[i] && cfg.Unit == _channelUnits.ElementAtOrDefault(i));
+                    cfg.Name == layout.Names[i] && cfg.Unit == layout.Units.ElementAtOrDefault(i));
 
             if (channelLayoutChanged)
             {
                 ChannelConfigs.Clear();
-                var defaults = ChannelDisplayConfig.CreateDefaults(_channelCount, _channelNames);
+                var defaults = ChannelDisplayConfig.CreateDefaults(layout.Count, layout.Names);
                 foreach (var cfg in defaults)
                 {
-                    cfg.Unit = _channelUnits.ElementAtOrDefault(cfg.ChannelIndex) ?? "";
+                    cfg.Unit = layout.Units.ElementAtOrDefault(cfg.ChannelIndex) ?? "";
                     ChannelConfigs.Add(cfg);
                 }
 
@@ -326,101 +281,39 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
     {
         if (!_isAcquiring) return;
 
-        lock (_dataLock)
-        {
-            if (_timeBuffer.Count == 0) _startTime = reading.Timestamp;
-            var elapsed = (reading.Timestamp - _startTime).TotalSeconds;
-            // 正常路径下缓冲已由 OnAcquisitionStarted 按协议通道数备好。
-            // 这里兜住"读数先于采集开始事件到达"或"实际通道数多于配置"的情况：
-            // 补齐缓冲，并把新缓冲填到与时间轴等长，避免通道间错位。
-            int needed = reading.ChannelValues.Length;
-            if (needed > _channelBuffers.Length)
+        // 读数的通道多于当前布局时（读数先于采集开始事件到达，或实际通道数多于配置），
+        // 缓冲已补齐并扩展布局，这里在界面线程补上缺少的通道配置。
+        if (_samples.Append(reading) && Interlocked.Exchange(ref _layoutRefreshPending, 1) == 0)
+            Application.Current?.Dispatcher.BeginInvoke(() =>
             {
-                int previous = _channelBuffers.Length;
-                EnsureChannelBuffers(needed);
-                for (int i = previous; i < needed; i++)
-                    for (int pad = 0; pad < _timeBuffer.Count; pad++)
-                    {
-                        _channelBuffers[i].Add(double.NaN);
-                        _rawChannelBuffers[i].Add(double.NaN);
-                    }
-            }
-
-            if (needed > _channelCount)
-            {
-                _channelCount = needed;
-                _channelNames = Enumerable.Range(0, needed).Select(i => _channelNames.ElementAtOrDefault(i) ?? $"CH{i}").ToArray();
-                _channelUnits = Enumerable.Range(0, needed).Select(i => _channelUnits.ElementAtOrDefault(i) ?? "").ToArray();
-                if (Interlocked.Exchange(ref _layoutRefreshPending, 1) == 0)
-                    Application.Current?.Dispatcher.BeginInvoke(() =>
-                    {
-                        foreach (var cfg in ChannelDisplayConfig.CreateDefaults(_channelCount, _channelNames))
-                            if (!ChannelConfigs.Any(c => c.ChannelIndex == cfg.ChannelIndex))
-                            { cfg.Unit = _channelUnits[cfg.ChannelIndex]; ChannelConfigs.Add(cfg); }
-                        Interlocked.Exchange(ref _layoutRefreshPending, 0);
-                    });
-            }
-
-            _timeBuffer.Add(elapsed);
-            var rawValues = reading.OriginalChannelValues ?? reading.ChannelValues;
-            for (int i = 0; i < _channelBuffers.Length; i++)
-            {
-                _channelBuffers[i].Add(i < reading.ChannelValues.Length ? reading.ChannelValues[i] : double.NaN);
-                _rawChannelBuffers[i].Add(i < rawValues.Length ? rawValues[i] : double.NaN);
-            }
-        }
+                var layout = Layout;
+                foreach (var cfg in ChannelDisplayConfig.CreateDefaults(layout.Count, layout.Names))
+                    if (!ChannelConfigs.Any(c => c.ChannelIndex == cfg.ChannelIndex))
+                    { cfg.Unit = layout.Units[cfg.ChannelIndex]; ChannelConfigs.Add(cfg); }
+                Interlocked.Exchange(ref _layoutRefreshPending, 0);
+            });
     }
 
     public void RefreshPlot() => OnRenderTick(null, EventArgs.Empty);
 
-    private PlotDataSnapshot CapturePlotData(bool includeAll = false)
+    private ChartSampleSnapshot CapturePlotData(bool includeAll = false)
     {
-        lock (_dataLock)
-        {
-            int totalCount = _timeBuffer.Count;
-            int start = 0;
-            // Statistics with a zero window follows the plot. An unlimited plot needs all retained data.
-            if (!includeAll && totalCount > 0 && TimeWindowSeconds > 0)
-            {
-                double window = StatisticsConfig.WindowSeconds > 0
-                    ? Math.Max(TimeWindowSeconds, StatisticsConfig.WindowSeconds) : TimeWindowSeconds;
-                double minimumTime = _timeBuffer[totalCount - 1] - window;
-                for (int i = totalCount - 1; i >= 0; i--)
-                {
-                    if (_timeBuffer[i] < minimumTime) { start = i + 1; break; }
-                }
-                start = Math.Min(start, totalCount - 1);
-            }
-            int count = totalCount - start;
-            // Copy only the required logical range, including after the circular buffers wrap.
-            // Keep every source channel: hidden channels can still feed computed channels/statistics.
-            double[] CopyRange(CircularBuffer<double> buffer)
-            {
-                var values = new double[count];
-                for (int i = 0; i < count; i++)
-                    values[i] = start + i < buffer.Count ? buffer[start + i] : double.NaN;
-                return values;
-            }
-            var channels = new double[_channelCount][];
-            var raw = new double[_channelCount][];
-            for (int ch = 0; ch < _channelCount; ch++)
-            {
-                channels[ch] = CopyRange(_channelBuffers[ch]);
-                raw[ch] = CopyRange(_rawChannelBuffers[ch]);
-            }
-            return new PlotDataSnapshot(CopyRange(_timeBuffer), channels, raw, totalCount);
-        }
+        // Statistics with a zero window follows the plot. An unlimited plot needs all retained data.
+        double window = includeAll || TimeWindowSeconds <= 0 ? 0
+            : StatisticsConfig.WindowSeconds > 0 ? Math.Max(TimeWindowSeconds, StatisticsConfig.WindowSeconds) : TimeWindowSeconds;
+        return _samples.Capture(window);
     }
 
     private void OnRenderTick(object? sender, EventArgs e)
     {
         if (IsPaused && sender is not null) return;
         var (times, channelData, rawData, totalCount) = _pausedData ?? CapturePlotData();
-        if (channelData.Length < _channelCount)
+        int channelCount = Layout.Count;
+        if (channelData.Length < channelCount)
         {
-            channelData = Enumerable.Range(0, _channelCount).Select(i => i < channelData.Length
+            channelData = Enumerable.Range(0, channelCount).Select(i => i < channelData.Length
                 ? channelData[i] : Enumerable.Repeat(double.NaN, times.Length).ToArray()).ToArray();
-            rawData = Enumerable.Range(0, _channelCount).Select(i => i < rawData.Length
+            rawData = Enumerable.Range(0, channelCount).Select(i => i < rawData.Length
                 ? rawData[i] : Enumerable.Repeat(double.NaN, times.Length).ToArray()).ToArray();
         }
 
@@ -475,7 +368,8 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
         ConfigureUnitAxes(plot);
 
         // 绘制各通道
-        for (int ch = 0; ch < _channelCount; ch++)
+        int channelCount = Layout.Count;
+        for (int ch = 0; ch < channelCount; ch++)
         {
             var config = ChannelConfigs.FirstOrDefault(c => c.ChannelIndex == ch);
             if (config != null && !config.Visible)
@@ -533,6 +427,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
         int startIdx, int count, double xMin, double xMax)
     {
         int plotIdx = 0;
+        int channelCount = Layout.Count;
 
         // 修复拖拽错位：按 ChannelConfigs 顺序迭代，用 config.ChannelIndex 取物理通道数据
         foreach (var config in ChannelConfigs)
@@ -540,7 +435,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
             if (!config.Visible) continue;
 
             int ch = config.ChannelIndex;
-            if (ch >= _channelCount || plotIdx >= MultiPlotControls.Count) break;
+            if (ch >= channelCount || plotIdx >= MultiPlotControls.Count) break;
 
             var plotCtrl = MultiPlotControls[plotIdx];
             var plot = plotCtrl.Plot;
@@ -651,12 +546,13 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
 
     private void UpdateStatistics(double[] times, double[][] channelData, int startIdx, int count)
     {
-        if (count <= 0 || _channelCount <= 0) { StatisticsText = ""; StatisticsRows = []; return; }
+        var layout = Layout;
+        if (count <= 0 || layout.Count <= 0) { StatisticsText = ""; StatisticsRows = []; return; }
 
         var statConfig = StatisticsConfig;
         var rows = LiveStatisticsCalculator
-            .Compute(times, channelData, _channelCount, _channelNames, startIdx, count, statConfig.WindowSeconds)
-            .Select(s => new LiveStatisticsRow(s.Stats, _channelUnits.ElementAtOrDefault(s.ChannelIndex) ?? "", s.Count))
+            .Compute(times, channelData, layout.Count, layout.Names, startIdx, count, statConfig.WindowSeconds)
+            .Select(s => new LiveStatisticsRow(s.Stats, layout.Units.ElementAtOrDefault(s.ChannelIndex) ?? "", s.Count))
             .ToList();
         var now = DateTime.UtcNow;
         if ((now - _lastStatisticsRowsUpdate).TotalMilliseconds >= 500 || rows.Count != StatisticsRows.Count)
@@ -708,15 +604,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
     {
         _lastFrame = null;
         _hoverTime = null;
-        lock (_dataLock)
-        {
-            _timeBuffer.Clear();
-            for (int i = 0; i < _channelBuffers.Length; i++)
-            {
-                _channelBuffers[i].Clear();
-                _rawChannelBuffers[i].Clear();
-            }
-        }
+        _samples.Clear();
         DataPointCount = 0;
         StatisticsText = "暂无数据";
         StatisticsRows = [];
@@ -781,120 +669,28 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
     /// <summary>向导可选的原始通道：协议通道按索引，公式变量为 CH0、CH1…</summary>
     private IReadOnlyList<SourceOption> ProtocolChannelSources()
     {
+        var layout = Layout;
         var sources = new List<SourceOption>();
-        for (int i = 0; i < _channelCount; i++)
+        for (int i = 0; i < layout.Count; i++)
         {
-            var label = i < _channelNames.Length ? _channelNames[i] : $"CH{i}";
-            sources.Add(new SourceOption { Label = label, FormulaExpr = $"CH{i}", Unit = _channelUnits.ElementAtOrDefault(i) ?? "" });
+            var label = i < layout.Names.Length ? layout.Names[i] : $"CH{i}";
+            sources.Add(new SourceOption { Label = label, FormulaExpr = $"CH{i}", Unit = layout.Units.ElementAtOrDefault(i) ?? "" });
         }
         return sources;
     }
 
-    // ---- 一键归零 ----
-
-    /// <summary>有通道（含计算通道）设置了显示偏移时为 true，工具栏据此显示“取消归零”。</summary>
-    public bool HasDisplayOffsets =>
-        ChannelConfigs.Any(c => c.DisplayOffset != 0) || ComputedChannels.Any(c => c.DisplayOffset != 0);
-
-    private readonly HashSet<INotifyPropertyChanged> _offsetSources = new();
-
-    private void OnOffsetSourcesChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    /// <summary>一键归零用的数据：当前画面（暂停时为冻结的数据）的显示值、时间窗口的起点与点数，以及显示滤波设置。</summary>
+    private DisplayedSamples CurrentDisplayedSamples()
     {
-        // 通道列表会整体清空重建（Reset 不带旧项），按当前内容重新对齐订阅。
-        var current = ChannelConfigs.Cast<INotifyPropertyChanged>().Concat(ComputedChannels).ToHashSet();
-        foreach (var gone in _offsetSources.Where(source => !current.Contains(source)).ToList())
-        {
-            gone.PropertyChanged -= OnOffsetSourcePropertyChanged;
-            _offsetSources.Remove(gone);
-        }
-        foreach (var source in current)
-            if (_offsetSources.Add(source)) source.PropertyChanged += OnOffsetSourcePropertyChanged;
-        OnPropertyChanged(nameof(HasDisplayOffsets));
-    }
-
-    private void OnOffsetSourcePropertyChanged(object? sender, PropertyChangedEventArgs e)
-    {
-        if (e.PropertyName == nameof(ChannelDisplayConfig.DisplayOffset))
-            OnPropertyChanged(nameof(HasDisplayOffsets));
-    }
-
-    private bool CanZeroVisibleChannels() => DataPointCount > 0;
-
-    partial void OnDataPointCountChanged(long value)
-    {
-        // 绘图每次刷新都会更新点数，只在“有无数据”变化时通知按钮。
-        if ((value > 0) != _zeroCommandHadData)
-        {
-            _zeroCommandHadData = value > 0;
-            ZeroVisibleChannelsCommand.NotifyCanExecuteChanged();
-        }
-    }
-    private bool _zeroCommandHadData;
-
-    /// <summary>
-    /// 一键归零：把当前显示的每条曲线（可见通道与启用的计算通道）在时间窗口内的均值移到 0。
-    /// 只设置显示偏移（暂停时用冻结的数据），不改变保存的原始值、统计表和十字准线读数。
-    /// 开启显示滤波时按滤波后的曲线计算。手动纵轴范围是按原始数值设的，归零后曲线会移出范围，因此主 Y 轴改为自动。
-    /// </summary>
-    [RelayCommand(CanExecute = nameof(CanZeroVisibleChannels))]
-    private void ZeroVisibleChannels()
-    {
-        var (times, channelData, _, _) = _pausedData ?? CapturePlotData();
-        if (times.Length == 0) return;
+        var (times, display, _, _) = _pausedData ?? CapturePlotData();
         int start = WindowStartIndex(times);
-        int count = times.Length - start;
-
-        foreach (var config in ChannelConfigs.Where(c => c.Visible))
-        {
-            int ch = config.ChannelIndex;
-            // 曲线按“加偏移 → 滤波”绘制；移动平均与中值滤波都与常数偏移可交换，
-            // 所以用滤波后曲线的均值作偏移，画出来的（滤波后）曲线均值正好为 0。
-            if (ch < channelData.Length && channelData[ch].Length >= start + count
-                && FiniteMean(_displayPipeline.Filter(channelData[ch].AsSpan(start, count).ToArray(), DisplayFilter)) is { } mean)
-                config.DisplayOffset = -mean;
-        }
-
-        foreach (var computed in ComputedChannels.Where(c => c.Enabled && !string.IsNullOrWhiteSpace(c.Formula)))
-        {
-            // 某通道缺这一点时按 NaN 求值，不计入均值
-            if (_computedEvaluator.Evaluate(computed.Formula, channelData, start, count, missing: double.NaN) is not { } values)
-                continue;
-            if (FiniteMean(_displayPipeline.Filter(values, DisplayFilter)) is { } mean) computed.DisplayOffset = -mean;
-        }
-
-        AutoScaleY = true;
-        RefreshPlot();
+        return new DisplayedSamples(display, start, times.Length - start, DisplayFilter);
     }
 
-    /// <summary>取消归零：清除所有通道与计算通道的显示偏移。</summary>
-    [RelayCommand]
-    private void ClearDisplayOffsets()
-    {
-        foreach (var config in ChannelConfigs) config.DisplayOffset = 0;
-        foreach (var computed in ComputedChannels) computed.DisplayOffset = 0;
-        RefreshPlot();
-    }
-
-    private static double? FiniteMean(ReadOnlySpan<double> values)
-    {
-        double sum = 0;
-        int n = 0;
-        foreach (var v in values)
-            if (double.IsFinite(v)) { sum += v; n++; }
-        return n > 0 ? sum / n : null;
-    }
-
-    // ---- 自动偏移 ----
+    // ---- 通道颜色与顺序 ----
 
     /// <summary>通道颜色可选色块：与默认色相同的 8 色。</summary>
     public static IReadOnlyList<string> ChannelSwatches { get; } = ChannelDisplayConfig.PresetColors;
-
-    [RelayCommand]
-    private void ClearChannelOffset(int channelIndex)
-    {
-        if (ChannelConfigs.FirstOrDefault(c => c.ChannelIndex == channelIndex) is { } config)
-            config.DisplayOffset = 0;
-    }
 
     [RelayCommand]
     private void MoveChannelUp(ChannelDisplayConfig? config)
@@ -910,58 +706,6 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
         if (config is null) return;
         var index = ChannelConfigs.IndexOf(config);
         if (index >= 0 && index < ChannelConfigs.Count - 1) ReorderChannels(index, index + 1);
-    }
-
-    // ---- 自动偏移（原有） ----
-
-    /// <summary>
-    /// 自动偏移：计算指定通道的平均值，设置 DisplayOffset = -average
-    /// </summary>
-    [RelayCommand]
-    private void AutoOffsetChannel(int channelIndex)
-    {
-        var config = ChannelConfigs.FirstOrDefault(c => c.ChannelIndex == channelIndex);
-        if (config is null) return;
-
-        double[] data;
-        lock (_dataLock)
-        {
-            if (channelIndex >= _channelBuffers.Length)
-                return;
-            data = _channelBuffers[channelIndex].ToArray();
-        }
-
-        data = data.Where(double.IsFinite).ToArray();
-        if (data.Length == 0) return;
-        config.DisplayOffset = -data.Average();
-    }
-
-    /// <summary>
-    /// 自动偏移计算通道：计算当前数据的平均值，设置 DisplayOffset = -average
-    /// </summary>
-    [RelayCommand]
-    private void AutoOffsetComputedChannel(ComputedChannelDefinition? def)
-    {
-        if (def == null || string.IsNullOrWhiteSpace(def.Formula))
-            return;
-
-        if (_computedEvaluator.GetOrCreate(def.Formula) == null) return;
-
-        double[][] channelData;
-        lock (_dataLock)
-        {
-            channelData = new double[_channelCount][];
-            for (int i = 0; i < _channelCount; i++)
-                channelData[i] = _channelBuffers[i].ToArray();
-        }
-
-        int sampleCount = channelData.Length > 0 ? channelData[0].Length : 0;
-        if (sampleCount == 0) return;
-
-        // 整个缓冲、不滤波；某通道缺这一点时按 0 求值
-        var values = _computedEvaluator.Evaluate(def.Formula, channelData, 0, sampleCount, missing: 0);
-        if (values != null && FiniteMean(values) is { } mean)
-            def.DisplayOffset = -mean;
     }
 
     // ---- 曲线交互：拖动选区间、十字准线 ----
@@ -1112,20 +856,6 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
         foreach (var control in MultiPlotControls) control.Refresh();
     }
 
-    // ---- 区间分析数据 ----
-
-    /// <summary>曲线缓冲中原始读数的副本，供区间统计与导出。</summary>
-    private ChartRawSnapshot SnapshotRawData()
-    {
-        lock (_dataLock)
-        {
-            var channels = new double[_channelCount][];
-            for (int i = 0; i < _channelCount; i++)
-                channels[i] = _rawChannelBuffers[i].ToArray();
-            return new ChartRawSnapshot(_timeBuffer.ToArray(), channels, _channelNames?.ToArray() ?? [], _channelUnits.ToArray());
-        }
-    }
-
     // ---- 拖拽排序 ----
 
     public void ReorderChannels(int sourceIndex, int targetIndex)
@@ -1179,10 +909,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
         _dataBus.AcquisitionStarted -= OnAcquisitionStarted;
         _dataBus.AcquisitionStopped -= OnAcquisitionStopped;
         Interval.PropertyChanged -= OnIntervalPropertyChanged;
-        ChannelConfigs.CollectionChanged -= OnOffsetSourcesChanged;
-        ComputedChannels.CollectionChanged -= OnOffsetSourcesChanged;
-        foreach (var source in _offsetSources) source.PropertyChanged -= OnOffsetSourcePropertyChanged;
-        _offsetSources.Clear();
+        Offsets.Dispose();
     }
 }
 

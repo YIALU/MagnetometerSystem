@@ -63,10 +63,10 @@
                 </StackPanel>
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                     <!-- 归零只改显示偏移；有偏移时出现“取消归零” -->
-                    <Button Content="一键归零" Command="{Binding ZeroVisibleChannelsCommand}" Margin="0,0,6,0"
+                    <Button Content="一键归零" Command="{Binding Offsets.ZeroVisibleChannelsCommand}" Margin="0,0,6,0"
                             ToolTip="把当前显示的每条曲线按时间窗口内的均值移到 0（暂停时按冻结的画面），主 Y 轴改为自动。只设置显示偏移，不影响保存的原始数据、统计和读数。"/>
-                    <Button Content="取消归零" Command="{Binding ClearDisplayOffsetsCommand}" Margin="0,0,6,0"
-                            Visibility="{Binding HasDisplayOffsets, Converter={StaticResource BoolToVis}}"
+                    <Button Content="取消归零" Command="{Binding Offsets.ClearDisplayOffsetsCommand}" Margin="0,0,6,0"
+                            Visibility="{Binding Offsets.HasDisplayOffsets, Converter={StaticResource BoolToVis}}"
                             ToolTip="清除所有通道的显示偏移，曲线回到原始数值"/>
                     <Rectangle Width="1" Height="20" Fill="{DynamicResource Line2Brush}" Margin="6,0,12,0"/>
                     <TextBlock Style="{StaticResource Hint}" VerticalAlignment="Center" Margin="0,0,12,0"

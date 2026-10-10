@@ -68,7 +68,7 @@ public class RealtimeWorkspaceTests
         vm.RefreshPlot();
         Assert.Equal(62, vm.DataPointCount);
         Assert.StartsWith("61 ", vm.ChannelConfigs.Single(c => c.ChannelIndex == 0).LatestValue);
-        vm.AutoOffsetChannelCommand.Execute(0);
+        vm.Offsets.AutoOffsetChannelCommand.Execute(0);
         Assert.Equal(-1030.5, vm.ChannelConfigs.Single(c => c.ChannelIndex == 0).DisplayOffset);
         Assert.Equal(0, vm.ChannelConfigs.Single(c => c.ChannelIndex == 3).DisplayOffset);
         bus.PublishAcquisitionStopped();
@@ -246,8 +246,16 @@ public class RealtimeWorkspaceTests
             chart.Interval.IntervalStartInput = "0"; chart.Interval.IntervalEndInput = "60";
             chart.Interval.ApplyIntervalSelectionCommand.Execute(null);
             Assert.NotEmpty(chart.Interval.IntervalStatistics!.ChannelStats);
+            // 有显示偏移时工具栏出现“取消归零”（按钮绑定在 Offsets 上）。
+            var clearZero = FindVisualChild<Button>(view, b => Equals(b.Content, "取消归零"));
+            Assert.NotNull(clearZero);
+            Assert.Equal(Visibility.Collapsed, clearZero.Visibility);
+            chart.ChannelConfigs[0].DisplayOffset = 7;
+            Assert.True(chart.Offsets.HasDisplayOffsets);
+            Assert.Equal(Visibility.Visible, clearZero.Visibility);
             foreach (var tab in new[] { 0, 1, 2, 3, 4 }) { main.WorkspaceLayout.SideTab = tab; window.UpdateLayout(); await WpfTestHost.PumpAsync(); }
             chart.Wizard.CancelAddWizardCommand.Execute(null);
+            chart.Offsets.ClearDisplayOffsetsCommand.Execute(null);
             foreach (var tab in new[] { 0, 1, 2 }) { main.WorkspaceLayout.DockTab = tab; window.UpdateLayout(); await WpfTestHost.PumpAsync(); }
             window.Height = 680; window.Width = 1100;
             window.UpdateLayout(); await WpfTestHost.PumpAsync();
@@ -653,11 +661,11 @@ public class RealtimeWorkspaceTests
         }
     }
 
-    private static T? FindVisualChild<T>(DependencyObject parent) where T : DependencyObject
+    private static T? FindVisualChild<T>(DependencyObject parent, Func<T, bool>? predicate = null) where T : DependencyObject
     {
-        if (parent is T match) return match;
+        if (parent is T match && (predicate is null || predicate(match))) return match;
         for (int i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
-            if (FindVisualChild<T>(VisualTreeHelper.GetChild(parent, i)) is { } found) return found;
+            if (FindVisualChild(VisualTreeHelper.GetChild(parent, i), predicate) is { } found) return found;
         return null;
     }
 
