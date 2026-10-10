@@ -44,6 +44,8 @@ public sealed class UpdateCoordinator
     private readonly SemaphoreSlim _sourceGate = new(1, 1);
     private bool _sourceLoaded;
     private bool _dialogOpen;
+    private string? _promptedVersion;
+    private DateTime _promptedAtUtc;
 
     public UpdateCoordinator(IUpdateService updateService, IUserPreferencesService preferences)
     {
@@ -55,6 +57,12 @@ public sealed class UpdateCoordinator
 
     /// <summary>最近一次检查发现的新版本。供状态栏的"有新版本"按钮免去重新联网。</summary>
     public UpdateInfo? LastKnownUpdate { get; private set; }
+
+    /// <summary>
+    /// 之后的检查确认已是最新（例如发布被撤回或换了平台），以前记下的新版本作废。
+    /// 订阅方据此撤下状态栏角标；在后台线程触发。
+    /// </summary>
+    public event Action? KnownUpdateCleared;
 
     // ------------------------------------------------------------------ 偏好
 
@@ -214,6 +222,18 @@ public sealed class UpdateCoordinator
         }
 
         if (!await IsAutoCheckEnabledAsync()) return;
+
+        // 部分平台失败时不记检查时间，下一轮仍会联网重试；同一版本 24 小时内只弹一次，
+        // 否则"稍后提醒"后每小时都会再弹。
+        var now = UtcNow();
+        if (string.Equals(_promptedVersion, result.Info.Version, StringComparison.OrdinalIgnoreCase)
+            && now - _promptedAtUtc >= TimeSpan.Zero && now - _promptedAtUtc < SilentCheckInterval)
+        {
+            return;
+        }
+
+        _promptedVersion = result.Info.Version;
+        _promptedAtUtc = now;
         Log.Information("发现新版本 v{Version}", result.Info.Version);
         await onUpdateFound(result.Info);
     }
@@ -252,8 +272,10 @@ public sealed class UpdateCoordinator
         }
         else if (result.WarningMessage == null)
         {
+            var hadUpdate = LastKnownUpdate is not null;
             LastKnownUpdate = null;
             await TrySetKnownUpdateAsync(null);
+            if (hadUpdate) KnownUpdateCleared?.Invoke();
         }
 
         if (result.WarningMessage == null) await TrySetLastCheckAsync(UtcNow());

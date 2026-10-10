@@ -219,6 +219,56 @@ public class UpdateStartupTests
     }
 
     [Fact]
+    public async Task PartialPlatformFailureRetriesHourlyButPromptsOncePerInterval()
+    {
+        var ticks = new DateTime(2026, 10, 10, 0, 0, 0, DateTimeKind.Utc).Ticks;
+        var service = new RecordingService { Result = UpdateCheckResult.Available(Info()) with { WarningMessage = "GitHub 无法连接" } };
+        var coordinator = new UpdateCoordinator(service, new Preferences())
+        {
+            StartupDelay = TimeSpan.Zero,
+            PollInterval = TimeSpan.FromMilliseconds(20),
+            UtcNow = () => new DateTime(Interlocked.Read(ref ticks), DateTimeKind.Utc)
+        };
+        var prompts = new SemaphoreSlim(0);
+        using var cts = new CancellationTokenSource();
+        var loop = coordinator.RunAutoCheckLoopAsync(_ => { prompts.Release(); return Task.CompletedTask; }, null, cts.Token);
+        try
+        {
+            Assert.True(await prompts.WaitAsync(TimeSpan.FromSeconds(15)));
+
+            // 没记检查时间，轮询会继续联网，但同一版本不再弹窗。
+            Interlocked.Add(ref ticks, TimeSpan.FromHours(2).Ticks);
+            var deadline = DateTime.UtcNow.AddSeconds(15);
+            while (service.CheckCalls < 3 && DateTime.UtcNow < deadline) await Task.Delay(20);
+            Assert.True(service.CheckCalls >= 3);
+            Assert.Equal(0, prompts.CurrentCount);
+
+            Interlocked.Add(ref ticks, TimeSpan.FromHours(23).Ticks);
+            Assert.True(await prompts.WaitAsync(TimeSpan.FromSeconds(15)));
+        }
+        finally { cts.Cancel(); }
+        await loop.WaitAsync(TimeSpan.FromSeconds(15));
+    }
+
+    [Fact]
+    public async Task LaterUpToDateCheckClearsKnownUpdateAndNotifiesBadge()
+    {
+        var preferences = new Preferences();
+        var coordinator = new UpdateCoordinator(new SequenceService(UpdateCheckResult.Available(Info()), UpdateCheckResult.UpToDate()), preferences);
+        var cleared = 0;
+        coordinator.KnownUpdateCleared += () => cleared++;
+
+        await coordinator.CheckManuallyAsync();
+        Assert.NotNull(coordinator.LastKnownUpdate);
+        Assert.Equal(0, cleared);
+
+        await coordinator.CheckManuallyAsync();
+        Assert.Null(coordinator.LastKnownUpdate);
+        Assert.Null(await preferences.GetPreferenceAsync<UpdateInfo>(UpdateCoordinator.KeyKnownUpdate));
+        Assert.Equal(1, cleared);
+    }
+
+    [Fact]
     public async Task LastCheckInTheFutureIsTreatedAsDue()
     {
         var preferences = new Preferences();
@@ -242,6 +292,19 @@ public class UpdateStartupTests
         public Task<T?> GetPreferenceAsync<T>(string key) =>
             Task.FromResult(_values.TryGetValue(key, out var value) ? (T?)value : default);
         public Task SetPreferenceAsync<T>(string key, T value) { _values[key] = value!; return Task.CompletedTask; }
+    }
+
+    private sealed class SequenceService(params UpdateCheckResult[] results) : IUpdateService
+    {
+        private int _next;
+        public UpdateOptions Options { get; } = new() { CurrentVersion = "1.0.0", PackageKind = AppPackageKind.Installer };
+        public Task<UpdateCheckResult> CheckForUpdateAsync(CancellationToken ct = default) =>
+            Task.FromResult(results[Math.Min(_next++, results.Length - 1)]);
+        public Task<string> DownloadAsync(UpdateInfo info, IProgress<DownloadProgress>? progress, CancellationToken ct = default) =>
+            throw new InvalidOperationException("should not download");
+        public bool TryApplyUpdate(UpdateInfo info, string localFilePath) => throw new InvalidOperationException("should not install");
+        public void OpenReleasePage(UpdateInfo? info = null) { }
+        public void CleanupDownloads() { }
     }
 
     private sealed class RecordingService : IUpdateService

@@ -159,6 +159,8 @@ public partial class App : Application
     private static async Task RunStartupUpdateCheckAsync(MainViewModel mainVm)
     {
         var coordinator = Services.GetRequiredService<UpdateCoordinator>();
+        coordinator.KnownUpdateCleared += () =>
+            Current?.Dispatcher.InvokeAsync(() => mainVm.AvailableUpdateVersion = null);
 
         await coordinator.RunAutoCheckLoopAsync(
             async info =>
