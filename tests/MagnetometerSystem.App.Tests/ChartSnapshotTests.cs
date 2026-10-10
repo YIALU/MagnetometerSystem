@@ -1,5 +1,3 @@
-using System.Reflection;
-using System.Windows.Threading;
 using MagnetometerSystem.App.ViewModels;
 using MagnetometerSystem.Core.Models;
 using MagnetometerSystem.Core.Services;
@@ -184,8 +182,7 @@ public class ChartSnapshotTests
         });
         await WpfTestHost.PumpAsync();
         // Keep every measurement and drive the real refresh explicitly, without timer races.
-        ((DispatcherTimer)typeof(RealtimeChartViewModel)
-            .GetField("_renderTimer", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(vm)!).Stop();
+        vm.StopRenderTimer();
     }
 
     private static void ConfigureStatistics(RealtimeChartViewModel vm, double seconds)

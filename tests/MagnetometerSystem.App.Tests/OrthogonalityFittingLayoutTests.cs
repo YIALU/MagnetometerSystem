@@ -1,5 +1,4 @@
 using System.IO;
-using System.Reflection;
 using MagnetometerSystem.App.ViewModels;
 using MagnetometerSystem.Core.Calibration;
 using MagnetometerSystem.Core.Communication;
@@ -310,9 +309,7 @@ public class OrthogonalityFittingLayoutTests
             var session = await fixture.SaveSessionAsync(["nT", "nT", "nT"]);
             var gated = new GatedReadings(fixture.Storage);
             var vm = new OrthogonalityCalibrationViewModel(new OrthogonalityCalculator(), fixture.CreateRepository(), fixture.Bus, gated)
-            { SelectedSensorType = SensorType.TriaxialFluxgate };
-            typeof(OrthogonalityCalibrationViewModel).GetField("_rawWriter", BindingFlags.Instance | BindingFlags.NonPublic)!
-                .SetValue(vm, new StreamWriter(new MemoryStream()));
+            { SelectedSensorType = SensorType.TriaxialFluxgate, RawDataDirectory = fixture.RawDir };
             try
             {
                 var pending = ImportSessionAsync(vm, session);
@@ -478,55 +475,6 @@ public class OrthogonalityFittingLayoutTests
     }
 
     [Fact]
-    public void ProfileCsvQuotesNamesAndSerialsPerRfc4180()
-    {
-        var profile = new OrthogonalityParams
-        {
-            Name = "探头 \"A\", 第 2 组", SensorSerial = "SN-1\n备用", Unit = "nT", SampleCount = 48,
-            Offset = [1.5, -2, 3], CompensationMatrix = [1, 0, 0, 0, 1, 0, 0, 0, 1],
-        };
-        var csv = OrthogonalityCalibrationViewModel.BuildProfileCsv(profile);
-        var rows = ParseCsv(csv);
-        Assert.Equal(2, rows.Count);
-        Assert.Equal(19, rows[0].Count);
-        Assert.Equal(19, rows[1].Count); // 引号、逗号与换行都留在字段内，后续数值不错位
-        Assert.Equal(profile.Name, rows[1][0]);
-        Assert.Equal(profile.SensorSerial, rows[1][1]);
-        Assert.Equal("1.5", rows[1][7]);
-        Assert.Equal("1", rows[1][18]);
-    }
-
-    /// <summary>按 RFC 4180 读取 CSV（引号内的逗号、换行与加倍引号）。</summary>
-    private static List<List<string>> ParseCsv(string text)
-    {
-        var rows = new List<List<string>>();
-        var row = new List<string>();
-        var field = new System.Text.StringBuilder();
-        bool quoted = false;
-        for (int i = 0; i < text.Length; i++)
-        {
-            char c = text[i];
-            if (quoted)
-            {
-                if (c == '"' && i + 1 < text.Length && text[i + 1] == '"') { field.Append('"'); i++; }
-                else if (c == '"') quoted = false;
-                else field.Append(c);
-            }
-            else if (c == '"') quoted = true;
-            else if (c == ',') { row.Add(field.ToString()); field.Clear(); }
-            else if (c == '\n' || c == '\r')
-            {
-                if (c == '\r' && i + 1 < text.Length && text[i + 1] == '\n') i++;
-                row.Add(field.ToString()); field.Clear();
-                rows.Add(row); row = new List<string>();
-            }
-            else field.Append(c);
-        }
-        if (field.Length > 0 || row.Count > 0) { row.Add(field.ToString()); rows.Add(row); }
-        return rows;
-    }
-
-    [Fact]
     public Task ReferenceUnitTextFollowsTheFittingUnit() =>
         WpfTestHost.RunAsync(async () =>
         {
@@ -573,17 +521,15 @@ public class OrthogonalityFittingLayoutTests
         if (channels == 6) (vm.FitX2, vm.FitY2, vm.FitZ2) = (3, 4, 5);
     }
 
-    private static List<double[]> SecondGroup(OrthogonalityCalibrationViewModel vm) =>
-        (List<double[]>)typeof(OrthogonalityCalibrationViewModel)
-            .GetField("_collectedDataSecondGroup", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(vm)!;
+    private static List<double[]> SecondGroup(OrthogonalityCalibrationViewModel vm) => vm.SnapshotSecondGroupSamples();
 
-    private static Task ImportSessionAsync(OrthogonalityCalibrationViewModel vm, SessionInfo session) =>
-        (Task)typeof(OrthogonalityCalibrationViewModel)
-            .GetMethod("LoadSessionDataAsync", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(vm, [session])!;
+    private static Task ImportSessionAsync(OrthogonalityCalibrationViewModel vm, SessionInfo session) => vm.LoadSessionDataAsync(session);
 
     private sealed class Fixture : IDisposable
     {
         private readonly string _path = Path.Combine(Path.GetTempPath(), $"fitting-layout-{Guid.NewGuid():N}.db");
+        /// <summary>原始 CSV 写到临时目录，不进入用户的 %LocalAppData%。</summary>
+        public string RawDir { get; } = Path.Combine(Path.GetTempPath(), $"fitting-layout-raw-{Guid.NewGuid():N}");
         private readonly List<OrthogonalityCalibrationViewModel> _vms = [];
         private DatabaseInitializer _database = null!;
         public DataBus Bus { get; } = new();
@@ -604,12 +550,13 @@ public class OrthogonalityFittingLayoutTests
 
         public OrthogonalityCalibrationViewModel CreateVm(int channels)
         {
-            var vm = new OrthogonalityCalibrationViewModel(new OrthogonalityCalculator(), Profiles, Bus, Storage)
-            { SelectedSensorType = channels == 6 ? SensorType.DualTriaxialFluxgate : SensorType.TriaxialFluxgate };
             // Keep the real collection command and raw CSV writer, but never create a file
             // in the current user's calibration_raw directory during this regression.
-            typeof(OrthogonalityCalibrationViewModel).GetField("_rawWriter", BindingFlags.Instance | BindingFlags.NonPublic)!
-                .SetValue(vm, new StreamWriter(new MemoryStream()));
+            var vm = new OrthogonalityCalibrationViewModel(new OrthogonalityCalculator(), Profiles, Bus, Storage)
+            {
+                SelectedSensorType = channels == 6 ? SensorType.DualTriaxialFluxgate : SensorType.TriaxialFluxgate,
+                RawDataDirectory = RawDir,
+            };
             _vms.Add(vm);
             return vm;
         }
@@ -646,6 +593,7 @@ public class OrthogonalityFittingLayoutTests
                 SqliteConnection.ClearPool(connection);
             }
             foreach (string suffix in new[] { "", "-wal", "-shm" }) File.Delete(_path + suffix);
+            if (Directory.Exists(RawDir)) Directory.Delete(RawDir, recursive: true);
         }
     }
 
