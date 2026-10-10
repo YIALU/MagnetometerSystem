@@ -87,11 +87,11 @@
                                             <TextBlock Text="显示偏移" Style="{StaticResource FieldLabel}"/>
                                             <DockPanel>
                                                 <Button DockPanel.Dock="Right" Content="清除" Style="{StaticResource SmallGhostButton}"
-                                                        Command="{Binding DataContext.ClearChannelOffsetCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                        Command="{Binding DataContext.Offsets.ClearChannelOffsetCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                                                         CommandParameter="{Binding ChannelIndex}"/>
                                                 <Button DockPanel.Dock="Right" Content="按均值归零" Style="{StaticResource SmallButton}" Margin="6,0,0,0"
                                                         ToolTip="把显示偏移设为当前缓冲均值的相反数，使曲线移到 0 附近"
-                                                        Command="{Binding DataContext.AutoOffsetChannelCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                        Command="{Binding DataContext.Offsets.AutoOffsetChannelCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                                                         CommandParameter="{Binding ChannelIndex}"/>
                                                 <TextBlock DockPanel.Dock="Right" Text="{Binding Unit}" Foreground="{DynamicResource MutedBrush}" VerticalAlignment="Center" Margin="6,0,0,0"/>
                                                 <TextBox Style="{StaticResource MonoTextBox}" Text="{Binding DisplayOffset, UpdateSourceTrigger=LostFocus}" TextAlignment="Right"/>
@@ -135,7 +135,7 @@
                                                 <TextBlock Text="显示偏移" Style="{StaticResource FieldLabel}" Margin="0,8,0,4"/>
                                                 <DockPanel>
                                                     <Button DockPanel.Dock="Right" Content="按均值归零" Style="{StaticResource SmallButton}" Margin="6,0,0,0"
-                                                            Command="{Binding DataContext.AutoOffsetComputedChannelCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                            Command="{Binding DataContext.Offsets.AutoOffsetComputedChannelCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                                                             CommandParameter="{Binding}"/>
                                                     <TextBox Style="{StaticResource MonoTextBox}" Text="{Binding DisplayOffset, UpdateSourceTrigger=LostFocus}" TextAlignment="Right"/>
                                                 </DockPanel>

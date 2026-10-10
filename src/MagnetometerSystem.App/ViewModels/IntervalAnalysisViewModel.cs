@@ -16,7 +16,7 @@ public partial class IntervalAnalysisViewModel : ObservableObject
     private readonly Func<ChartRawSnapshot> _snapshotRaw;
     private readonly IDialogService _dialogs;
 
-    /// <param name="snapshotRaw">取曲线缓冲中原始读数的副本（调用方负责加锁）。</param>
+    /// <param name="snapshotRaw">取曲线缓冲中原始读数的副本。</param>
     public IntervalAnalysisViewModel(Func<ChartRawSnapshot> snapshotRaw, IDialogService dialogs)
     {
         _snapshotRaw = snapshotRaw;
