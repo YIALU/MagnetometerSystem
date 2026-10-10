@@ -193,15 +193,11 @@ public class OrthogonalityUnitWorkflowTests
         finally { service.Release.Set(); await calculation; }
     });
 
-    // These are the same frozen input fields set by session/CSV import; avoiding native file pickers
+    // The same replacement session/CSV import performs; avoiding native file pickers
     // lets the test control a dataset replacement while the actual VM calculation is awaiting Task.Run.
     private static void SetCollectedData(OrthogonalityCalibrationViewModel vm, string unit)
     {
-        typeof(OrthogonalityCalibrationViewModel).GetMethod("SetCollectedUnit", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .Invoke(vm, [unit, 3]);
-        var data = (List<double[]>)typeof(OrthogonalityCalibrationViewModel)
-            .GetField("_collectedData", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(vm)!;
-        data.Clear();
+        var data = new List<double[]>();
         var random = new Random(42);
         var strength = unit == "uT" ? 50d : 50000d;
         for (var i = 0; i < 600; i++)
@@ -212,6 +208,7 @@ public class OrthogonalityUnitWorkflowTests
             data.Add([strength * radius * Math.Cos(angle) + strength * 0.002,
                 strength * radius * Math.Sin(angle) - strength * 0.001, strength * z + strength * 0.004]);
         }
+        vm.ReplaceSamples(data, [], unit, 3);
     }
 
     private sealed class BlockingFitService : IOrthogonalityService, IDisposable

@@ -1,5 +1,4 @@
 using System.IO;
-using System.Reflection;
 using MagnetometerSystem.App.ViewModels;
 using MagnetometerSystem.Core.Calibration;
 using MagnetometerSystem.Core.Communication;
@@ -310,9 +309,7 @@ public class OrthogonalityFittingLayoutTests
             var session = await fixture.SaveSessionAsync(["nT", "nT", "nT"]);
             var gated = new GatedReadings(fixture.Storage);
             var vm = new OrthogonalityCalibrationViewModel(new OrthogonalityCalculator(), fixture.CreateRepository(), fixture.Bus, gated)
-            { SelectedSensorType = SensorType.TriaxialFluxgate };
-            typeof(OrthogonalityCalibrationViewModel).GetField("_rawWriter", BindingFlags.Instance | BindingFlags.NonPublic)!
-                .SetValue(vm, new StreamWriter(new MemoryStream()));
+            { SelectedSensorType = SensorType.TriaxialFluxgate, RawDataDirectory = fixture.RawDir };
             try
             {
                 var pending = ImportSessionAsync(vm, session);
@@ -573,17 +570,15 @@ public class OrthogonalityFittingLayoutTests
         if (channels == 6) (vm.FitX2, vm.FitY2, vm.FitZ2) = (3, 4, 5);
     }
 
-    private static List<double[]> SecondGroup(OrthogonalityCalibrationViewModel vm) =>
-        (List<double[]>)typeof(OrthogonalityCalibrationViewModel)
-            .GetField("_collectedDataSecondGroup", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(vm)!;
+    private static List<double[]> SecondGroup(OrthogonalityCalibrationViewModel vm) => vm.SnapshotSecondGroupSamples();
 
-    private static Task ImportSessionAsync(OrthogonalityCalibrationViewModel vm, SessionInfo session) =>
-        (Task)typeof(OrthogonalityCalibrationViewModel)
-            .GetMethod("LoadSessionDataAsync", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(vm, [session])!;
+    private static Task ImportSessionAsync(OrthogonalityCalibrationViewModel vm, SessionInfo session) => vm.LoadSessionDataAsync(session);
 
     private sealed class Fixture : IDisposable
     {
         private readonly string _path = Path.Combine(Path.GetTempPath(), $"fitting-layout-{Guid.NewGuid():N}.db");
+        /// <summary>原始 CSV 写到临时目录，不进入用户的 %LocalAppData%。</summary>
+        public string RawDir { get; } = Path.Combine(Path.GetTempPath(), $"fitting-layout-raw-{Guid.NewGuid():N}");
         private readonly List<OrthogonalityCalibrationViewModel> _vms = [];
         private DatabaseInitializer _database = null!;
         public DataBus Bus { get; } = new();
@@ -604,12 +599,13 @@ public class OrthogonalityFittingLayoutTests
 
         public OrthogonalityCalibrationViewModel CreateVm(int channels)
         {
-            var vm = new OrthogonalityCalibrationViewModel(new OrthogonalityCalculator(), Profiles, Bus, Storage)
-            { SelectedSensorType = channels == 6 ? SensorType.DualTriaxialFluxgate : SensorType.TriaxialFluxgate };
             // Keep the real collection command and raw CSV writer, but never create a file
             // in the current user's calibration_raw directory during this regression.
-            typeof(OrthogonalityCalibrationViewModel).GetField("_rawWriter", BindingFlags.Instance | BindingFlags.NonPublic)!
-                .SetValue(vm, new StreamWriter(new MemoryStream()));
+            var vm = new OrthogonalityCalibrationViewModel(new OrthogonalityCalculator(), Profiles, Bus, Storage)
+            {
+                SelectedSensorType = channels == 6 ? SensorType.DualTriaxialFluxgate : SensorType.TriaxialFluxgate,
+                RawDataDirectory = RawDir,
+            };
             _vms.Add(vm);
             return vm;
         }
@@ -646,6 +642,7 @@ public class OrthogonalityFittingLayoutTests
                 SqliteConnection.ClearPool(connection);
             }
             foreach (string suffix in new[] { "", "-wal", "-shm" }) File.Delete(_path + suffix);
+            if (Directory.Exists(RawDir)) Directory.Delete(RawDir, recursive: true);
         }
     }
 
