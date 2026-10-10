@@ -8,6 +8,7 @@ using MagnetometerSystem.Core.Calibration;
 using MagnetometerSystem.Core.Models;
 using MagnetometerSystem.Core.Services;
 using MagnetometerSystem.Core.Storage;
+using MagnetometerSystem.Infrastructure.Export;
 
 namespace MagnetometerSystem.App.ViewModels;
 
@@ -40,21 +41,14 @@ public sealed class OrthoGroupResult(OrthogonalityResult result, double[,] rawDa
     public string[] Offset { get; } = result.Parameters.Offset.Select(v => v.ToString("G6", CultureInfo.InvariantCulture)).ToArray();
 
     /// <summary>残差标准差折算到 nT 后分级；阈值与旧版一致，任何单位下物理含义相同。</summary>
-    public string Rating => OrthogonalityCalibrationViewModel.RateQuality(result);
+    public string Rating => FitQualityRating.Rate(result);
 
-    private double ResidualNt => OrthogonalityCalibrationViewModel.ResidualStdInNt(result);
+    private double ResidualNt => FitQualityRating.ResidualStdInNt(result);
 
     /// <summary>评级对应的状态色：ok / warn / err。</summary>
-    public string Level => ResidualNt switch { < 50 => "ok", < 200 => "warn", _ => "err" };
+    public string Level => FitQualityRating.Level(ResidualNt);
 
-    public string RatingHint => ResidualNt switch
-    {
-        < 10 => "残差标准差低于 10 nT",
-        < 50 => "残差标准差低于 50 nT",
-        < 200 => "残差标准差低于 200 nT，建议增加姿态覆盖后重算",
-        double.NaN => "单位未知，不能评级",
-        _ => "残差标准差不低于 200 nT，建议检查数据后重新采集",
-    };
+    public string RatingHint => FitQualityRating.Hint(ResidualNt);
 }
 
 public partial class OrthogonalityCalibrationViewModel : ObservableObject
@@ -754,50 +748,8 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         lock (_sampleLock) return _collectedDataSecondGroup.ToList();
     }
 
-    private void UpdateCoverageEstimate()
-    {
-        const int nLon = 12;
-        const int nLat = 6;
-        var covered = new bool[nLon, nLat];
-        var samples = SnapshotSamples();
-
-        double cx = 0, cy = 0, cz = 0;
-        int n = samples.Count;
-        if (n == 0) { SphericityCoverage = 0; return; }
-        for (int i = 0; i < n; i++)
-        {
-            cx += samples[i][0];
-            cy += samples[i][1];
-            cz += samples[i][2];
-        }
-        cx /= n; cy /= n; cz /= n;
-
-        for (int i = 0; i < n; i++)
-        {
-            double dx = samples[i][0] - cx;
-            double dy = samples[i][1] - cy;
-            double dz = samples[i][2] - cz;
-            double r = Math.Sqrt(dx * dx + dy * dy + dz * dz);
-            if (r < 1e-10) continue;
-
-            double lat = Math.Asin(Math.Clamp(dz / r, -1.0, 1.0));
-            double lon = Math.Atan2(dy, dx);
-
-            int lonIdx = (int)((lon + Math.PI) / (2 * Math.PI) * nLon);
-            if (lonIdx >= nLon) lonIdx = nLon - 1;
-            int latIdx = (int)((lat + Math.PI / 2) / Math.PI * nLat);
-            if (latIdx >= nLat) latIdx = nLat - 1;
-
-            covered[lonIdx, latIdx] = true;
-        }
-
-        int total = nLon * nLat;
-        int count = 0;
-        foreach (bool c in covered)
-            if (c) count++;
-
-        SphericityCoverage = (double)count / total * 100.0;
-    }
+    private void UpdateCoverageEstimate() =>
+        SphericityCoverage = SphericalCoverageEstimator.Estimate(SnapshotSamples());
 
     [RelayCommand]
     private void StopCollecting()
@@ -1200,86 +1152,20 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         if (ImportUnitOrReport() is not { } importUnit) return;
         try
         {
-            var lines = File.ReadAllLines(path);
-            var importedData = new List<double[]>();
-            var importedDataSecond = new List<double[]>();
-            int skippedLines = 0;
             bool dual = SelectedSensorType == SensorType.DualTriaxialFluxgate;
-            int requiredCols = dual ? 6 : 3;
+            var imported = CalibrationCsvImporter.Parse(File.ReadAllLines(path), dual);
 
-            // 第一行特判 header：所有列都无法 parse 成 double ⇒ 是 header
-            int startIdx = 0;
-            int[]? columnMap = null; // 长度 = requiredCols，映射到具体列索引
-            if (lines.Length > 0)
-            {
-                var firstParts = SplitCsvLine(lines[0]);
-                if (firstParts.Length >= requiredCols && !firstParts.Any(p => TryParseDouble(p, out _)))
-                {
-                    // 是 header，尝试按列名定位
-                    columnMap = BuildColumnMap(firstParts, dual);
-                    startIdx = 1;
-                }
-            }
-
-            for (int i = startIdx; i < lines.Length; i++)
-            {
-                var line = lines[i];
-                if (string.IsNullOrWhiteSpace(line)) continue;
-
-                var parts = SplitCsvLine(line);
-
-                // 有 header 列名映射时直接按 map 取
-                if (columnMap != null)
-                {
-                    if (!TryExtractByMap(parts, columnMap, 0, 3, out var triple)) { skippedLines++; continue; }
-                    importedData.Add(triple);
-                    if (dual)
-                    {
-                        if (TryExtractByMap(parts, columnMap, 3, 3, out var triple2))
-                            importedDataSecond.Add(triple2);
-                    }
-                    continue;
-                }
-
-                // 无 header：先尝试前 3 列；若前 3 列含非 double（可能第一列是时间戳）则跳过第一列试 1..3
-                if (parts.Length < requiredCols) { skippedLines++; continue; }
-
-                int offset = 0;
-                if (!TryParseDouble(parts[0], out _) && parts.Length >= requiredCols + 1) offset = 1;
-
-                if (parts.Length < offset + requiredCols) { skippedLines++; continue; }
-
-                if (TryParseDouble(parts[offset], out var bx) &&
-                    TryParseDouble(parts[offset + 1], out var by) &&
-                    TryParseDouble(parts[offset + 2], out var bz))
-                {
-                    importedData.Add(new[] { bx, by, bz });
-
-                    if (dual && parts.Length >= offset + 6 &&
-                        TryParseDouble(parts[offset + 3], out var bx2) &&
-                        TryParseDouble(parts[offset + 4], out var by2) &&
-                        TryParseDouble(parts[offset + 5], out var bz2))
-                    {
-                        importedDataSecond.Add(new[] { bx2, by2, bz2 });
-                    }
-                }
-                else
-                {
-                    skippedLines++;
-                }
-            }
-
-            if (importedData.Count == 0)
+            if (imported.First.Count == 0)
             {
                 CollectionStatus = "导入失败：文件中未找到有效的三轴数据。点击 [格式说明] 查看支持的格式。";
                 return;
             }
 
-            ReplaceSamples(importedData, importedDataSecond, importUnit, requiredCols);
+            ReplaceSamples(imported.First, imported.Second, importUnit, dual ? 6 : 3);
             RememberSamplesSource(null, FileSourceKey);
 
-            string skipInfo = skippedLines > 0 ? $"（跳过 {skippedLines} 行）" : "";
-            CollectionStatus = $"已从文件导入 {importedData.Count} 个样本{skipInfo}";
+            string skipInfo = imported.SkippedLines > 0 ? $"（跳过 {imported.SkippedLines} 行）" : "";
+            CollectionStatus = $"已从文件导入 {imported.First.Count} 个样本{skipInfo}";
 
             UpdateCoverageEstimate();
             RunDataValidation();
@@ -1368,7 +1254,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
             List<double[]> first, second;
             lock (_sampleLock) { first = _collectedData.ToList(); second = _collectedDataSecondGroup.ToList(); }
 
-            var rawData = ConvertToMatrix(first);
+            var rawData = OrthoMatrixHelpers.ToMatrix(first);
             var result = await Task.Run(() =>
                 _orthogonalityService.Calculate(rawData, referenceField, unit));
             if (generation != Interlocked.Read(ref _collectedGeneration))
@@ -1380,7 +1266,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
             if (result.Success)
             {
                 CalculationResult = result;
-                FirstGroupResult = new OrthoGroupResult(result, rawData, ApplyAll(result, rawData));
+                FirstGroupResult = new OrthoGroupResult(result, rawData, OrthoMatrixHelpers.ApplyAll(result, rawData));
                 CalculationStatus = "计算完成";
             }
             else
@@ -1397,7 +1283,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
                 }
                 else
                 {
-                    var rawData2 = ConvertToMatrix(second);
+                    var rawData2 = OrthoMatrixHelpers.ToMatrix(second);
                     var result2 = await Task.Run(() =>
                         _orthogonalityService.Calculate(rawData2, referenceField, unit));
                     if (generation != Interlocked.Read(ref _collectedGeneration))
@@ -1408,7 +1294,7 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
                     if (result2.Success)
                     {
                         SecondCalculationResult = result2;
-                        SecondGroupResult = new OrthoGroupResult(result2, rawData2, ApplyAll(result2, rawData2));
+                        SecondGroupResult = new OrthoGroupResult(result2, rawData2, OrthoMatrixHelpers.ApplyAll(result2, rawData2));
                     }
                     else
                     {
@@ -1426,30 +1312,6 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
             IsCalculating = false;
             UpdateStepNavigation();
         }
-    }
-
-    private static double[,] ApplyAll(OrthogonalityResult result, double[,] rawData)
-    {
-        var corrected = new double[rawData.GetLength(0), 3];
-        for (int i = 0; i < rawData.GetLength(0); i++)
-        {
-            var c = result.Parameters.Apply(rawData[i, 0], rawData[i, 1], rawData[i, 2]);
-            corrected[i, 0] = c[0]; corrected[i, 1] = c[1]; corrected[i, 2] = c[2];
-        }
-        return corrected;
-    }
-
-    private static double[,] ConvertToMatrix(List<double[]> data)
-    {
-        int n = data.Count;
-        var matrix = new double[n, 3];
-        for (int i = 0; i < n; i++)
-        {
-            matrix[i, 0] = data[i][0];
-            matrix[i, 1] = data[i][1];
-            matrix[i, 2] = data[i][2];
-        }
-        return matrix;
     }
 
     partial void OnCalculationResultChanged(OrthogonalityResult? value)
@@ -1502,27 +1364,8 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
     public double[,]? VisualizationCorrectedData => FirstGroupResult?.CorrectedData;
 
     /// <summary>质量评级（第一组 / 第二组）：残差标准差折算到 nT 后分级。</summary>
-    public string QualityRating => RateQuality(CalculationResult);
-    public string SecondQualityRating => RateQuality(SecondCalculationResult);
-
-    internal static double ResidualStdInNt(OrthogonalityResult? result)
-    {
-        if (result == null) return double.NaN;
-        var scale = OrthogonalityParams.CanonicalUnit(result.Parameters.Unit) switch
-        {
-            "nT" => 1d, "uT" => 1e3, "mT" => 1e6, "T" => 1e9, _ => double.NaN
-        };
-        var residualNt = result.Quality.ResidualStd * scale;
-        return double.IsFinite(residualNt) && residualNt >= 0 ? residualNt : double.NaN;
-    }
-
-    internal static string RateQuality(OrthogonalityResult? result)
-    {
-        if (result == null) return "—";
-        var residualNt = ResidualStdInNt(result);
-        if (double.IsNaN(residualNt)) return "未知";
-        return residualNt switch { < 10 => "优秀", < 50 => "良好", < 200 => "一般", _ => "较差" };
-    }
+    public string QualityRating => FitQualityRating.Rate(CalculationResult);
+    public string SecondQualityRating => FitQualityRating.Rate(SecondCalculationResult);
 
 
     // ========== Step 4 - 保存配置 ==========
@@ -1697,14 +1540,13 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         {
             Title = "导出正交度配置 (JSON)",
             Filter = "JSON 文件 (*.json)|*.json",
-            FileName = $"{SanitizeFileName(SelectedSavedProfile.Name)}.json",
+            FileName = $"{OrthogonalityProfileExporter.SanitizeFileName(SelectedSavedProfile.Name)}.json",
             DefaultExt = ".json"
         };
         if (dlg.ShowDialog() != true) return;
         try
         {
-            var json = System.Text.Json.JsonSerializer.Serialize(SelectedSavedProfile,
-                new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+            var json = OrthogonalityProfileExporter.BuildJson(SelectedSavedProfile);
             await File.WriteAllTextAsync(dlg.FileName, json);
             System.Windows.MessageBox.Show($"已导出: {dlg.FileName}", "成功");
         }
@@ -1726,13 +1568,13 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         {
             Title = "导出正交度配置 (CSV)",
             Filter = "CSV 文件 (*.csv)|*.csv",
-            FileName = $"{SanitizeFileName(SelectedSavedProfile.Name)}.csv",
+            FileName = $"{OrthogonalityProfileExporter.SanitizeFileName(SelectedSavedProfile.Name)}.csv",
             DefaultExt = ".csv"
         };
         if (dlg.ShowDialog() != true) return;
         try
         {
-            var csv = BuildProfileCsv(SelectedSavedProfile);
+            var csv = OrthogonalityProfileExporter.BuildCsv(SelectedSavedProfile);
             await File.WriteAllTextAsync(dlg.FileName, csv, new System.Text.UTF8Encoding(true));
             System.Windows.MessageBox.Show($"已导出: {dlg.FileName}", "成功");
         }
@@ -1740,42 +1582,6 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         {
             System.Windows.MessageBox.Show($"导出失败: {ex.Message}", "错误");
         }
-    }
-
-    /// <summary>
-    /// 单个正交度配置的 CSV：名称与序列号按 RFC 4180 加引号（内部引号加倍，逗号与换行留在引号内），
-    /// 数值用不变区域性的往返格式。
-    /// </summary>
-    internal static string BuildProfileCsv(OrthogonalityParams p)
-    {
-        var sb = new System.Text.StringBuilder();
-        sb.AppendLine("name,sensor_serial,created_at,unit,sample_count,residual_mean,residual_std," +
-                      "offset_x,offset_y,offset_z," +
-                      "m00,m01,m02,m10,m11,m12,m20,m21,m22");
-        static string Text(string? s) => "\"" + (s ?? "").Replace("\"", "\"\"") + "\"";
-        static string D(double v) => v.ToString("R", CultureInfo.InvariantCulture);
-        static string DN(double? v) => v.HasValue ? D(v.Value) : "";
-        sb.Append($"{Text(p.Name)},{Text(p.SensorSerial)},{p.CreatedAt:yyyy-MM-dd HH:mm:ss},");
-        sb.Append($"{OrthogonalityParams.CanonicalUnit(p.Unit)},{p.SampleCount},{DN(p.ResidualMean)},{DN(p.ResidualStd)},");
-        sb.Append($"{D(p.Offset[0])},{D(p.Offset[1])},{D(p.Offset[2])},");
-        for (int i = 0; i < 9; i++)
-        {
-            sb.Append(D(p.CompensationMatrix[i]));
-            if (i < 8) sb.Append(',');
-        }
-        sb.AppendLine();
-        return sb.ToString();
-    }
-
-    private static string SanitizeFileName(string name)
-    {
-        if (string.IsNullOrWhiteSpace(name)) return "profile";
-        var invalid = Path.GetInvalidFileNameChars();
-        var sb = new System.Text.StringBuilder();
-        foreach (var c in name)
-            if (Array.IndexOf(invalid, c) < 0) sb.Append(c);
-        var s = sb.ToString().Trim();
-        return s.Length == 0 ? "profile" : (s.Length > 80 ? s[..80] : s);
     }
 
     [RelayCommand]
@@ -1848,62 +1654,5 @@ public partial class OrthogonalityCalibrationViewModel : ObservableObject
         {
             CollectionStatus = $"加载会话失败：{ex.Message}";
         }
-    }
-
-    private static string[] SplitCsvLine(string line) =>
-        line.Split(new[] { ',', '\t', ';' }, StringSplitOptions.RemoveEmptyEntries)
-            .Select(p => p.Trim()).ToArray();
-
-    private static bool TryParseDouble(string s, out double v) =>
-        double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out v);
-
-    private static bool TryExtractByMap(string[] parts, int[] map, int start, int count, out double[] result)
-    {
-        result = new double[count];
-        for (int i = 0; i < count; i++)
-        {
-            int colIdx = map[start + i];
-            if (colIdx < 0 || colIdx >= parts.Length || !TryParseDouble(parts[colIdx], out result[i]))
-                return false;
-        }
-        return true;
-    }
-
-    /// <summary>
-    /// 按 header 列名定位 X/Y/Z (双三轴: X1/Y1/Z1/X2/Y2/Z2)。
-    /// 找不到的列返回 -1，TryExtractByMap 会因此返回 false 并跳行。
-    /// </summary>
-    private static int[] BuildColumnMap(string[] headers, bool dual)
-    {
-        var lower = headers.Select(h => h.ToLowerInvariant().Trim()).ToArray();
-
-        int find(params string[] names)
-        {
-            foreach (var n in names)
-            {
-                int idx = Array.IndexOf(lower, n);
-                if (idx >= 0) return idx;
-            }
-            return -1;
-        }
-
-        if (dual)
-        {
-            return new[]
-            {
-                find("x1", "bx1", "ch0"),
-                find("y1", "by1", "ch1"),
-                find("z1", "bz1", "ch2"),
-                find("x2", "bx2", "ch3"),
-                find("y2", "by2", "ch4"),
-                find("z2", "bz2", "ch5"),
-            };
-        }
-        return new[]
-        {
-            find("x", "bx", "ch0"),
-            find("y", "by", "ch1"),
-            find("z", "bz", "ch2"),
-        };
     }
 }
