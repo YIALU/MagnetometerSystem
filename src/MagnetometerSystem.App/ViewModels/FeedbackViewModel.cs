@@ -31,11 +31,12 @@ public partial class FeedbackViewModel(IFeedbackClient client, FeedbackDraftStor
     {
         try
         {
-            var saved = await drafts.LoadAsync(); if (saved is null) return;
+            var (saved, savedIncludeLogs) = await drafts.LoadDraftAsync(); if (saved is null) return;
             _attempt = saved; Scenario = saved.Scenario; Description = saved.Description;
             Name = saved.Name ?? ""; Contact = saved.Contact ?? "";
-            // 上次提交时已固定的日志随草稿保留；重试必须发出与第一次相同的内容。
-            if (saved.Logs is not null) IncludeLogs = CanAttachLogs;
+            // 恢复用户上次的勾选（取消勾选后重启不能又默认附带）；上次提交时已固定的日志随草稿保留，重试原样重发。
+            if (savedIncludeLogs is { } include) IncludeLogs = include && CanAttachLogs;
+            else if (saved.Logs is not null) IncludeLogs = CanAttachLogs;
         }
         catch { Status = "未能读取上次草稿，可以重新填写。"; }
         finally { IsInitialized = true; }
@@ -52,7 +53,7 @@ public partial class FeedbackViewModel(IFeedbackClient client, FeedbackDraftStor
     public async Task SaveDraftAsync()
     {
         if (HasSubmitted || IsSubmitting) return;
-        try { _attempt = Snapshot(); await drafts.SaveAsync(_attempt); }
+        try { _attempt = Snapshot(); await drafts.SaveAsync(_attempt, IncludeLogs); }
         catch { Status = "草稿保存失败，请保留当前填写内容。"; }
     }
     /// <summary>取当前将要发送的日志文本供预览；已提交过一次的沿用当时固定的内容。</summary>
@@ -91,7 +92,7 @@ public partial class FeedbackViewModel(IFeedbackClient client, FeedbackDraftStor
             // 不会出现同一编号先后发出不同内容（服务端会按冲突拒绝）。
             if (IncludeLogs && request.Logs is null)
                 request = request with { FeedbackId = Guid.NewGuid(), Logs = await CollectEncodedLogsAsync() };
-            _attempt = request; await drafts.SaveAsync(request); saved = true;
+            _attempt = request; await drafts.SaveAsync(request, IncludeLogs); saved = true;
             var receipt = await client.SubmitAsync(request);
             HasSubmitted = true; IssueUrl = receipt.IssueUrl;
             Status = $"反馈已收到，编号 {receipt.FeedbackId.ToString()[..8]}。";

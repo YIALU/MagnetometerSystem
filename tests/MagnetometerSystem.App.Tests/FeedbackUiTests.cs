@@ -117,6 +117,27 @@ public sealed class FeedbackUiTests
     });
 
     [Fact]
+    public Task OptOutSurvivesRestartAndRetrySendsNoLogs() => WpfTestHost.RunAsync(async () =>
+    {
+        var path = Path.Combine(Path.GetTempPath(), "feedback-optout-" + Guid.NewGuid(), "draft.json");
+        try
+        {
+            var logs = new LogSource("不应发送");
+            var client = new Client { Fail = true }; var first = new FeedbackViewModel(client, new(path), logs); await first.InitializeAsync();
+            first.IncludeLogs = false; first.Scenario = "采集"; first.Description = "结果不明";
+            await first.SubmitCommand.ExecuteAsync(null);
+            var sent = client.Last!; Assert.Null(sent.Logs);
+
+            client.Fail = false;
+            var restarted = new FeedbackViewModel(client, new(path), logs); await restarted.InitializeAsync();
+            Assert.False(restarted.IncludeLogs);
+            await restarted.SubmitCommand.ExecuteAsync(null);
+            Assert.Equal(sent, client.Last); Assert.Equal(0, logs.Calls);
+        }
+        finally { if (Directory.Exists(Path.GetDirectoryName(path))) Directory.Delete(Path.GetDirectoryName(path)!, true); }
+    });
+
+    [Fact]
     public Task UncheckedOrUnavailableLogsStillSubmitText() => WpfTestHost.RunAsync(async () =>
     {
         var path = Path.Combine(Path.GetTempPath(), "feedback-nologs-" + Guid.NewGuid(), "draft.json");

@@ -106,11 +106,12 @@ public sealed class FeedbackLogCollector : IFeedbackLogSource
             text = text.Replace(_userProfile, "%USERPROFILE%", StringComparison.OrdinalIgnoreCase);
         // 其他盘符或非当前用户的用户目录也不留用户名。
         text = UserDirectory.Replace(text, m => m.Groups[1].Value + "<用户>");
+        // 先替换计算机名：它常以用户名开头（如 ALICE-LAB07），先换用户名会让计算机名匹配不上。
+        if (!string.IsNullOrEmpty(_machineName) && _machineName.Length >= 2)
+            text = Regex.Replace(text, $@"(?<![\p{{L}}\p{{N}}_-]){Regex.Escape(_machineName)}(?![\p{{L}}\p{{N}}_-])", "<计算机>", RegexOptions.IgnoreCase);
         // 太短的名字（如 "a"）会误伤正常文字，只处理 2 个字符以上的。
         if (!string.IsNullOrEmpty(_userName) && _userName.Length >= 2)
             text = Regex.Replace(text, $@"(?<![\p{{L}}\p{{N}}_]){Regex.Escape(_userName)}(?![\p{{L}}\p{{N}}_])", "<用户>", RegexOptions.IgnoreCase);
-        if (!string.IsNullOrEmpty(_machineName) && _machineName.Length >= 2)
-            text = Regex.Replace(text, $@"(?<![\p{{L}}\p{{N}}_-]){Regex.Escape(_machineName)}(?![\p{{L}}\p{{N}}_-])", "<计算机>", RegexOptions.IgnoreCase);
         return text;
     }
 

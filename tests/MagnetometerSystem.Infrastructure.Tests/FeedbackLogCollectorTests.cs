@@ -77,6 +77,36 @@ public sealed class FeedbackLogCollectorTests : IDisposable
     }
 
     [Fact]
+    public async Task MachineNameStartingWithUserNameIsFullyRedacted()
+    {
+        Write("app-20261010.log", "[INF] 主机 ALICE-LAB07 上的用户 alice\n", Now);
+        var collector = new FeedbackLogCollector(() => _directory, utcNow: () => Now,
+            userName: "alice", userProfile: @"C:\Users\alice", machineName: "ALICE-LAB07");
+
+        var text = (await collector.CollectAsync())!;
+
+        Assert.Contains("主机 <计算机> 上的用户 <用户>", text);
+        Assert.DoesNotContain("LAB07", text);
+    }
+
+    [Fact]
+    public async Task DraftKeepsAttachmentChoiceAndReadsLegacyDrafts()
+    {
+        var path = Path.Combine(_directory, "draft.json");
+        var store = new FeedbackDraftStore(path);
+        var draft = new FeedbackSubmission(Guid.NewGuid(), "场景", "描述");
+        await store.SaveAsync(draft, includeLogs: false);
+        Assert.Equal((draft, (bool?)false), await store.LoadDraftAsync());
+        await store.SaveAsync(draft, includeLogs: true);
+        Assert.True((await store.LoadDraftAsync()).IncludeLogs);
+
+        // 旧版本写的草稿只有提交内容，没有勾选状态。
+        await File.WriteAllTextAsync(path, System.Text.Json.JsonSerializer.Serialize(draft));
+        Assert.Equal((draft, (bool?)null), await store.LoadDraftAsync());
+        Assert.Equal(draft, await store.LoadAsync());
+    }
+
+    [Fact]
     public async Task OversizedLogsKeepNewestLinesWithinLimit()
     {
         var old = string.Concat(Enumerable.Range(0, 2000).Select(i => $"[INF] 较早的第 {i} 行\n"));
