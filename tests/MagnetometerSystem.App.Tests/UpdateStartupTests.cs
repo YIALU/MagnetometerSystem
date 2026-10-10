@@ -258,12 +258,14 @@ public class UpdateStartupTests
         var cleared = 0;
         coordinator.KnownUpdateCleared += () => cleared++;
 
-        await coordinator.CheckManuallyAsync();
+        var found = (await coordinator.CheckManuallyAsync()).Info!;
         Assert.NotNull(coordinator.LastKnownUpdate);
+        Assert.True(coordinator.IsCurrentUpdate(found));
         Assert.Equal(0, cleared);
 
         await coordinator.CheckManuallyAsync();
         Assert.Null(coordinator.LastKnownUpdate);
+        Assert.False(coordinator.IsCurrentUpdate(found)); // 排队中的旧回调据此不再挂角标。
         Assert.Null(await preferences.GetPreferenceAsync<UpdateInfo>(UpdateCoordinator.KeyKnownUpdate));
         Assert.Equal(1, cleared);
     }

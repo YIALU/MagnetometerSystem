@@ -163,12 +163,17 @@ public partial class App : Application
             Current?.Dispatcher.InvokeAsync(() => mainVm.AvailableUpdateVersion = null);
 
         await coordinator.RunAutoCheckLoopAsync(
-            async info =>
+            async info => await Current.Dispatcher.Invoke(() =>
             {
-                await Current.Dispatcher.InvokeAsync(() => mainVm.AvailableUpdateVersion = info.Version);
-                await Current.Dispatcher.Invoke(() => coordinator.ShowUpdateDialogAsync(Current.MainWindow, info));
-            },
-            async info => await Current.Dispatcher.InvokeAsync(() => mainVm.AvailableUpdateVersion = info.Version),
+                // 回调排到 UI 线程时，这个版本可能已被更新的检查或切换平台作废。
+                if (!coordinator.IsCurrentUpdate(info)) return Task.CompletedTask;
+                mainVm.AvailableUpdateVersion = info.Version;
+                return coordinator.ShowUpdateDialogAsync(Current.MainWindow, info);
+            }),
+            async info => await Current.Dispatcher.InvokeAsync(() =>
+            {
+                if (coordinator.IsCurrentUpdate(info)) mainVm.AvailableUpdateVersion = info.Version;
+            }),
             UpdateLoopCts.Token);
     }
 

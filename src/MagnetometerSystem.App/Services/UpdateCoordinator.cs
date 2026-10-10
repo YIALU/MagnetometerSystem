@@ -69,6 +69,14 @@ public sealed class UpdateCoordinator
     public UpdateInfo? LastKnownUpdate { get; private set; }
 
     /// <summary>
+    /// 这个版本是否仍是当前记下的新版本。静默检查的回调在 UI 线程挂角标前用它做最后确认：
+    /// 清除总是先置空 <see cref="LastKnownUpdate"/> 再通知撤角标，所以无论两者在 UI 线程上
+    /// 谁先执行，最终都不会留下已作废的角标。
+    /// </summary>
+    public bool IsCurrentUpdate(UpdateInfo info) =>
+        string.Equals(LastKnownUpdate?.Version, info.Version, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
     /// 之后的检查确认已是最新（例如发布被撤回或换了平台），以前记下的新版本作废。
     /// 订阅方据此撤下状态栏角标；在后台线程触发。
     /// </summary>
