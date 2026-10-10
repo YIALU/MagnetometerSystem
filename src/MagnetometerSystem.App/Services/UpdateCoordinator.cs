@@ -43,11 +43,11 @@ public sealed class UpdateCoordinator
     private readonly IUserPreferencesService _preferences;
     private readonly SemaphoreSlim _sourceGate = new(1, 1);
 
-    /// <summary>定时检查与手动检查串行执行，慢的旧结果不会覆盖新结果。</summary>
+    /// <summary>
+    /// 定时检查、手动检查和切换平台互斥执行，慢的旧结果不会覆盖新结果。
+    /// 加锁顺序固定为先 _checkGate 后 _sourceGate。
+    /// </summary>
     private readonly SemaphoreSlim _checkGate = new(1, 1);
-
-    /// <summary>每次切换更新平台加一；切换前发出、切换后才返回的检查结果作废。</summary>
-    private int _sourceGeneration;
 
     /// <summary>每写入一次检查结果或切换一次平台加一；静默检查弹窗前据此确认自己仍是最新结果。</summary>
     private int _resultGeneration;
@@ -97,33 +97,35 @@ public sealed class UpdateCoordinator
     public async Task SetSourceAsync(UpdateSource source)
     {
         if (!Enum.IsDefined(source)) throw new ArgumentOutOfRangeException(nameof(source));
-        var changed = false;
-        await _sourceGate.WaitAsync();
+        // 等进行中的检查写完、且切换和清缓存做完之前不让新检查开始，
+        // 旧平台的结果不会在清除之后写回，新平台的结果也不会被清掉。
+        await _checkGate.WaitAsync();
         try
         {
-            var previous = _updateService.Options.PreferredSource;
-            if (!_sourceLoaded)
+            var changed = false;
+            await _sourceGate.WaitAsync();
+            try
             {
-                var saved = await _preferences.GetPreferenceAsync<string>(KeySource);
-                previous = Enum.TryParse<UpdateSource>(saved, out var parsed) && Enum.IsDefined(parsed) ? parsed : UpdateSource.Automatic;
+                var previous = _updateService.Options.PreferredSource;
+                if (!_sourceLoaded)
+                {
+                    var saved = await _preferences.GetPreferenceAsync<string>(KeySource);
+                    previous = Enum.TryParse<UpdateSource>(saved, out var parsed) && Enum.IsDefined(parsed) ? parsed : UpdateSource.Automatic;
+                }
+                changed = previous != source;
+                _updateService.Options.PreferredSource = source;
+                _sourceLoaded = true;
+                await _preferences.SetPreferenceAsync(KeySource, source.ToString());
             }
-            changed = previous != source;
+            catch (Exception ex) { Log.Warning(ex, "保存更新平台失败"); }
+            finally { _sourceGate.Release(); }
+
             if (changed)
             {
-                Interlocked.Increment(ref _sourceGeneration);
                 Interlocked.Increment(ref _resultGeneration);
+                await InvalidateKnownUpdateAsync();
             }
-            _updateService.Options.PreferredSource = source;
-            _sourceLoaded = true;
-            await _preferences.SetPreferenceAsync(KeySource, source.ToString());
         }
-        catch (Exception ex) { Log.Warning(ex, "保存更新平台失败"); }
-        finally { _sourceGate.Release(); }
-
-        if (!changed) return;
-        // 等进行中的检查写完再清，免得旧平台的结果在清除之后又写回来。
-        await _checkGate.WaitAsync();
-        try { await InvalidateKnownUpdateAsync(); }
         finally { _checkGate.Release(); }
     }
 
@@ -243,7 +245,6 @@ public sealed class UpdateCoordinator
         try
         {
             await GetSourceAsync();
-            var generation = Volatile.Read(ref _sourceGeneration);
             result = await _updateService.CheckForUpdateAsync();
             if (result.WarningMessage != null) Log.Warning("部分更新平台检查失败: {Message}", result.WarningMessage);
 
@@ -254,7 +255,7 @@ public sealed class UpdateCoordinator
                 return;
             }
 
-            if (!await RecordResultAsync(result, generation)) return;
+            await RecordResultAsync(result);
             published = Volatile.Read(ref _resultGeneration);
         }
         finally { _checkGate.Release(); }
@@ -334,9 +335,8 @@ public sealed class UpdateCoordinator
         {
             await GetSourceAsync();
             ct.ThrowIfCancellationRequested();
-            var generation = Volatile.Read(ref _sourceGeneration);
             var result = await _updateService.CheckForUpdateAsync(ct);
-            if (result.Status != UpdateCheckStatus.Failed) await RecordResultAsync(result, generation);
+            if (result.Status != UpdateCheckStatus.Failed) await RecordResultAsync(result);
             return result;
         }
         finally { _checkGate.Release(); }
@@ -345,16 +345,10 @@ public sealed class UpdateCoordinator
     /// <summary>
     /// 记录一次成功的检查。只有所有平台都答复时才写检查时间和"已是最新"；
     /// 部分平台失败时发现的新版本照样记下，但不清除以前记下的版本。
-    /// 检查期间换过平台时整条结果作废，返回 false。
+    /// 调用方须持有 _checkGate。
     /// </summary>
-    private async Task<bool> RecordResultAsync(UpdateCheckResult result, int generation)
+    private async Task RecordResultAsync(UpdateCheckResult result)
     {
-        if (generation != Volatile.Read(ref _sourceGeneration))
-        {
-            Log.Information("检查期间更新平台已切换，忽略这次结果");
-            return false;
-        }
-
         Interlocked.Increment(ref _resultGeneration);
 
         if (result.Status == UpdateCheckStatus.UpdateAvailable && result.Info is not null)
@@ -371,7 +365,6 @@ public sealed class UpdateCoordinator
         }
 
         if (result.WarningMessage == null) await TrySetLastCheckAsync(UtcNow());
-        return true;
     }
 
     /// <summary>

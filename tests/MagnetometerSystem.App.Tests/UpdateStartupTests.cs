@@ -399,6 +399,32 @@ public class UpdateStartupTests
     }
 
     [Fact]
+    public async Task CheckStartedDuringSourceSwitchRunsAfterItAndKeepsItsResult()
+    {
+        var saving = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var preferences = new BlockingSetPreferences(new Preferences(), UpdateCoordinator.KeySource, saving.Task);
+        var service = new RecordingService();
+        var coordinator = new UpdateCoordinator(service, preferences);
+        var cleared = 0;
+        coordinator.KnownUpdateCleared += () => cleared++;
+
+        var switching = coordinator.SetSourceAsync(UpdateSource.GitHub);
+        var manual = coordinator.CheckManuallyAsync();
+        try
+        {
+            await Task.Delay(200);
+            Assert.Equal(0, service.CheckCalls); // 切换和清缓存做完之前不开始新检查。
+        }
+        finally { saving.TrySetResult(); }
+        await switching.WaitAsync(TimeSpan.FromSeconds(15));
+        Assert.Equal(UpdateCheckStatus.UpdateAvailable, (await manual.WaitAsync(TimeSpan.FromSeconds(15))).Status);
+
+        Assert.Equal(1, service.CheckCalls);
+        Assert.NotNull(coordinator.LastKnownUpdate); // 新平台的结果没被清掉。
+        Assert.Equal(0, cleared);
+    }
+
+    [Fact]
     public async Task LastCheckInTheFutureIsTreatedAsDue()
     {
         var preferences = new Preferences();
@@ -438,6 +464,17 @@ public class UpdateStartupTests
             return await inner.GetPreferenceAsync<T>(key);
         }
         public Task SetPreferenceAsync<T>(string key, T value) => inner.SetPreferenceAsync(key, value);
+    }
+
+    /// <summary>写指定键时等外部放行，模拟切换平台时保存偏好较慢。</summary>
+    private sealed class BlockingSetPreferences(Preferences inner, string blockedKey, Task release) : IUserPreferencesService
+    {
+        public Task<T?> GetPreferenceAsync<T>(string key) => inner.GetPreferenceAsync<T>(key);
+        public async Task SetPreferenceAsync<T>(string key, T value)
+        {
+            if (key == blockedKey) await release;
+            await inner.SetPreferenceAsync(key, value);
+        }
     }
 
     private sealed class SequenceService(params UpdateCheckResult[] results) : IUpdateService
