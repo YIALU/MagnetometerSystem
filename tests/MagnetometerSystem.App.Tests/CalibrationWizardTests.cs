@@ -244,7 +244,7 @@ public class CalibrationWizardTests
         // 原始 CSV 只追加：撤销、清空前写入的 3 行仍在，加上之后的 3 行。
         Assert.Equal("采集已结束 · 共 6 行", vm.RawFileStatus);
         // 退订前已在进行的读数回调在停止之后才执行：不能把链路条状态改回“采集中”。
-        vm.OnCalibrationDataReceived(Reading([1, 2, 3, 4, 5, 6]));
+        vm.Collector.OnReadingReceived(Reading([1, 2, 3, 4, 5, 6]));
         Assert.False(f.Bus.ManualOrthoState.IsActive);
         // 停止后链路条的请求不再记录。
         f.Bus.RaiseManualOrthoRecord();
@@ -338,7 +338,7 @@ public class CalibrationWizardTests
         // 写入中途失败（此处让写入器失效）：停止写这个文件并说明原因，拟合样本照常累积。
         for (int i = 0; i < 2; i++) f.Bus.PublishReading(Reading([1, 2, 3 + i]));
         await WaitForAsync(() => vm.CollectedSampleCount == 2);
-        Assert.IsType<StreamWriter>(vm.CurrentRawWriter).Dispose();
+        Assert.IsType<StreamWriter>(vm.RawRecorder.CurrentWriter).Dispose();
         for (int i = 0; i < 3; i++) f.Bus.PublishReading(Reading([1, 2, 5 + i]));
         await WaitForAsync(() => vm.CollectedSampleCount == 5);
         Assert.True(vm.RawFileFailed);

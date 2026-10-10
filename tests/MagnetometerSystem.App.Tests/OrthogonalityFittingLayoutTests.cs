@@ -27,9 +27,9 @@ public class OrthogonalityFittingLayoutTests
             {
                 var vm = fixture.CreateVm(3);
                 await fixture.PrepareLiveAsync(units);
-                Assert.Equal(units.Length, vm.FittingChannelOptions.Count);
-                Assert.Equal(-1, vm.FitX1);
-                Assert.False(vm.IsFittingChannelValid);
+                Assert.Equal(units.Length, vm.Fitting.Options.Count);
+                Assert.Equal(-1, vm.Fitting.FitX1);
+                Assert.False(vm.Fitting.IsValid);
                 vm.StartCollectingCommand.Execute(null);
                 Assert.False(vm.IsCollecting);
                 Assert.Contains("拟合通道", vm.CollectionStatus);
@@ -42,8 +42,8 @@ public class OrthogonalityFittingLayoutTests
             // 用户明确选择后按所选通道采集。
             var chosen = fixture.CreateVm(3);
             await fixture.PrepareLiveAsync(["nT", "nT", "nT", "nT"]);
-            (chosen.FitX1, chosen.FitY1, chosen.FitZ1) = (3, 1, 2);
-            Assert.True(chosen.IsFittingChannelValid, chosen.FittingChannelHint);
+            (chosen.Fitting.FitX1, chosen.Fitting.FitY1, chosen.Fitting.FitZ1) = (3, 1, 2);
+            Assert.True(chosen.Fitting.IsValid, chosen.Fitting.Hint);
             chosen.StartCollectingCommand.Execute(null);
             Assert.True(chosen.IsCollecting, chosen.CollectionStatus);
             fixture.Bus.PublishReading(new MagnetometerReading { Timestamp = DateTime.UtcNow, ChannelValues = [10, 11, 12, 13] });
@@ -53,7 +53,7 @@ public class OrthogonalityFittingLayoutTests
             // 混合单位即使手动选择也拒绝。
             var mixed = fixture.CreateVm(3);
             await fixture.PrepareLiveAsync(["nT", "uT", "nT"]);
-            (mixed.FitX1, mixed.FitY1, mixed.FitZ1) = (0, 1, 2);
+            (mixed.Fitting.FitX1, mixed.Fitting.FitY1, mixed.Fitting.FitZ1) = (0, 1, 2);
             mixed.StartCollectingCommand.Execute(null);
             Assert.False(mixed.IsCollecting);
             Assert.Contains("单位", mixed.CollectionStatus);
@@ -205,7 +205,7 @@ public class OrthogonalityFittingLayoutTests
                 var extra = await fixture.SaveSessionAsync(Enumerable.Repeat("nT", channels + 1).ToArray());
                 await ImportSessionAsync(vm, extra);
                 Assert.Contains("拟合通道", vm.CollectionStatus);
-                Assert.Equal(channels + 1, vm.FittingChannelOptions.Count);
+                Assert.Equal(channels + 1, vm.Fitting.Options.Count);
                 Assert.Equal(new double[] { 1, 2, 3 }, Assert.Single(vm.CollectedData));
 
                 // 旧库的元数据快照少记了一个通道，但行里仍有：即使选了通道也拒绝。
@@ -255,15 +255,15 @@ public class OrthogonalityFittingLayoutTests
             Assert.Equal(new double[] { 1, 2, 3 }, vm.CollectedData[0]);
             Assert.True(vm.CanGoNext);
 
-            vm.FitX1 = 1;   // 无效（与 Y 重复）：不能重新读取，旧样本也不能继续使用
+            vm.Fitting.FitX1 = 1;   // 无效（与 Y 重复）：不能重新读取，旧样本也不能继续使用
             Assert.True(vm.FittingMapMismatch);
             Assert.False(vm.CanGoNext);
             Assert.Contains("拟合通道已更改", vm.StepGateText);
-            vm.FitX1 = 0;   // 改回取样时的通道
+            vm.Fitting.FitX1 = 0;   // 改回取样时的通道
             Assert.False(vm.FittingMapMismatch);
             Assert.True(vm.CanGoNext);
 
-            vm.FitZ1 = 3;   // 有效的新选择：按新通道重新读取，成功后可继续
+            vm.Fitting.FitZ1 = 3;   // 有效的新选择：按新通道重新读取，成功后可继续
             await WaitUntil(() => vm.CollectedData[0][2] == 4);
             Assert.Equal(new double[] { 1, 2, 4 }, vm.CollectedData[0]);
             Assert.True(vm.CanGoNext);
@@ -284,17 +284,17 @@ public class OrthogonalityFittingLayoutTests
             vm.CurrentStep = 2;
             Assert.True(vm.CanGoNext);
 
-            vm.FitX1 = 3;
+            vm.Fitting.FitX1 = 3;
             Assert.False(vm.CanGoNext);
-            vm.FitX1 = 0;
+            vm.Fitting.FitX1 = 0;
             Assert.True(vm.CanGoNext);
 
             // 断开后下拉框不再描述这批样本的列：已采集的样本仍可继续使用。
-            vm.FitX1 = 3;
+            vm.Fitting.FitX1 = 3;
             Assert.False(vm.CanGoNext);
             fixture.Bus.PublishAcquisitionStopped();
             fixture.Bus.PublishConnectionChanged(null);
-            Assert.Empty(vm.FittingChannelOptions);
+            Assert.Empty(vm.Fitting.Options);
             Assert.True(vm.CanGoNext);
             Assert.Equal(new double[] { 0, 10, 20 }, vm.CollectedData[0]);
         });
@@ -428,15 +428,15 @@ public class OrthogonalityFittingLayoutTests
 
             // 采集中重连了轴顺序不同的协议：采集中不刷新选项。
             await fixture.PrepareLiveAsync(["nT", "nT", "nT"], ["Bz", "By", "Bx"]);
-            Assert.Equal("X (nT)", vm.FittingChannelOptions[0].Label);
+            Assert.Equal("X (nT)", vm.Fitting.Options[0].Label);
             if (readingArrives)
                 fixture.Bus.PublishReading(new MagnetometerReading { Timestamp = DateTime.UtcNow, ChannelValues = [4, 5, 6] });
             else
                 vm.StopCollectingCommand.Execute(null);
 
             Assert.False(vm.IsCollecting);
-            Assert.Equal(new[] { "Bz (nT)", "By (nT)", "Bx (nT)" }, vm.FittingChannelOptions.Select(o => o.Label));
-            Assert.Equal((2, 1, 0), (vm.FitX1, vm.FitY1, vm.FitZ1));   // 按新名称重新识别
+            Assert.Equal(new[] { "Bz (nT)", "By (nT)", "Bx (nT)" }, vm.Fitting.Options.Select(o => o.Label));
+            Assert.Equal((2, 1, 0), (vm.Fitting.FitX1, vm.Fitting.FitY1, vm.Fitting.FitZ1));   // 按新名称重新识别
             Assert.Equal(new double[] { 1, 2, 3 }, Assert.Single(vm.CollectedData));
         });
 
@@ -461,8 +461,8 @@ public class OrthogonalityFittingLayoutTests
             var vm = fixture.CreateVm(3);
             // 连接回调里建立拟合通道选项：名称或单位为 null 时不能抛异常（否则连接会被拆掉）。
             await fixture.PrepareLiveAsync([null!, "nT", "nT", "nT"], ["T", null!, "Y", "Z"]);
-            Assert.Equal(new[] { "T", "通道 1 (nT)", "Y (nT)", "Z (nT)" }, vm.FittingChannelOptions.Select(o => o.Label));
-            Assert.Equal((1, 2, 3), (vm.FitX1, vm.FitY1, vm.FitZ1));   // 磁场通道恰好 3 个，按顺序
+            Assert.Equal(new[] { "T", "通道 1 (nT)", "Y (nT)", "Z (nT)" }, vm.Fitting.Options.Select(o => o.Label));
+            Assert.Equal((1, 2, 3), (vm.Fitting.FitX1, vm.Fitting.FitY1, vm.Fitting.FitZ1));   // 磁场通道恰好 3 个，按顺序
         });
 
     private static async Task WaitUntil(Func<bool> condition)
@@ -517,8 +517,8 @@ public class OrthogonalityFittingLayoutTests
 
     private static void SelectInOrder(OrthogonalityCalibrationViewModel vm, int channels)
     {
-        (vm.FitX1, vm.FitY1, vm.FitZ1) = (0, 1, 2);
-        if (channels == 6) (vm.FitX2, vm.FitY2, vm.FitZ2) = (3, 4, 5);
+        (vm.Fitting.FitX1, vm.Fitting.FitY1, vm.Fitting.FitZ1) = (0, 1, 2);
+        if (channels == 6) (vm.Fitting.FitX2, vm.Fitting.FitY2, vm.Fitting.FitZ2) = (3, 4, 5);
     }
 
     private static List<double[]> SecondGroup(OrthogonalityCalibrationViewModel vm) => vm.SnapshotSecondGroupSamples();
