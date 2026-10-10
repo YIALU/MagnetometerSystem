@@ -445,6 +445,42 @@ public class UpdateStartupTests
     }
 
     [Fact]
+    public async Task PromptCooldownSurvivesRestartAfterPartialFailure()
+    {
+        var preferences = new Preferences();
+        var partial = UpdateCheckResult.Available(Info()) with { WarningMessage = "GitHub 无法连接" };
+        var first = new UpdateCoordinator(new RecordingService { Result = partial }, preferences) { StartupDelay = TimeSpan.Zero };
+        var prompts = 0;
+        await first.RunStartupCheckAsync(_ => { prompts++; return Task.CompletedTask; });
+        Assert.Equal(1, prompts); // 点"稍后提醒"后重启；没写检查时间，启动时会再查。
+
+        var service = new RecordingService { Result = partial };
+        var restarted = new UpdateCoordinator(service, preferences) { StartupDelay = TimeSpan.Zero };
+        await restarted.RunStartupCheckAsync(_ => { prompts++; return Task.CompletedTask; });
+        Assert.Equal(1, service.CheckCalls);
+        Assert.Equal(1, prompts);
+    }
+
+    [Fact]
+    public async Task SourceSwitchDropsOldUpdateBeforeSavingPreference()
+    {
+        var saving = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var preferences = new BlockingSetPreferences(new Preferences(), UpdateCoordinator.KeySource, saving.Task);
+        var coordinator = new UpdateCoordinator(new RecordingService(), preferences);
+        var found = (await coordinator.CheckManuallyAsync()).Info!;
+        Assert.True(coordinator.IsCurrentUpdate(found));
+
+        var switching = coordinator.SetSourceAsync(UpdateSource.GitHub);
+        try
+        {
+            Assert.False(switching.IsCompleted);
+            Assert.False(coordinator.IsCurrentUpdate(found)); // 保存平台偏好期间，排队的旧回调已不能挂角标。
+        }
+        finally { saving.TrySetResult(); }
+        await switching.WaitAsync(TimeSpan.FromSeconds(15));
+    }
+
+    [Fact]
     public async Task LastCheckInTheFutureIsTreatedAsDue()
     {
         var preferences = new Preferences();

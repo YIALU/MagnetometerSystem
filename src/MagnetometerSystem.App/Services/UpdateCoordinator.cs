@@ -24,6 +24,7 @@ public sealed class UpdateCoordinator
     public const string KeySkippedVersion = "update.skippedVersion";
     public const string KeySource = "update.source";
     public const string KeyKnownUpdate = "update.knownUpdate";
+    public const string KeyLastPrompt = "update.lastPrompt";
 
     /// <summary>两次静默检查的最小间隔。</summary>
     internal static readonly TimeSpan SilentCheckInterval = TimeSpan.FromHours(24);
@@ -111,6 +112,7 @@ public sealed class UpdateCoordinator
         try
         {
             var changed = false;
+            var hadUpdate = false;
             await _sourceGate.WaitAsync();
             try
             {
@@ -121,6 +123,13 @@ public sealed class UpdateCoordinator
                     previous = Enum.TryParse<UpdateSource>(saved, out var parsed) && Enum.IsDefined(parsed) ? parsed : UpdateSource.Automatic;
                 }
                 changed = previous != source;
+                if (changed)
+                {
+                    // 在任何 await 之前作废旧平台的结果，排队中的界面回调据此不再挂角标、弹窗。
+                    Interlocked.Increment(ref _resultGeneration);
+                    hadUpdate = LastKnownUpdate is not null;
+                    LastKnownUpdate = null;
+                }
                 _updateService.Options.PreferredSource = source;
                 _sourceLoaded = true;
                 await _preferences.SetPreferenceAsync(KeySource, source.ToString());
@@ -128,11 +137,7 @@ public sealed class UpdateCoordinator
             catch (Exception ex) { Log.Warning(ex, "保存更新平台失败"); }
             finally { _sourceGate.Release(); }
 
-            if (changed)
-            {
-                Interlocked.Increment(ref _resultGeneration);
-                await InvalidateKnownUpdateAsync();
-            }
+            if (changed) await InvalidateKnownUpdateAsync(hadUpdate);
         }
         finally { _checkGate.Release(); }
     }
@@ -141,10 +146,8 @@ public sealed class UpdateCoordinator
     /// 换了更新平台后，以前记下的新版本和检查时间都不再作数：撤下角标，
     /// 下一轮定时检查按新平台重新联网。
     /// </summary>
-    private async Task InvalidateKnownUpdateAsync()
+    private async Task InvalidateKnownUpdateAsync(bool hadUpdate)
     {
-        var hadUpdate = LastKnownUpdate is not null;
-        LastKnownUpdate = null;
         await TrySetKnownUpdateAsync(null);
         try { await _preferences.SetPreferenceAsync<DateTime?>(KeyLastCheckUtc, null); }
         catch (Exception ex) { Log.Warning(ex, "清除检查更新时间失败"); }
@@ -223,6 +226,8 @@ public sealed class UpdateCoordinator
                 return;
             }
 
+            await LoadLastPromptAsync();
+
             // 先把上次发现的版本挂回角标：24 小时内重启不联网，到期了联网又可能失败，
             // 两种情况下"稍后提醒"的版本都不该找不回来。之后的检查结果会再覆盖它。
             UpdateInfo? known;
@@ -291,18 +296,19 @@ public sealed class UpdateCoordinator
 
         // 部分平台失败时不记检查时间，下一轮仍会联网重试；同一版本 24 小时内只弹一次，
         // 否则"稍后提醒"后每小时都会再弹。
-        if (!TryMarkPrompted(result.Info.Version)) return;
+        if (!await TryMarkPromptedAsync(result.Info.Version)) return;
 
         Log.Information("发现新版本 v{Version}", result.Info.Version);
         await onUpdateFound(result.Info);
     }
 
     /// <summary>同一版本 24 小时内已弹过窗（自动或手动）时返回 false；否则记下本次并返回 true。</summary>
-    private bool TryMarkPrompted(string version)
+    private async Task<bool> TryMarkPromptedAsync(string version)
     {
+        DateTime now;
         lock (_promptLock)
         {
-            var now = UtcNow();
+            now = UtcNow();
             var sinceLast = now - _promptedAtUtc;
             if (string.Equals(_promptedVersion, version, StringComparison.OrdinalIgnoreCase)
                 && sinceLast >= TimeSpan.Zero && sinceLast < SilentCheckInterval)
@@ -312,18 +318,49 @@ public sealed class UpdateCoordinator
 
             _promptedVersion = version;
             _promptedAtUtc = now;
-            return true;
         }
+        await TrySaveLastPromptAsync(version, now);
+        return true;
     }
 
     private void MarkPrompted(string version)
     {
+        DateTime now;
         lock (_promptLock)
         {
+            now = UtcNow();
             _promptedVersion = version;
-            _promptedAtUtc = UtcNow();
+            _promptedAtUtc = now;
+        }
+        _ = TrySaveLastPromptAsync(version, now);
+    }
+
+    /// <summary>
+    /// 弹窗记录要跨重启保留：部分平台失败时不写检查时间，24 小时内重启会立即再查，
+    /// 不读回这条记录就会把刚点过"稍后提醒"的版本再弹一次。
+    /// </summary>
+    private async Task LoadLastPromptAsync()
+    {
+        LastPrompt? saved;
+        try { saved = await _preferences.GetPreferenceAsync<LastPrompt>(KeyLastPrompt); }
+        catch (Exception ex) { Log.Warning(ex, "读取上次更新提示记录失败"); return; }
+        if (saved is null || string.IsNullOrEmpty(saved.Version)) return;
+        lock (_promptLock)
+        {
+            // 本次运行中已有更新的记录时不用旧值覆盖。
+            if (_promptedVersion is not null && _promptedAtUtc >= saved.AtUtc) return;
+            _promptedVersion = saved.Version;
+            _promptedAtUtc = saved.AtUtc;
         }
     }
+
+    private async Task TrySaveLastPromptAsync(string version, DateTime atUtc)
+    {
+        try { await _preferences.SetPreferenceAsync(KeyLastPrompt, new LastPrompt(version, atUtc)); }
+        catch (Exception ex) { Log.Warning(ex, "保存更新提示记录失败"); }
+    }
+
+    internal sealed record LastPrompt(string Version, DateTime AtUtc);
 
     private async Task<bool> IsCheckDueAsync()
     {
