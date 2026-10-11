@@ -14,8 +14,8 @@
          在 Gitee 找到或新建该 Release（新建时为预发布；要改动正式版的附件时先转回预发布）；
       4. 上传缺少的附件；同名同大小的跳过，同名不同大小的停止；加 -Replace 则同名附件一律删除重传；
       5. 从 Gitee 重新下载全部附件，按 SHA256SUMS.txt 校验（Gitee 下载慢、会断时加 -SizeOnly，
-         大文件只核对 Gitee 记录的大小，清单文件仍下载校验）；
-      6. 全部通过后转为正式版（加 -NoPublish 则保持预发布）。
+         大文件只核对 Gitee 记录的大小，清单文件仍下载校验，这时保持预发布）；
+      6. 全部通过后转为正式版（加 -NoPublish 或 -SizeOnly 则保持预发布）。
 
     令牌：优先读环境变量 GITEE_TOKEN，否则向 Git 凭据管理器查询 gitee.com 的凭据，
     都没有时在交互终端提示输入（不回显），非交互运行直接报错。令牌不出现在命令行和日志里；
@@ -327,6 +327,10 @@ try {
         Write-Step '已是正式版，附件未改动'
     } elseif ($NoPublish) {
         Write-Step '已按 -NoPublish 保持预发布'
+    } elseif ($SizeOnly) {
+        # 只核对了大小，没有完整哈希校验，不能当作与 GitHub 逐字节一致
+        Write-Step '已按 -SizeOnly 保持预发布'
+        Write-Warning '大文件未下载校验 SHA256。去掉 -SizeOnly 重跑可校验并转为正式版；或自行从 Gitee 下载核对后，在 Gitee 网页上转为正式版。'
     } else {
         Write-Step '转为正式版'
         Invoke-Gitee PATCH "/releases/$releaseId" @{
