@@ -106,6 +106,10 @@ Write-Ok "两边都指向 $gitHubCommit"
 
 Write-Step '读取 GitHub Release 的标题和说明'
 $gitHubRelease = Invoke-RestMethod "https://api.github.com/repos/$GitHubRepo/releases/tags/$tag" -Headers @{ 'User-Agent' = 'MagnetometerSystem' }
+if ($gitHubRelease.draft -or $gitHubRelease.prerelease) {
+    if (-not $NoPublish) { throw "GitHub 上的 $tag 还是草稿或预发布：先在 GitHub 转为正式版，或加 -NoPublish 只在 Gitee 建预发布。" }
+    Write-Warning "GitHub 上的 $tag 还是草稿或预发布，Gitee 将保持预发布。"
+}
 $title = $gitHubRelease.name
 if (-not $title) { $title = "V$ver" }
 if ($NotesFile) { $body = [IO.File]::ReadAllText((Resolve-Path -LiteralPath $NotesFile).Path) }
@@ -212,6 +216,16 @@ try {
     }
     $releaseId = $release.id
     $isPrerelease = $release.prerelease -ne $false
+
+    # 标题和说明以 GitHub（或 -NotesFile）为准，已存在的 Release 也要跟上
+    $normalize = { param($text) ([string]$text).Replace("`r`n", "`n").Trim() }
+    if ($release.name -ne $title -or (& $normalize $release.body) -ne (& $normalize $body)) {
+        if ($isPrerelease) { $keep = 'true' } else { $keep = 'false' }
+        Invoke-Gitee PATCH "/releases/$releaseId" @{
+            tag_name = $tag; name = $title; body = $body; prerelease = $keep
+        } | Out-Null
+        Write-Ok '已更新标题和说明'
+    }
 
     # -------------------------------------------------------- 4. 上传附件
 
