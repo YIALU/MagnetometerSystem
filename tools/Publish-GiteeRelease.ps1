@@ -13,11 +13,13 @@
       3. 取 GitHub 同版本 Release 的标题和说明，并确认本地 SHA256SUMS.txt 与它的一致；
          在 Gitee 找到或新建该 Release（新建时为预发布；要改动正式版的附件时先转回预发布）；
       4. 上传缺少的附件；同名同大小的跳过，同名不同大小的停止；加 -Replace 则同名附件一律删除重传；
-      5. 从 Gitee 重新下载全部附件，按 SHA256SUMS.txt 校验；
+      5. 从 Gitee 重新下载全部附件，按 SHA256SUMS.txt 校验（Gitee 下载慢、会断时加 -SizeOnly，
+         大文件只核对 Gitee 记录的大小，清单文件仍下载校验）；
       6. 全部通过后转为正式版（加 -NoPublish 则保持预发布）。
 
     令牌：优先读环境变量 GITEE_TOKEN，否则向 Git 凭据管理器查询 gitee.com 的凭据，
-    都没有时提示输入（不回显）。令牌只在本进程内使用，不写入命令行、文件或日志。
+    都没有时在交互终端提示输入（不回显），非交互运行直接报错。令牌不出现在命令行和日志里；
+    上传附件用系统自带的 curl.exe，令牌只在上传期间写进临时 curl 配置文件，传完即删。
 
     Gitee 仓库附件总额度 1 GB，每版约 130 MB。上传因额度失败时，在 Gitee 网页删除旧版本附件后重跑即可，
     已上传的附件会被跳过。
@@ -28,7 +30,8 @@ param(
     [string]$ArtifactsDir,
     [string]$NotesFile,
     [switch]$Replace,
-    [switch]$NoPublish
+    [switch]$NoPublish,
+    [switch]$SizeOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -130,13 +133,20 @@ function Get-GiteeToken {
     $savedGcm = $env:GCM_INTERACTIVE
     $env:GIT_TERMINAL_PROMPT = '0'
     $env:GCM_INTERACTIVE = 'never'
+    # PowerShell 5.1 往原生程序的管道输入不可靠，查询内容经文件交给 cmd 重定向
+    $query = Join-Path ([IO.Path]::GetTempPath()) ("gitee-cred-" + [Guid]::NewGuid() + '.txt')
     try {
-        $answer = "protocol=https`nhost=gitee.com`n`n" | git credential fill 2>$null
+        [IO.File]::WriteAllText($query, "protocol=https`nhost=gitee.com`n`n", (New-Object System.Text.UTF8Encoding($false)))
+        $answer = cmd /c "git credential fill < `"$query`" 2>nul"
         foreach ($line in $answer) { if ($line -like 'password=*') { return $line.Substring(9) } }
     } catch { }
     finally {
+        Remove-Item -LiteralPath $query -Force -ErrorAction SilentlyContinue
         $env:GIT_TERMINAL_PROMPT = $savedPrompt
         $env:GCM_INTERACTIVE = $savedGcm
+    }
+    if ([Console]::IsInputRedirected -or -not [Environment]::UserInteractive) {
+        throw '没有找到 Gitee 令牌：设置环境变量 GITEE_TOKEN，或在交互式 PowerShell 里运行以手动输入。'
     }
     $secure = Read-Host '输入 Gitee 私人令牌（不回显）' -AsSecureString
     $ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
@@ -237,21 +247,31 @@ try {
             Write-Ok "已删除旧的 $name"
         }
         Write-Host "    上传 $name（$([math]::Round($local.Length / 1MB, 1)) MB）…"
-        $stream = [IO.File]::OpenRead($local.FullName)
+        # Gitee 拒收 .NET Framework HttpClient 的 multipart（HTTP 406），附件用 curl 上传。
+        # 令牌写进只在本次上传期间存在的 curl 配置文件，不出现在命令行里。
+        $curlConfig = Join-Path ([IO.Path]::GetTempPath()) ("gitee-upload-" + [Guid]::NewGuid() + '.cfg')
+        $curlOutput = "$curlConfig.json"
         try {
-            $form = New-Object System.Net.Http.MultipartFormDataContent
-            $form.Add((New-Object System.Net.Http.StringContent $token), 'access_token')
-            $fileContent = New-Object System.Net.Http.StreamContent $stream
-            $fileContent.Headers.ContentType = [System.Net.Http.Headers.MediaTypeHeaderValue]::Parse('application/octet-stream')
-            $form.Add($fileContent, 'file', $name)
-            try { Invoke-Gitee POST "/releases/$releaseId/attach_files" -Content $form | Out-Null }
-            catch {
-                if ($_.Exception.Message -match '1\s*G|超出|exceed') {
-                    throw "$($_.Exception.Message)`n仓库附件已达 1 GB 上限：在 Gitee 网页删除旧版本的附件后重跑本脚本，已传的会跳过。"
+            $filePath = $local.FullName.Replace('\', '/')
+            $lines = @(
+                "form = `"access_token=$token`"",
+                "form = `"file=@$filePath;type=application/octet-stream`""
+            )
+            [IO.File]::WriteAllLines($curlConfig, $lines, (New-Object System.Text.UTF8Encoding($false)))
+            $status = & curl.exe -sS --max-time 3600 -K $curlConfig -o $curlOutput -w '%{http_code}' "$GiteeApi/releases/$releaseId/attach_files"
+            if ($LASTEXITCODE -ne 0) { throw "curl 上传 $name 失败（退出码 $LASTEXITCODE）" }
+            $responseText = ''
+            if (Test-Path -LiteralPath $curlOutput) { $responseText = [IO.File]::ReadAllText($curlOutput) }
+            if ($status -notmatch '^2\d\d$') {
+                $message = "Gitee 返回 HTTP $status 上传 $name：$responseText"
+                if ($responseText -match '1\s*G|超出|exceed') {
+                    $message += "`n仓库附件已达 1 GB 上限：在 Gitee 网页删除旧版本的附件后重跑本脚本，已传的会跳过。"
                 }
-                throw
+                throw $message
             }
-        } finally { $stream.Dispose() }
+        } finally {
+            Remove-Item -LiteralPath $curlConfig, $curlOutput -Force -ErrorAction SilentlyContinue
+        }
         Write-Ok "$name 已上传"
     }
 
@@ -269,8 +289,14 @@ try {
             if (-not $remote) { throw "Gitee 上缺少 $name" }
             $remoteSize = Get-RemoteSize $remote
             if ($remoteSize -ge 0 -and $remoteSize -ne $files[$name].Length) { throw "$name 大小不符：Gitee $remoteSize，本地 $($files[$name].Length)" }
+            if ($SizeOnly -and $name -ne 'SHA256SUMS.txt') {
+                if ($remoteSize -lt 0) { throw "Gitee 没有返回 $name 的大小，无法只核对大小，请去掉 -SizeOnly 重跑。" }
+                Write-Ok "$name  大小一致（$remoteSize 字节，按 -SizeOnly 未下载）"
+                continue
+            }
             $target = Join-Path $tempDir $name
-            Invoke-WebRequest -Uri $remote.browser_download_url -OutFile $target -UseBasicParsing
+            try { Invoke-WebRequest -Uri $remote.browser_download_url -OutFile $target -UseBasicParsing }
+            catch { throw "从 Gitee 下载 $name 失败：$($_.Exception.Message)`nGitee 下载慢或中断时，可加 -SizeOnly 重跑（已传的附件会跳过）。" }
             $hash = (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash.ToLower()
             if ($name -eq 'SHA256SUMS.txt') { $want = $sumsHash } else { $want = $expected[$name] }
             if ($hash -ne $want) { throw "下载回来的 $name SHA256 不符：$hash" }
