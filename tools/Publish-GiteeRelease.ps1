@@ -130,6 +130,26 @@ try {
 if ($gitHubSumsHash -ne $sumsHash) { throw '本地 SHA256SUMS.txt 与 GitHub Release 上的不同：本地包可能被重新构建过，停止上传。' }
 Write-Ok '本地清单与 GitHub Release 一致'
 
+# GitHub 上的包也要与清单一致：优先用 GitHub 记录的 digest，没有时下载回来算
+foreach ($name in $fileNames) {
+    if ($name -eq 'SHA256SUMS.txt') { continue }
+    $asset = @($gitHubRelease.assets | Where-Object { $_.name -eq $name }) | Select-Object -First 1
+    if (-not $asset) { throw "GitHub Release 上没有 $name。" }
+    if ([long]$asset.size -ne $files[$name].Length) { throw "GitHub 上的 $name 大小与本地不同：GitHub $($asset.size)，本地 $($files[$name].Length)" }
+    if ($asset.digest) {
+        if ($asset.digest.ToLower() -ne "sha256:$($expected[$name])") { throw "GitHub 上的 $name 与清单不符：$($asset.digest)" }
+        Write-Ok "GitHub 上的 $name 与清单一致（digest）"
+        continue
+    }
+    $gitHubAssetPath = Join-Path ([IO.Path]::GetTempPath()) ("github-asset-" + [Guid]::NewGuid())
+    try {
+        Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $gitHubAssetPath -UseBasicParsing -Headers @{ 'User-Agent' = 'MagnetometerSystem' }
+        $gitHubAssetHash = (Get-FileHash -LiteralPath $gitHubAssetPath -Algorithm SHA256).Hash.ToLower()
+    } finally { Remove-Item -LiteralPath $gitHubAssetPath -Force -ErrorAction SilentlyContinue }
+    if ($gitHubAssetHash -ne $expected[$name]) { throw "GitHub 上的 $name 与清单不符：$gitHubAssetHash" }
+    Write-Ok "GitHub 上的 $name 与清单一致（已下载校验）"
+}
+
 # ------------------------------------------------------------ 令牌
 
 function Get-GiteeToken {
