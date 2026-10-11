@@ -246,8 +246,8 @@ try {
     }
 
     # 改动正式版的附件前先转回预发布，中途失败也不会让用户看到缺附件的正式版；
-    # 加了 -NoPublish 时，已是正式版的也转回预发布
-    if (($plan.Count -gt 0 -or $NoPublish) -and -not $isPrerelease) {
+    # 加了 -NoPublish 或 -SizeOnly（不做完整哈希校验）时，已是正式版的也转回预发布
+    if (($plan.Count -gt 0 -or $NoPublish -or $SizeOnly) -and -not $isPrerelease) {
         Invoke-Gitee PATCH "/releases/$releaseId" @{
             tag_name = $tag; name = $title; body = $body; prerelease = 'true'
         } | Out-Null
