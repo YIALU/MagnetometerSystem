@@ -105,10 +105,12 @@ Write-Ok "两边都指向 $gitHubCommit"
 # ------------------------------------------------------------ 3. 标题与说明
 
 Write-Step '读取 GitHub Release 的标题和说明'
-$gitHubRelease = Invoke-RestMethod "https://api.github.com/repos/$GitHubRepo/releases/tags/$tag" -Headers @{ 'User-Agent' = 'MagnetometerSystem' }
-if ($gitHubRelease.draft -or $gitHubRelease.prerelease) {
-    if (-not $NoPublish) { throw "GitHub 上的 $tag 还是草稿或预发布：先在 GitHub 转为正式版，或加 -NoPublish 只在 Gitee 建预发布。" }
-    Write-Warning "GitHub 上的 $tag 还是草稿或预发布，Gitee 将保持预发布。"
+# 匿名接口只能读到已发布的 Release，草稿会返回 404
+try { $gitHubRelease = Invoke-RestMethod "https://api.github.com/repos/$GitHubRepo/releases/tags/$tag" -Headers @{ 'User-Agent' = 'MagnetometerSystem' } }
+catch { throw "读取 GitHub Release $tag 失败（还是草稿或不存在）：先在 GitHub 发布它。$($_.Exception.Message)" }
+if ($gitHubRelease.prerelease) {
+    if (-not $NoPublish) { throw "GitHub 上的 $tag 还是预发布：先在 GitHub 转为正式版，或加 -NoPublish 只在 Gitee 建预发布。" }
+    Write-Warning "GitHub 上的 $tag 还是预发布，Gitee 将保持预发布。"
 }
 $title = $gitHubRelease.name
 if (-not $title) { $title = "V$ver" }
@@ -243,8 +245,9 @@ try {
         $plan += [pscustomobject]@{ Name = $name; Remote = $remote }
     }
 
-    # 改动正式版的附件前先转回预发布，中途失败也不会让用户看到缺附件的正式版
-    if ($plan.Count -gt 0 -and -not $isPrerelease) {
+    # 改动正式版的附件前先转回预发布，中途失败也不会让用户看到缺附件的正式版；
+    # 加了 -NoPublish 时，已是正式版的也转回预发布
+    if (($plan.Count -gt 0 -or $NoPublish) -and -not $isPrerelease) {
         Invoke-Gitee PATCH "/releases/$releaseId" @{
             tag_name = $tag; name = $title; body = $body; prerelease = 'true'
         } | Out-Null
@@ -272,7 +275,7 @@ try {
                 "form = `"file=@$filePath;type=application/octet-stream`""
             )
             [IO.File]::WriteAllLines($curlConfig, $lines, (New-Object System.Text.UTF8Encoding($false)))
-            $status = & curl.exe -sS --max-time 3600 -K $curlConfig -o $curlOutput -w '%{http_code}' "$GiteeApi/releases/$releaseId/attach_files"
+            $status = & curl.exe -q -sS --max-time 3600 -K $curlConfig -o $curlOutput -w '%{http_code}' "$GiteeApi/releases/$releaseId/attach_files"
             if ($LASTEXITCODE -ne 0) { throw "curl 上传 $name 失败（退出码 $LASTEXITCODE）" }
             $responseText = ''
             if (Test-Path -LiteralPath $curlOutput) { $responseText = [IO.File]::ReadAllText($curlOutput) }
