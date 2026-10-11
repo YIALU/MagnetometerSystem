@@ -241,7 +241,7 @@ try {
 
     # 标题和说明以 GitHub（或 -NotesFile）为准，已存在的 Release 也要跟上
     $normalize = { param($text) ([string]$text).Replace("`r`n", "`n").Trim() }
-    if ($release.name -ne $title -or (& $normalize $release.body) -ne (& $normalize $body)) {
+    if ($release.name -cne $title -or (& $normalize $release.body) -cne (& $normalize $body)) {
         if ($isPrerelease) { $keep = 'true' } else { $keep = 'false' }
         Invoke-Gitee PATCH "/releases/$releaseId" @{
             tag_name = $tag; name = $title; body = $body; prerelease = $keep
