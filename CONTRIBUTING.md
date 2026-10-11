@@ -71,7 +71,11 @@ GitHub 落后于本地/Gitee 时，先把缺失的**已提交历史**放到独�
 
 这个历史同步 PR 必须选择 **Create a merge commit**，保留原有提交作为祖先。不要 squash 或 rebase 这些已在 Gitee 存在的提交，否则提交身份变化会破坏随后向 Gitee 的快进同步。历史同步尚未完成时，先不要把 GitHub `master` 推到 Gitee。
 
-## 手动同步 Gitee
+## 同步 Gitee
+
+Gitee 仓库已开启「仓库镜像管理」的 Pull 镜像（2026-10-11 起）：GitHub 有推送时，Gitee 会自动拉取全部分支和标签，Gitee 上独有的提交会被覆盖，因此只在 GitHub 上提交。合并 PR 后核对 Gitee `master` 已跟上即可（`git ls-remote` 比较两边）；镜像未同步或被停用时，按下面的手动步骤执行。Release 与附件不随镜像同步，见[发布流程](docs/发布流程.md)。
+
+### 手动同步
 
 仅在目标 PR 已完成审查并合入 GitHub `master` 后执行。下面脚本获取两个远程的最新状态，验证 Gitee 是 GitHub 主分支的祖先，再进行普通快进推送；不移动当前本地分支，也不推送标签。
 
