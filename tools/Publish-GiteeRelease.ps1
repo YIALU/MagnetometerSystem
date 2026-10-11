@@ -11,7 +11,7 @@
       1. 本地按 SHA256SUMS.txt 校验便携版 zip 与安装版 setup.exe；
       2. 核对 Gitee 与 GitHub 上的 v<版本> 标签指向同一提交（Gitee 由仓库镜像从 GitHub 同步）；
       3. 取 GitHub 同版本 Release 的标题和说明，在 Gitee 找到或新建该 Release（新建时先为预发布）；
-      4. 上传缺少的附件；同名同大小的跳过，同名不同大小的停止（加 -Replace 才替换）；
+      4. 上传缺少的附件；同名同大小的跳过，同名不同大小的停止；加 -Replace 则同名附件一律删除重传；
       5. 从 Gitee 重新下载全部附件，按 SHA256SUMS.txt 校验；
       6. 全部通过后转为正式版（加 -NoPublish 则保持预发布）。
 
@@ -190,10 +190,13 @@ try {
         $remote = $existing | Where-Object { $_.name -eq $name } | Select-Object -First 1
         if ($remote) {
             $remoteSize = Get-RemoteSize $remote
-            if ($remoteSize -eq $local.Length -or $remoteSize -lt 0) { Write-Ok "$name 已存在，跳过"; continue }
-            if (-not $Replace) { throw "Gitee 上的 $name 大小为 $remoteSize，本地为 $($local.Length)。确认要替换时加 -Replace 重跑。" }
+            if (-not $Replace) {
+                if ($remoteSize -eq $local.Length -or $remoteSize -lt 0) { Write-Ok "$name 已存在，跳过"; continue }
+                throw "Gitee 上的 $name 大小为 $remoteSize，本地为 $($local.Length)。确认要替换时加 -Replace 重跑。"
+            }
+            # -Replace 时无论大小都重传：同大小但内容损坏的附件也要能修好
             Invoke-Gitee DELETE "/releases/$releaseId/attach_files/$($remote.id)" | Out-Null
-            Write-Ok "已删除大小不符的旧 $name"
+            Write-Ok "已删除旧的 $name"
         }
         Write-Host "    上传 $name（$([math]::Round($local.Length / 1MB, 1)) MB）…"
         $stream = [IO.File]::OpenRead($local.FullName)
