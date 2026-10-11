@@ -10,7 +10,8 @@
     依次执行：
       1. 本地按 SHA256SUMS.txt 校验便携版 zip 与安装版 setup.exe；
       2. 核对 Gitee 与 GitHub 上的 v<版本> 标签指向同一提交（Gitee 由仓库镜像从 GitHub 同步）；
-      3. 取 GitHub 同版本 Release 的标题和说明，在 Gitee 找到或新建该 Release（新建时先为预发布）；
+      3. 取 GitHub 同版本 Release 的标题和说明，并确认本地 SHA256SUMS.txt 与它的一致；
+         在 Gitee 找到或新建该 Release（新建时为预发布；要改动正式版的附件时先转回预发布）；
       4. 上传缺少的附件；同名同大小的跳过，同名不同大小的停止；加 -Replace 则同名附件一律删除重传；
       5. 从 Gitee 重新下载全部附件，按 SHA256SUMS.txt 校验；
       6. 全部通过后转为正式版（加 -NoPublish 则保持预发布）。
@@ -109,14 +110,34 @@ else { $body = $gitHubRelease.body }
 if (-not $body) { throw 'GitHub Release 没有说明，请用 -NotesFile 指定。' }
 Write-Ok "标题 $title，说明 $($body.Length) 字"
 
+# 两个平台的包必须字节一致：本地清单要与 GitHub Release 上的 SHA256SUMS.txt 相同
+$gitHubSums = @($gitHubRelease.assets | Where-Object { $_.name -eq 'SHA256SUMS.txt' }) | Select-Object -First 1
+if (-not $gitHubSums) { throw 'GitHub Release 上没有 SHA256SUMS.txt，无法确认两边的包一致。' }
+$gitHubSumsPath = Join-Path ([IO.Path]::GetTempPath()) ("github-sums-" + [Guid]::NewGuid() + '.txt')
+try {
+    Invoke-WebRequest -Uri $gitHubSums.browser_download_url -OutFile $gitHubSumsPath -UseBasicParsing -Headers @{ 'User-Agent' = 'MagnetometerSystem' }
+    $gitHubSumsHash = (Get-FileHash -LiteralPath $gitHubSumsPath -Algorithm SHA256).Hash.ToLower()
+} finally { Remove-Item -LiteralPath $gitHubSumsPath -Force -ErrorAction SilentlyContinue }
+if ($gitHubSumsHash -ne $sumsHash) { throw '本地 SHA256SUMS.txt 与 GitHub Release 上的不同：本地包可能被重新构建过，停止上传。' }
+Write-Ok '本地清单与 GitHub Release 一致'
+
 # ------------------------------------------------------------ 令牌
 
 function Get-GiteeToken {
     if ($env:GITEE_TOKEN) { return $env:GITEE_TOKEN }
+    # 只查已保存的凭据，不让 Git 或凭据管理器弹出登录提示
+    $savedPrompt = $env:GIT_TERMINAL_PROMPT
+    $savedGcm = $env:GCM_INTERACTIVE
+    $env:GIT_TERMINAL_PROMPT = '0'
+    $env:GCM_INTERACTIVE = 'never'
     try {
         $answer = "protocol=https`nhost=gitee.com`n`n" | git credential fill 2>$null
         foreach ($line in $answer) { if ($line -like 'password=*') { return $line.Substring(9) } }
     } catch { }
+    finally {
+        $env:GIT_TERMINAL_PROMPT = $savedPrompt
+        $env:GCM_INTERACTIVE = $savedGcm
+    }
     $secure = Read-Host '输入 Gitee 私人令牌（不回显）' -AsSecureString
     $ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
     try { return [Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr) }
@@ -180,22 +201,39 @@ try {
         Write-Ok "已新建预发布（id $($release.id)）"
     }
     $releaseId = $release.id
+    $isPrerelease = $release.prerelease -ne $false
 
     # -------------------------------------------------------- 4. 上传附件
 
     Write-Step '上传附件'
     $existing = @(Invoke-Gitee GET "/releases/$releaseId/attach_files" @{ per_page = 100 })
+    $plan = @()
     foreach ($name in $fileNames) {
         $local = $files[$name]
         $remote = $existing | Where-Object { $_.name -eq $name } | Select-Object -First 1
-        if ($remote) {
+        if ($remote -and -not $Replace) {
             $remoteSize = Get-RemoteSize $remote
-            if (-not $Replace) {
-                if ($remoteSize -eq $local.Length -or $remoteSize -lt 0) { Write-Ok "$name 已存在，跳过"; continue }
-                throw "Gitee 上的 $name 大小为 $remoteSize，本地为 $($local.Length)。确认要替换时加 -Replace 重跑。"
-            }
+            if ($remoteSize -eq $local.Length -or $remoteSize -lt 0) { Write-Ok "$name 已存在，跳过"; continue }
+            throw "Gitee 上的 $name 大小为 $remoteSize，本地为 $($local.Length)。确认要替换时加 -Replace 重跑。"
+        }
+        $plan += [pscustomobject]@{ Name = $name; Remote = $remote }
+    }
+
+    # 改动正式版的附件前先转回预发布，中途失败也不会让用户看到缺附件的正式版
+    if ($plan.Count -gt 0 -and -not $isPrerelease) {
+        Invoke-Gitee PATCH "/releases/$releaseId" @{
+            tag_name = $tag; name = $title; body = $body; prerelease = 'true'
+        } | Out-Null
+        $isPrerelease = $true
+        Write-Ok '已先转为预发布，校验通过后再转回正式版'
+    }
+
+    foreach ($item in $plan) {
+        $name = $item.Name
+        $local = $files[$name]
+        if ($item.Remote) {
             # -Replace 时无论大小都重传：同大小但内容损坏的附件也要能修好
-            Invoke-Gitee DELETE "/releases/$releaseId/attach_files/$($remote.id)" | Out-Null
+            Invoke-Gitee DELETE "/releases/$releaseId/attach_files/$($item.Remote.id)" | Out-Null
             Write-Ok "已删除旧的 $name"
         }
         Write-Host "    上传 $name（$([math]::Round($local.Length / 1MB, 1)) MB）…"
@@ -242,10 +280,10 @@ try {
 
     # -------------------------------------------------------- 6. 转正式
 
-    if ($NoPublish) {
+    if (-not $isPrerelease) {
+        Write-Step '已是正式版，附件未改动'
+    } elseif ($NoPublish) {
         Write-Step '已按 -NoPublish 保持预发布'
-    } elseif ($release.prerelease -eq $false) {
-        Write-Step '已是正式版'
     } else {
         Write-Step '转为正式版'
         Invoke-Gitee PATCH "/releases/$releaseId" @{
