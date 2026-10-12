@@ -312,10 +312,13 @@ git tag 版本 ($ver) 与 Directory.Build.props 的 <Version> ($propsVer) 不一
     Write-Step '打包完成'
     Write-Host "    输出目录: $outDir" -ForegroundColor Green
     Write-Host ''
-    Write-Host '    下一步：在 Gitee 新建 release（tag 选 ' -NoNewline -ForegroundColor Gray
-    Write-Host "v$ver" -NoNewline -ForegroundColor White
-    Write-Host '），上传以上全部文件。' -ForegroundColor Gray
-    Write-Host '    https://gitee.com/yialu/MagnetometerSystem/releases/new' -ForegroundColor Gray
+    if ($doPortable -and $doInstaller) {
+        Write-Host '    下一步：先在 GitHub 发布 Release 并上传以上全部文件，再运行' -ForegroundColor Gray
+        Write-Host "    .\tools\Publish-GiteeRelease.ps1 $ver" -ForegroundColor White
+        Write-Host '    把附件传到 Gitee（见 docs/发布流程.md）。' -ForegroundColor Gray
+    } else {
+        Write-Host '    只打了一种包，不能用于发布；发布前请用 -Mode All 重新打包。' -ForegroundColor Yellow
+    }
     Write-Host ''
 }
 finally {
