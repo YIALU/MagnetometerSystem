@@ -122,6 +122,40 @@ public class OrthogonalityMatrixNumericTests
         Assert.Equal(50000, field.Average(), 1.0); // 改正结果落在参考场强上，单位仍是 nT。
     }
 
+    [Fact]
+    public void FitWithoutReferenceField_KeepsInputUnitScaleForValuesAndResiduals()
+    {
+        // 向导默认不填参考场强。此前结果被缩到单位球：总场约 1 却标 nT，残差也小约 5 万倍，评级总是“优秀”。
+        double[] trueOffset = [350, -120, 80];
+        double[] distortion = [1.03, 0.04, -0.02, 0.01, 0.97, 0.05, -0.03, 0.02, 1.01];
+        const int count = 400;
+        var rng = new Random(7);
+        var data = new double[count, 3];
+        for (int i = 0; i < count; i++)
+        {
+            var measured = Multiply(distortion, SpherePoint(i, count, 50000));
+            // 约 ±30 nT 的测量噪声，让残差有真实量级。
+            for (int axis = 0; axis < 3; axis++) data[i, axis] = measured[axis] + trueOffset[axis] + (rng.NextDouble() - .5) * 60;
+        }
+
+        var result = new OrthogonalityCalculator().Calculate(data, unit: "nT");
+
+        Assert.True(result.Success, result.ErrorMessage);
+        var p = result.Parameters;
+        double meanRawRadius = Enumerable.Range(0, count).Average(i =>
+            Math.Sqrt(Square(data[i, 0] - p.Offset[0]) + Square(data[i, 1] - p.Offset[1]) + Square(data[i, 2] - p.Offset[2])));
+        double meanCorrected = Enumerable.Range(0, count).Average(i =>
+        {
+            var c = p.Apply(data[i, 0], data[i, 1], data[i, 2]);
+            return Math.Sqrt(c[0] * c[0] + c[1] * c[1] + c[2] * c[2]);
+        });
+        Assert.Equal(meanRawRadius, meanCorrected, meanRawRadius * 1e-6);
+        Assert.InRange(meanCorrected, 48000, 52000);
+        // 残差按 nT 计：噪声约 17 nT 标准差，不能被缩成 1e-3 量级。
+        Assert.InRange(result.Quality.ResidualStd, 5, 60);
+        Assert.Equal(p.ResidualStd, result.Quality.ResidualStd);
+    }
+
     private static double[] SpherePoint(int i, int count, double radius)
     {
         double z = 1 - 2.0 * (i + .5) / count, r = Math.Sqrt(1 - z * z), phi = i * Math.PI * (3 - Math.Sqrt(5));
