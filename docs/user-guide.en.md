@@ -32,7 +32,9 @@ Written status confirms a local connection write. A matching-response status con
 
 ## Data correction
 
-Orthogonality and offset/gain tools are optional; ordinary capture does not require correction profiles. Applying correction preserves original values. Historical batch correction can save separate results.
+Orthogonality correction is optional; ordinary capture does not require correction profiles. Applying correction preserves original values. Historical batch correction can save separate results.
+
+The offset/gain page currently only stores and manages per-channel offset and gain parameters. Capture, chart display, playback and export never apply them.
 
 An orthogonality profile's fitting unit must match the target channels. `uT`, `µT`, and `μT` are equivalent, but offsets are not converted automatically. Older profiles without recorded units remain unknown and require refitting or an explicitly unit-tagged import.
 
