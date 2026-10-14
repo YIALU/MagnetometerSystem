@@ -1,3 +1,4 @@
 # Linux deployment files must keep LF on Windows checkouts.
 /deploy/feedback/*.sh text eol=lf
 /deploy/feedback/*.service text eol=lf
+/.claude/skills/magnetometer-feedback-deploy/*.sh text eol=lf
