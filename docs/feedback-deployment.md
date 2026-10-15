@@ -107,6 +107,14 @@ dotnet publish src/MagnetometerSystem.Feedback.Server/MagnetometerSystem.Feedbac
 tar -czf .codex_tmp/feedback/server-bundle.tar.gz -C .codex_tmp/feedback/server-publish .
 ```
 
+上面的构建、上传、数据库备份、安装与验证已整理为 [magnetometer-feedback-deploy skill](../.claude/skills/magnetometer-feedback-deploy/SKILL.md)，可一键执行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .claude\skills\magnetometer-feedback-deploy\Deploy-FeedbackServer.ps1 -KeyPath '<本机 SSH pem 密钥绝对路径>'
+```
+
+本机代理（如 FlClash）开启 TUN 时 22 端口握手会超时，部署期间临时关闭 TUN。失败时脚本自动把 `current` 指回上一版本。
+
 请求体上限为 1 MB（含附带日志）。**带日志的客户端发布前必须先部署新版服务**：旧服务的上限是 200 KB，带日志的请求会被拒收（用户看到“反馈服务暂时无法接收”）。
 
 服务器部署文件包括两个 systemd unit、安装脚本及首次 HTTPS 配置脚本。安装脚本更新新服务的 current 链接并重启它们，保留反馈数据库和现有代理配置；不要对服务器已有服务目录运行该脚本。首次 HTTPS 配置用 `configure-https.sh <public IPv4>`。服务单实例运行；不能启动第二个进程共享同一反馈数据库。
