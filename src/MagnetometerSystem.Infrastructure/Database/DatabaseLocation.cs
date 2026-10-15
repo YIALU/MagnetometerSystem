@@ -127,7 +127,7 @@ public static class DatabaseLocation
         }
     }
 
-    /// <summary>登记本进程正在使用旧数据库，直到进程退出。</summary>
+    /// <summary>登记本进程正在使用旧数据库，直到进程退出。登记失败抛异常，调用方不得继续使用旧库。</summary>
     public static void HoldLegacyInUse(string legacyDbPath)
     {
         var path = LegacyInUsePath(legacyDbPath);
@@ -143,7 +143,8 @@ public static class DatabaseLocation
             }
             catch (Exception ex)
             {
-                Trace.TraceWarning($"登记旧数据库占用失败 {path}: {ex.Message}");
+                // 登记不上就不能用旧库：否则别的实例会以为旧库没人用而迁移，之后写入的数据在新库里看不到
+                throw new IOException($"登记旧数据库占用失败 {path}，本次不使用旧数据库: {ex.Message}", ex);
             }
         }
     }

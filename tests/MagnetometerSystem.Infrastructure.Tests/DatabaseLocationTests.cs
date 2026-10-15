@@ -329,6 +329,20 @@ public sealed class DatabaseLocationTests : IDisposable
     }
 
     [Fact]
+    public async Task OccupancyRegistrationFailure_AbortsInitialization_InsteadOfUsingLegacyUnprotected()
+    {
+        await CreateLegacyDatabaseWithSessionAsync();
+        // 占用文件的位置被同名目录占住，登记必然失败
+        Directory.CreateDirectory(Path.Combine(Path.GetDirectoryName(LegacyDb)!, DatabaseLocation.LegacyInUseFileName));
+
+        var db = new DatabaseInitializer(TargetDb, LegacyDb) { AnotherInstanceRunning = true };
+        await Assert.ThrowsAsync<IOException>(db.InitializeAsync);
+
+        Assert.False(db.IsInitialized);
+        Assert.False(File.Exists(TargetDb));
+    }
+
+    [Fact]
     public void ResolveDirectory_FallsBackWhenPreferredIsNotWritable()
     {
         var blocked = Path.Combine(_root, "not-a-dir");

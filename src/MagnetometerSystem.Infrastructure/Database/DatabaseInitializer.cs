@@ -133,8 +133,9 @@ public class DatabaseInitializer
         catch (Exception ex)
         {
             _dbPath = legacy;
-            DatabaseLocation.HoldLegacyInUse(legacy);
             LocationNotice = $"迁移旧数据库到 {target} 失败，本次继续使用 {legacy}: {ex.Message}";
+            // 登记失败会抛出，初始化随之失败，不会在未登记占用的情况下写旧库
+            DatabaseLocation.HoldLegacyInUse(legacy);
         }
     }
 
