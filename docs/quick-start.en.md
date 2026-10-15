@@ -58,7 +58,7 @@ The Acquire page shows the plot in the middle, a collapsible tool panel on the r
 
 ![Single plot: three gradient channels and depth in one plot, depth on its own right-hand axis](images/tutorial/04-chart-single.png)
 
-**Multi plot (2 columns):** one plot per channel in two columns; the Interval tab on the right shows statistics for the selected time span.
+**Multi plot (2 columns):** one plot per channel in two columns, each labelled with statistics of the displayed window (computed from displayed values); the Interval tab on the right shows raw-reading statistics for the selected time span.
 
 ![Multi plot in two columns: six magnetic channels, interval statistics on the right](images/tutorial/04-chart-multi.png)
 
@@ -68,7 +68,7 @@ The Acquire page shows the plot in the middle, a collapsible tool panel on the r
 - **Time window (时间窗口):** how many recent seconds to show.
 - **Main Y axis (主 Y 轴):** Auto fits the data; Manual takes lower and upper limits.
 - **Pause / resume display (暂停显示 / 继续显示):** freezes the view; **capture and saving continue while paused**.
-- **Zero / undo zero (一键归零 / 取消归零):** shifts each curve by its window mean to around 0 for comparing fluctuations; display only, saving and statistics are unaffected.
+- **Zero / undo zero (一键归零 / 取消归零):** shifts each curve by its window mean to around 0 for comparing fluctuations; display only; saved data and the side-panel Statistics and Interval results are unaffected (the per-plot "display window" statistics in multi plot do change).
 - **Focus plot (专注曲线):** hides the side and bottom panels so the plot fills the window; Exit focus (退出专注) restores them.
 - **Mouse:** the wheel zooms the time axis, Ctrl + wheel zooms the Y axis (with a manual range); hovering shows each channel's raw value at the crosshair time.
 - More (更多) toggles auto-scroll to latest and the grid, sets the display point limit, and clears the plot (display only; saved data is unaffected).
