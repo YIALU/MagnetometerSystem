@@ -25,27 +25,32 @@ else
     echo "[deploy] 未找到 $db，跳过备份（首次部署）"
 fi
 
-cd "$dir"
-sha256sum -c bundle.sha256
-bash "$dir/install.sh" "$dir/server-bundle.tar.gz"
-
-ok=0
-for _ in $(seq 1 20); do
-    if systemctl is-active --quiet magnetometer-feedback magnetometer-feedback-proxy \
-        && curl -fs -m 3 http://127.0.0.1:5188/health >/dev/null; then ok=1; break; fi
-    sleep 1
-done
-
-if [ "$ok" != 1 ]; then
-    echo "[deploy] 新版本未通过本机健康检查" >&2
-    journalctl -u magnetometer-feedback -n 30 --no-pager >&2 || true
+rollback() {
+    echo "[deploy] $1" >&2
+    journalctl -u magnetometer-feedback -u magnetometer-feedback-proxy -n 30 --no-pager >&2 || true
     if [ -n "$previous" ] && [ -d "$previous" ]; then
         ln -sfn "$previous" /opt/magnetometer-feedback/current
-        systemctl restart magnetometer-feedback.service magnetometer-feedback-proxy.service
+        systemctl restart magnetometer-feedback.service magnetometer-feedback-proxy.service || true
         echo "[deploy] 已指回上一版本: $previous" >&2
     fi
     exit 1
-fi
+}
+
+cd "$dir"
+sha256sum -c bundle.sha256
+# install.sh 失败时（例如切换 current 后重启服务失败）也要回滚，不能被 set -e 直接退出。
+bash "$dir/install.sh" "$dir/server-bundle.tar.gz" || rollback "install.sh 执行失败"
+
+ok=0
+for _ in $(seq 1 20); do
+    # systemctl is-active 列多个单元时只要有一个 active 就返回成功，所以逐个检查。
+    if systemctl is-active --quiet magnetometer-feedback \
+        && systemctl is-active --quiet magnetometer-feedback-proxy \
+        && curl -fs -m 3 http://127.0.0.1:5188/health >/dev/null 2>&1; then ok=1; break; fi
+    sleep 1
+done
+
+[ "$ok" = 1 ] || rollback "新版本未通过本机健康检查"
 
 systemctl is-active magnetometer-feedback magnetometer-feedback-proxy
 echo "[deploy] 新版本目录: $(readlink -f /opt/magnetometer-feedback/current)"
