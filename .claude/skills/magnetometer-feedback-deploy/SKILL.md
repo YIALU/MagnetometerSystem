@@ -22,7 +22,7 @@ description: "仅用于 YIALU/MagnetometerSystem 的匿名反馈服务重新部�
 powershell -ExecutionPolicy Bypass -File .claude\skills\magnetometer-feedback-deploy\Deploy-FeedbackServer.ps1 -KeyPath '<pem 绝对路径>'
 ```
 
-可选参数：`-Server`、`-User`（默认 root）、`-Port`（默认 22）、`-Ref`（默认 `origin/master`）、`-Bundle`（复用已构建的 `server-bundle.tar.gz`，安装脚本和 unit 仍取自 `-Ref`）。
+可选参数：`-Server`、`-User`（默认 root）、`-Port`（默认 22）、`-Ref`（默认 `origin/master`）。服务包总是从 `-Ref` 现场构建，与安装脚本和 unit 出自同一提交。
 
 脚本依次：
 

@@ -11,9 +11,8 @@ param(
     [string]$Server = '59.110.232.32',
     [string]$User = 'root',
     [int]$Port = 22,
-    [string]$Ref = 'origin/master',
-    # 已有 server-bundle.tar.gz 时跳过构建（安装脚本和 unit 仍取自 $Ref）。
-    [string]$Bundle
+    # 服务包、安装脚本和 unit 都从这个提交现场构建/取出，不接受外部服务包，避免混装不同版本。
+    [string]$Ref = 'origin/master'
 )
 $ErrorActionPreference = 'Stop'
 
@@ -71,15 +70,11 @@ try {
     if ($LASTEXITCODE) { throw 'git worktree add 失败' }
     $commit = (git -C $tree rev-parse HEAD).Trim()
     Write-Host "      提交 $commit"
-    if (-not $Bundle) {
-        dotnet publish "$tree/src/MagnetometerSystem.Feedback.Server/MagnetometerSystem.Feedback.Server.csproj" `
-            -c Release -r linux-x64 --self-contained true -o "$work/publish"
-        if ($LASTEXITCODE) { throw 'dotnet publish 失败' }
-        tar -czf "$upload/server-bundle.tar.gz" -C "$work/publish" .
-        if ($LASTEXITCODE) { throw '打包失败' }
-    } else {
-        Copy-Item -LiteralPath $Bundle -Destination "$upload/server-bundle.tar.gz"
-    }
+    dotnet publish "$tree/src/MagnetometerSystem.Feedback.Server/MagnetometerSystem.Feedback.Server.csproj" `
+        -c Release -r linux-x64 --self-contained true -o "$work/publish"
+    if ($LASTEXITCODE) { throw 'dotnet publish 失败' }
+    tar -czf "$upload/server-bundle.tar.gz" -C "$work/publish" .
+    if ($LASTEXITCODE) { throw '打包失败' }
     foreach ($name in 'install.sh', 'magnetometer-feedback.service', 'magnetometer-feedback-proxy.service') {
         Copy-Item -LiteralPath "$tree/deploy/feedback/$name" -Destination $upload
     }
