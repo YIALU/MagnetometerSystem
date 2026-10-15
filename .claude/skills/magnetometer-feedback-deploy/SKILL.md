@@ -38,12 +38,17 @@ powershell -ExecutionPolicy Bypass -File .claude\skills\magnetometer-feedback-de
 
 - 不运行 `configure-https.sh`；不改原有 Caddy 服务、`/etc/magnetometer-feedback/Caddyfile`、GitHub 令牌文件和反馈数据库内容。
 - 不提交真实反馈来验证（会在公开仓库建 Issue）。大请求测试计入每 IP 每小时 10 次的提交限流。
-- 旧版本目录保留在 `/opt/magnetometer-feedback/releases/`；手动回滚：
+- 旧版本目录保留在 `/opt/magnetometer-feedback/releases/`，经本脚本部署的版本目录下有 `systemd/`，保存该版本配套的两个 unit。手动回滚时连同 unit 一起恢复：
 
 ```bash
-ln -sfn /opt/magnetometer-feedback/releases/<旧版本> /opt/magnetometer-feedback/current
+old=/opt/magnetometer-feedback/releases/<旧版本>
+install -m 0644 "$old"/systemd/*.service /etc/systemd/system/
+systemctl daemon-reload
+ln -sfn "$old" /opt/magnetometer-feedback/current
 systemctl restart magnetometer-feedback magnetometer-feedback-proxy
 ```
+
+  旧版本目录没有 `systemd/` 时（早于本脚本的部署），先对比该版本提交中的 `deploy/feedback/*.service` 与当前 unit，不一致就先装回那个提交的 unit。
 
 - 备份文件、私钥、令牌和数据库内容不进入 Git、聊天或日志。
 

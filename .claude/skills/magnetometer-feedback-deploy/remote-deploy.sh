@@ -61,6 +61,14 @@ mkdir -p "$dir/units-previous"
 for u in $units; do
     if [ -f "/etc/systemd/system/$u" ]; then cp -p "/etc/systemd/system/$u" "$dir/units-previous/"; fi
 done
+# 每个版本目录下的 systemd/ 保存该版本配套的 unit，供日后手动回滚时一并恢复。
+# 上一版本目录若是在本脚本之前部署的，用当前（即上一版本）的 unit 补上。
+if [ -n "$previous" ] && [ -d "$previous" ] && [ ! -d "$previous/systemd" ]; then
+    install -d -m 0755 "$previous/systemd"
+    for u in $units; do
+        if [ -f "$dir/units-previous/$u" ]; then install -m 0644 "$dir/units-previous/$u" "$previous/systemd/"; fi
+    done
+fi
 
 if [ -f "$db" ]; then
     backup=/var/lib/magnetometer-feedback/feedback-backup-$ts.db
@@ -82,6 +90,10 @@ cd "$dir"
 sha256sum -c bundle.sha256
 # install.sh 失败时（例如切换 current 后重启服务失败）也要回滚，不能被 set -e 直接退出。
 bash "$dir/install.sh" "$dir/server-bundle.tar.gz" || rollback "install.sh 执行失败"
+# 记录失败不影响部署结果，所以不让 set -e 在这里中断（此时 current 已切到新版本）。
+current=$(readlink -f /opt/magnetometer-feedback/current)
+install -d -m 0755 "$current/systemd" || true
+for u in $units; do install -m 0644 "/etc/systemd/system/$u" "$current/systemd/" || true; done
 
 wait_healthy || rollback "新版本未通过本机健康检查"
 
