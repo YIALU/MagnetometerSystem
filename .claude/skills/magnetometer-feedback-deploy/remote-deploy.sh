@@ -9,6 +9,13 @@ db=/var/lib/magnetometer-feedback/feedback.db
 previous=$(readlink -f /opt/magnetometer-feedback/current 2>/dev/null || true)
 echo "[deploy] 当前版本目录: ${previous:-（无）}"
 
+# install.sh 会覆盖 systemd unit；先保存旧 unit，回滚时一并恢复。
+units="magnetometer-feedback.service magnetometer-feedback-proxy.service"
+mkdir -p "$dir/units-previous"
+for u in $units; do
+    if [ -f "/etc/systemd/system/$u" ]; then cp -p "/etc/systemd/system/$u" "$dir/units-previous/"; fi
+done
+
 if [ -f "$db" ]; then
     backup=/var/lib/magnetometer-feedback/feedback-backup-$ts.db
     python3 - "$db" "$backup" <<'PY'
@@ -29,6 +36,10 @@ rollback() {
     echo "[deploy] $1" >&2
     journalctl -u magnetometer-feedback -u magnetometer-feedback-proxy -n 30 --no-pager >&2 || true
     if [ -n "$previous" ] && [ -d "$previous" ]; then
+        for u in $units; do
+            if [ -f "$dir/units-previous/$u" ]; then install -m 0644 "$dir/units-previous/$u" /etc/systemd/system/ || true; fi
+        done
+        systemctl daemon-reload || true
         ln -sfn "$previous" /opt/magnetometer-feedback/current
         systemctl restart magnetometer-feedback.service magnetometer-feedback-proxy.service || true
         echo "[deploy] 已指回上一版本: $previous" >&2
