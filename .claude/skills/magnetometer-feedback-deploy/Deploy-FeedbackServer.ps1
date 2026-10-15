@@ -120,6 +120,14 @@ try {
     # 5. 远程备份、安装、本机健康检查（失败自动指回上一版本）。
     Write-Host '[4/6] 备份数据库并安装'
     & ssh @sshOptions -p $Port "$User@$Server" "sed -i 's/\r$//' $remoteDir/*.sh $remoteDir/*.service && bash $remoteDir/remote-deploy.sh"
+    if ($LASTEXITCODE -eq 255) {
+        # 255 是 ssh 自身的连接错误，拿不到远程脚本的退出码；install.sh 可能已切换 current。
+        # 重新连接，按上传目录里保存的状态回滚，避免未经公网验证的版本继续在线。
+        Write-Host '[回滚] SSH 连接中断，重新连接并回滚'
+        & ssh @sshOptions -p $Port "$User@$Server" "bash $remoteDir/remote-deploy.sh rollback"
+        $summary = Get-RollbackSummary $LASTEXITCODE
+        throw "远程安装期间 SSH 连接中断：$summary；上传目录保留在 $remoteDir 供排查"
+    }
     if ($LASTEXITCODE) {
         $summary = Get-RollbackSummary $LASTEXITCODE
         throw "远程安装失败：$summary；上传目录保留在 $remoteDir 供排查"
