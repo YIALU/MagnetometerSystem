@@ -315,6 +315,20 @@ public sealed class DatabaseLocationTests : IDisposable
     }
 
     [Fact]
+    public void FreshFallback_RegistersOccupancy_EvenWhenLegacyDirectoryDoesNotExistYet()
+    {
+        var blocked = Path.Combine(_root, "blocked-fresh");
+        File.WriteAllText(blocked, "");
+        var legacy = Path.Combine(_root, "new-legacy", DatabaseLocation.FileName);
+
+        var result = DatabaseLocation.MigrateOrDefer(legacy, Path.Combine(blocked, "data", DatabaseLocation.FileName),
+            anotherInstanceRunning: false, fallbackWhenNotWritable: true);
+
+        Assert.Equal(DatabaseLocation.MigrationOutcome.FallbackNotWritable, result.Outcome);
+        Assert.True(File.Exists(Path.Combine(_root, "new-legacy", DatabaseLocation.LegacyInUseFileName)));
+    }
+
+    [Fact]
     public void ResolveDirectory_FallsBackWhenPreferredIsNotWritable()
     {
         var blocked = Path.Combine(_root, "not-a-dir");

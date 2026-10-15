@@ -136,6 +136,8 @@ public static class DatabaseLocation
             if (HeldLocks.ContainsKey(path)) return;
             try
             {
+                // 全新安装回退到旧位置时目录可能还不存在，先建好，否则登记会失败、后来的实例看不到占用
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
                 HeldLocks[path] = new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite,
                     FileShare.ReadWrite | FileShare.Delete);
             }
