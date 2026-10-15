@@ -54,6 +54,12 @@ public class DatabaseInitializer
 
     private readonly string? _legacyDbPath;
 
+    /// <summary>
+    /// 启动时已有其他程序实例在运行（由 App 根据单实例 mutex 判断）。此时若尚未迁移，
+    /// 本次沿用旧数据库，避免复制后对方仍往旧库写入；全部关闭后再启动时迁移。
+    /// </summary>
+    public bool AnotherInstanceRunning { get; init; }
+
     public async Task InitializeAsync()
     {
         await MigrateFromLegacyLocationAsync();
@@ -89,14 +95,24 @@ public class DatabaseInitializer
         if (_legacyDbPath is null) return;
         var legacy = _legacyDbPath;
         var target = _dbPath;
+        var anotherInstance = AnotherInstanceRunning;
         try
         {
-            if (await Task.Run(() => DatabaseLocation.MigrateIfNeeded(legacy, target)))
-                LocationNotice = $"已把旧数据库 {legacy} 复制到 {target}，旧文件保留未删除";
+            switch (await Task.Run(() => DatabaseLocation.MigrateOrDefer(legacy, target, anotherInstance)))
+            {
+                case DatabaseLocation.MigrationOutcome.Migrated:
+                    LocationNotice = $"已把旧数据库 {legacy} 复制到 {target}，旧文件保留未删除";
+                    break;
+                case DatabaseLocation.MigrationOutcome.DeferredLegacyInUse:
+                    _dbPath = legacy;
+                    LocationNotice = $"另有程序实例正在使用旧数据库，本次继续使用 {legacy}；关闭所有实例后再启动会迁移到 {target}";
+                    break;
+            }
         }
         catch (Exception ex)
         {
             _dbPath = legacy;
+            DatabaseLocation.HoldLegacyInUse(legacy);
             LocationNotice = $"迁移旧数据库到 {target} 失败，本次继续使用 {legacy}: {ex.Message}";
         }
     }

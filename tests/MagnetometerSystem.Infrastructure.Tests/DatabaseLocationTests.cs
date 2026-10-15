@@ -172,6 +172,46 @@ public sealed class DatabaseLocationTests : IDisposable
     }
 
     [Fact]
+    public async Task AnotherInstanceRunning_DefersMigration_UntilAlone()
+    {
+        var sessionId = await CreateLegacyDatabaseWithSessionAsync();
+
+        var withOther = new DatabaseInitializer(TargetDb, LegacyDb) { AnotherInstanceRunning = true };
+        await withOther.InitializeAsync();
+
+        Assert.Equal(LegacyDb, withOther.DatabasePath);
+        Assert.False(File.Exists(TargetDb));
+        Assert.Equal(1, await CountSessionsAsync(withOther, sessionId));
+    }
+
+    [Fact]
+    public async Task LegacyInUseByAnotherProcess_DefersMigration_ThenMigratesAfterRelease()
+    {
+        var sessionId = await CreateLegacyDatabaseWithSessionAsync();
+        var inUse = Path.Combine(Path.GetDirectoryName(LegacyDb)!, DatabaseLocation.LegacyInUseFileName);
+
+        // 模拟另一个实例正以旧库运行：它共享打开占用文件
+        using (new FileStream(inUse, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.ReadWrite | FileShare.Delete))
+        {
+            var deferred = new DatabaseInitializer(TargetDb, LegacyDb);
+            await deferred.InitializeAsync();
+            Assert.Equal(LegacyDb, deferred.DatabasePath);
+            Assert.False(File.Exists(TargetDb));
+        }
+
+        // 对方退出后再启动才迁移（本进程刚才沿用旧库时也登记了占用，换一个独立的旧目录验证释放后的路径）
+        var otherLegacyDir = Path.Combine(_root, "legacy2");
+        Directory.CreateDirectory(otherLegacyDir);
+        SqliteConnection.ClearAllPools();
+        foreach (var suffix in new[] { "", "-wal", "-shm" })
+            if (File.Exists(LegacyDb + suffix)) File.Copy(LegacyDb + suffix, Path.Combine(otherLegacyDir, DatabaseLocation.FileName + suffix));
+        var migrated = new DatabaseInitializer(TargetDb, Path.Combine(otherLegacyDir, DatabaseLocation.FileName));
+        await migrated.InitializeAsync();
+        Assert.Equal(TargetDb, migrated.DatabasePath);
+        Assert.Equal(1, await CountSessionsAsync(migrated, sessionId));
+    }
+
+    [Fact]
     public void ResolveDirectory_FallsBackWhenPreferredIsNotWritable()
     {
         var blocked = Path.Combine(_root, "not-a-dir");

@@ -29,6 +29,8 @@ public partial class App : Application
     private const string SingleInstanceMutexName = "MagnetometerSystem.SingleInstance";
 
     private Mutex? _singleInstanceMutex;
+    /// <summary>启动时同名 mutex 已存在，说明另有实例（任意版本）在运行；数据库迁移据此推迟。</summary>
+    private bool _anotherInstanceRunning;
     private static readonly CancellationTokenSource UpdateLoopCts = new();
 
     private void OnStartup(object sender, StartupEventArgs e)
@@ -49,7 +51,7 @@ public partial class App : Application
             services.AddTransient<RealtimeChartViewModel>();
             services.AddTransient<MainViewModel>();
 
-            services.AddSingleton<DatabaseInitializer>();
+            services.AddSingleton(_ => new DatabaseInitializer { AnotherInstanceRunning = _anotherInstanceRunning });
             services.AddSingleton<IDataStorageService, SqliteStorageService>();
             services.AddTransient<IDataExporter, CsvExporter>();
             services.AddTransient<SessionListViewModel>();
@@ -192,7 +194,8 @@ public partial class App : Application
     {
         try
         {
-            _singleInstanceMutex = new Mutex(initiallyOwned: false, SingleInstanceMutexName, out _);
+            _singleInstanceMutex = new Mutex(initiallyOwned: false, SingleInstanceMutexName, out var createdNew);
+            _anotherInstanceRunning = !createdNew;
         }
         catch (Exception ex)
         {

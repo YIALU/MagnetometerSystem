@@ -24,6 +24,132 @@ public static class DatabaseLocation
     public static string ProgramDataDirectory { get; } = Path.Combine(AppContext.BaseDirectory, DataFolderName);
 
     /// <summary>
+    /// 使用旧位置数据库的进程在旧目录持有的占用文件（共享打开，进程退出自动释放）。
+    /// 迁移前若能独占打开它，说明没有新版实例还在往旧库写。
+    /// </summary>
+    public const string LegacyInUseFileName = "magnetometer.db.inuse";
+
+    /// <summary>串行化各实例的“迁移还是沿用旧库”判断，避免同时首启时一个迁移、一个沿用旧库。</summary>
+    private const string MigrationMutexName = "MagnetometerSystem.DatabaseMigration";
+
+    private static readonly object HeldLocksGate = new();
+    private static readonly Dictionary<string, FileStream> HeldLocks = new(StringComparer.OrdinalIgnoreCase);
+
+    public enum MigrationOutcome
+    {
+        /// <summary>无需迁移：新位置已有数据库、已迁移过，或旧位置没有数据库。</summary>
+        NotNeeded,
+        /// <summary>本次完成了迁移。</summary>
+        Migrated,
+        /// <summary>另有实例正在使用旧数据库，本次不迁移、沿用旧库，避免复制后旧库还有人写入。</summary>
+        DeferredLegacyInUse
+    }
+
+    /// <summary>
+    /// 在全局迁移锁内决定本次用哪个库：新位置已有库就用新库；旧库还有其他实例在用
+    /// （<paramref name="anotherInstanceRunning"/> 覆盖不认识占用文件的旧版本程序，占用文件覆盖新版本中回退到旧库的实例）
+    /// 就沿用旧库并登记占用；否则迁移。复制失败抛异常，调用方回退旧库时应调用 <see cref="HoldLegacyInUse"/>。
+    /// </summary>
+    public static MigrationOutcome MigrateOrDefer(string legacyDbPath, string targetDbPath, bool anotherInstanceRunning)
+    {
+        if (PathsEqual(legacyDbPath, targetDbPath))
+        {
+            HoldLegacyInUse(legacyDbPath);
+            return MigrationOutcome.NotNeeded;
+        }
+
+        using var gate = AcquireMigrationGate();
+
+        var targetDir = Path.GetDirectoryName(targetDbPath)!;
+        if (File.Exists(targetDbPath) || File.Exists(Path.Combine(targetDir, MigratedMarkerFileName)) || !File.Exists(legacyDbPath))
+            return MigrationOutcome.NotNeeded;
+
+        if (anotherInstanceRunning || IsLegacyInUse(legacyDbPath))
+        {
+            HoldLegacyInUse(legacyDbPath);
+            return MigrationOutcome.DeferredLegacyInUse;
+        }
+
+        return MigrateIfNeeded(legacyDbPath, targetDbPath) ? MigrationOutcome.Migrated : MigrationOutcome.NotNeeded;
+    }
+
+    /// <summary>登记本进程正在使用旧数据库，直到进程退出。</summary>
+    public static void HoldLegacyInUse(string legacyDbPath)
+    {
+        var path = LegacyInUsePath(legacyDbPath);
+        lock (HeldLocksGate)
+        {
+            if (HeldLocks.ContainsKey(path)) return;
+            try
+            {
+                HeldLocks[path] = new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite,
+                    FileShare.ReadWrite | FileShare.Delete);
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceWarning($"登记旧数据库占用失败 {path}: {ex.Message}");
+            }
+        }
+    }
+
+    private static bool IsLegacyInUse(string legacyDbPath)
+    {
+        try
+        {
+            using var probe = new FileStream(LegacyInUsePath(legacyDbPath), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            return false;
+        }
+        catch (IOException)
+        {
+            return true;
+        }
+        catch (Exception ex)
+        {
+            // 无法判断时按“在用”处理：本次沿用旧库不会丢数据，下次启动再迁移
+            Trace.TraceWarning($"检测旧数据库占用失败: {ex.Message}");
+            return true;
+        }
+    }
+
+    private static string LegacyInUsePath(string legacyDbPath) =>
+        Path.Combine(Path.GetDirectoryName(Path.GetFullPath(legacyDbPath))!, LegacyInUseFileName);
+
+    private static IDisposable AcquireMigrationGate()
+    {
+        try
+        {
+            var mutex = new Mutex(initiallyOwned: false, MigrationMutexName);
+            try
+            {
+                if (!mutex.WaitOne(TimeSpan.FromMinutes(5)))
+                    Trace.TraceWarning("等待其他实例完成数据库迁移超时，继续启动");
+                else
+                    return new MutexRelease(mutex);
+            }
+            catch (AbandonedMutexException)
+            {
+                return new MutexRelease(mutex);
+            }
+            mutex.Dispose();
+        }
+        catch (Exception ex)
+        {
+            Trace.TraceWarning($"创建数据库迁移锁失败: {ex.Message}");
+        }
+        return new MutexRelease(null);
+    }
+
+    private sealed class MutexRelease(Mutex? mutex) : IDisposable
+    {
+        public void Dispose()
+        {
+            if (mutex is null) return;
+            mutex.ReleaseMutex();
+            mutex.Dispose();
+        }
+    }
+
+    /// <summary>
     /// 选定本次使用的数据库文件。首选目录里已有数据库或迁移标记时，它就是唯一的权威数据库，
     /// 即使目录暂时不可写也不回退 —— 回退会打开迁移前留下的旧副本，造成数据分叉
     /// （写不进去时由初始化或保存报错，可诊断）。否则首选目录可写用首选，不可写用回退目录。
