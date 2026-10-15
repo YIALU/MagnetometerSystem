@@ -42,42 +42,74 @@ public static class DatabaseLocation
         /// <summary>本次完成了迁移。</summary>
         Migrated,
         /// <summary>另有实例正在使用旧数据库，本次不迁移、沿用旧库，避免复制后旧库还有人写入。</summary>
-        DeferredLegacyInUse
+        DeferredLegacyInUse,
+        /// <summary>新位置还没有数据库且不可写，本次使用旧位置的数据库。</summary>
+        FallbackNotWritable
     }
+
+    /// <summary>本次启动的位置决定：结果类别和实际使用的数据库文件。</summary>
+    public readonly record struct MigrationResult(MigrationOutcome Outcome, string DatabasePath);
 
     /// <summary>
     /// 在全局迁移锁内决定本次用哪个库：新位置已有库就用新库；旧库还有其他实例在用
     /// （<paramref name="anotherInstanceRunning"/> 覆盖不认识占用文件的旧版本程序，占用文件覆盖新版本中回退到旧库的实例）
-    /// 就沿用旧库并登记占用；否则迁移。复制失败抛异常，调用方回退旧库时应调用 <see cref="HoldLegacyInUse"/>。
+    /// 就沿用旧库并登记占用；否则迁移。<paramref name="fallbackWhenNotWritable"/> 为 true 时，
+    /// “新位置不可写而回退旧库”也在锁内判断并登记占用，不会绕过正在进行的迁移。
+    /// 复制失败时在锁内登记旧库占用后抛异常，调用方沿用旧库。
     /// </summary>
-    public static MigrationOutcome MigrateOrDefer(string legacyDbPath, string targetDbPath, bool anotherInstanceRunning)
+    public static MigrationResult MigrateOrDefer(string legacyDbPath, string targetDbPath, bool anotherInstanceRunning,
+        bool fallbackWhenNotWritable = false)
     {
-        if (PathsEqual(legacyDbPath, targetDbPath))
-        {
-            HoldLegacyInUse(legacyDbPath);
-            return MigrationOutcome.NotNeeded;
-        }
-
         using var gate = AcquireMigrationGate();
 
         var targetDir = Path.GetDirectoryName(targetDbPath)!;
-        if (File.Exists(targetDbPath) || File.Exists(Path.Combine(targetDir, MigratedMarkerFileName)) || !File.Exists(legacyDbPath))
-            return MigrationOutcome.NotNeeded;
+        if (fallbackWhenNotWritable)
+        {
+            // 锁内选位置：别的实例刚迁移完时这里能看到新库并直接使用，不会回退到迁移前的旧副本
+            var chosen = ResolveDatabasePath(targetDir, Path.GetDirectoryName(legacyDbPath)!);
+            if (!PathsEqual(chosen, targetDbPath))
+            {
+                HoldLegacyInUse(chosen);
+                return new(MigrationOutcome.FallbackNotWritable, chosen);
+            }
+        }
+
+        if (PathsEqual(legacyDbPath, targetDbPath))
+        {
+            HoldLegacyInUse(legacyDbPath);
+            return new(MigrationOutcome.NotNeeded, targetDbPath);
+        }
+
+        var marker = Path.Combine(targetDir, MigratedMarkerFileName);
+        if (File.Exists(targetDbPath))
+        {
+            // 新库已是权威数据库：补写此前可能写失败的标记，之后删掉新库也不会再复制旧副本
+            if (File.Exists(legacyDbPath) && !File.Exists(marker))
+                TryWriteMarker(marker, $"本目录已有数据库，不再从 {legacyDbPath} 复制旧副本。");
+            return new(MigrationOutcome.NotNeeded, targetDbPath);
+        }
+        if (File.Exists(marker) || !File.Exists(legacyDbPath))
+            return new(MigrationOutcome.NotNeeded, targetDbPath);
 
         // 拿不到迁移锁就不能保证没有别的实例正在迁移：本次不迁移，沿用旧库
-        if (gate is null)
+        if (gate is null || anotherInstanceRunning || IsLegacyInUse(legacyDbPath))
         {
             HoldLegacyInUse(legacyDbPath);
-            return MigrationOutcome.DeferredLegacyInUse;
+            return new(MigrationOutcome.DeferredLegacyInUse, legacyDbPath);
         }
 
-        if (anotherInstanceRunning || IsLegacyInUse(legacyDbPath))
+        try
         {
-            HoldLegacyInUse(legacyDbPath);
-            return MigrationOutcome.DeferredLegacyInUse;
+            return MigrateIfNeeded(legacyDbPath, targetDbPath)
+                ? new(MigrationOutcome.Migrated, targetDbPath)
+                : new(MigrationOutcome.NotNeeded, targetDbPath);
         }
-
-        return MigrateIfNeeded(legacyDbPath, targetDbPath) ? MigrationOutcome.Migrated : MigrationOutcome.NotNeeded;
+        catch
+        {
+            // 释放迁移锁之前登记：之后启动的实例能看到旧库仍在使用而推迟迁移
+            HoldLegacyInUse(legacyDbPath);
+            throw;
+        }
     }
 
     /// <summary>登记本进程正在使用旧数据库，直到进程退出。</summary>
@@ -238,18 +270,24 @@ public static class DatabaseLocation
 
         // 数据库已完整就位，迁移即告成功。标记只用于“删掉新库后不再重复复制”，写失败不能让本次
         // 回退到旧库 —— 否则本次写进旧库的数据下次启动会被已存在的新库挡住而“消失”。
+        TryWriteMarker(marker,
+            $"数据库已于 {DateTime.Now:yyyy-MM-dd HH:mm:ss} 从 {legacyDbPath} 复制到本目录。{Environment.NewLine}" +
+            "旧文件仍保留在原处，确认新位置数据完整后可自行删除。");
+        TryWriteLegacyNote(legacyDbPath, targetDbPath);
+        return true;
+    }
+
+    /// <summary>写迁移标记；失败只记日志（数据库已就位），下次启动会补写。</summary>
+    private static void TryWriteMarker(string marker, string text)
+    {
         try
         {
-            File.WriteAllText(marker,
-                $"数据库已于 {DateTime.Now:yyyy-MM-dd HH:mm:ss} 从 {legacyDbPath} 复制到本目录。{Environment.NewLine}" +
-                $"旧文件仍保留在原处，确认新位置数据完整后可自行删除。{Environment.NewLine}");
+            File.WriteAllText(marker, text + Environment.NewLine);
         }
         catch (Exception ex)
         {
-            Trace.TraceWarning($"写入迁移标记失败（数据库已迁移，不影响使用）: {ex.Message}");
+            Trace.TraceWarning($"写入迁移标记失败（数据库已迁移，不影响使用，下次启动补写）: {ex.Message}");
         }
-        TryWriteLegacyNote(legacyDbPath, targetDbPath);
-        return true;
     }
 
     /// <summary>在旧目录留一份说明，用户去老地方找数据时能知道去向。失败不影响迁移结果。</summary>

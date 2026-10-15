@@ -43,10 +43,14 @@ public class DatabaseInitializer
     /// </summary>
     public DatabaseInitializer()
         : this(
-            DatabaseLocation.ResolveDatabasePath(DatabaseLocation.ProgramDataDirectory, DatabaseLocation.LegacyDirectory),
+            Path.Combine(DatabaseLocation.ProgramDataDirectory, DatabaseLocation.FileName),
             Path.Combine(DatabaseLocation.LegacyDirectory, DatabaseLocation.FileName))
     {
+        // 是否因程序目录不可写而回退旧位置，在初始化时与迁移一起在迁移锁内决定
+        _fallbackWhenNotWritable = true;
     }
+
+    private readonly bool _fallbackWhenNotWritable;
 
     public DatabaseInitializer(string dbPath)
     {
@@ -107,18 +111,21 @@ public class DatabaseInitializer
         var legacy = _legacyDbPath;
         var target = _dbPath;
         var anotherInstance = AnotherInstanceRunning;
+        var fallback = _fallbackWhenNotWritable;
         try
         {
-            switch (await Task.Run(() => DatabaseLocation.MigrateOrDefer(legacy, target, anotherInstance)))
+            var result = await Task.Run(() => DatabaseLocation.MigrateOrDefer(legacy, target, anotherInstance, fallback));
+            _dbPath = result.DatabasePath;
+            LocationNotice = result.Outcome switch
             {
-                case DatabaseLocation.MigrationOutcome.Migrated:
-                    LocationNotice = $"已把旧数据库 {legacy} 复制到 {target}，旧文件保留未删除";
-                    break;
-                case DatabaseLocation.MigrationOutcome.DeferredLegacyInUse:
-                    _dbPath = legacy;
-                    LocationNotice = $"另有程序实例正在使用旧数据库，本次继续使用 {legacy}；关闭所有实例后再启动会迁移到 {target}";
-                    break;
-            }
+                DatabaseLocation.MigrationOutcome.Migrated =>
+                    $"已把旧数据库 {legacy} 复制到 {target}，旧文件保留未删除",
+                DatabaseLocation.MigrationOutcome.DeferredLegacyInUse =>
+                    $"另有程序实例正在使用旧数据库，本次继续使用 {legacy}；关闭所有实例后再启动会迁移到 {target}",
+                DatabaseLocation.MigrationOutcome.FallbackNotWritable =>
+                    $"程序目录 {Path.GetDirectoryName(target)} 不可写，数据库使用 {result.DatabasePath}",
+                _ => null
+            };
         }
         catch (Exception ex)
         {

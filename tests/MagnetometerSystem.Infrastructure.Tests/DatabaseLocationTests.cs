@@ -229,6 +229,59 @@ public sealed class DatabaseLocationTests : IDisposable
     }
 
     [Fact]
+    public async Task MarkerWriteFailure_IsRetriedOnNextStart()
+    {
+        await CreateLegacyDatabaseWithSessionAsync();
+        var markerPath = Path.Combine(Path.GetDirectoryName(TargetDb)!, DatabaseLocation.MigratedMarkerFileName);
+        Directory.CreateDirectory(markerPath);
+        await new DatabaseInitializer(TargetDb, LegacyDb).InitializeAsync();
+        SqliteConnection.ClearAllPools();
+        Directory.Delete(markerPath);
+
+        // 存储恢复可写后再启动：补写标记，之后删掉新库也不会再复制旧副本
+        await new DatabaseInitializer(TargetDb, LegacyDb).InitializeAsync();
+        SqliteConnection.ClearAllPools();
+        Assert.True(File.Exists(markerPath));
+        foreach (var suffix in new[] { "", "-wal", "-shm" }) File.Delete(TargetDb + suffix);
+        Assert.False(DatabaseLocation.MigrateIfNeeded(LegacyDb, TargetDb));
+    }
+
+    [Fact]
+    public async Task FallbackWhenNotWritable_IsDecidedUnderGate_AndBlocksLaterMigration()
+    {
+        await CreateLegacyDatabaseWithSessionAsync();
+        var blocked = Path.Combine(_root, "blocked-app");
+        File.WriteAllText(blocked, "");
+
+        // 程序目录不可写的实例在锁内回退旧库并登记占用
+        var fallback = DatabaseLocation.MigrateOrDefer(LegacyDb, Path.Combine(blocked, "data", DatabaseLocation.FileName),
+            anotherInstanceRunning: false, fallbackWhenNotWritable: true);
+        Assert.Equal(DatabaseLocation.MigrationOutcome.FallbackNotWritable, fallback.Outcome);
+        Assert.Equal(LegacyDb, fallback.DatabasePath);
+
+        // 之后另一个能写程序目录的实例看到旧库仍在使用，推迟迁移
+        var other = DatabaseLocation.MigrateOrDefer(LegacyDb, TargetDb, anotherInstanceRunning: false);
+        Assert.Equal(DatabaseLocation.MigrationOutcome.DeferredLegacyInUse, other.Outcome);
+        Assert.False(File.Exists(TargetDb));
+    }
+
+    [Fact]
+    public async Task FallbackWhenNotWritable_UsesTargetMigratedByAnotherInstance()
+    {
+        var sessionId = await CreateLegacyDatabaseWithSessionAsync();
+        await new DatabaseInitializer(TargetDb, LegacyDb).InitializeAsync();
+        SqliteConnection.ClearAllPools();
+
+        // 别的实例已迁移完成：即使本实例对程序目录的写入探测失败，也用新库而不回退旧副本
+        var result = DatabaseLocation.MigrateOrDefer(LegacyDb, TargetDb, anotherInstanceRunning: false, fallbackWhenNotWritable: true);
+        Assert.Equal(DatabaseLocation.MigrationOutcome.NotNeeded, result.Outcome);
+        Assert.Equal(TargetDb, result.DatabasePath);
+        var db = new DatabaseInitializer(TargetDb);
+        await db.InitializeAsync();
+        Assert.Equal(1, await CountSessionsAsync(db, sessionId));
+    }
+
+    [Fact]
     public void ResolveDirectory_FallsBackWhenPreferredIsNotWritable()
     {
         var blocked = Path.Combine(_root, "not-a-dir");
