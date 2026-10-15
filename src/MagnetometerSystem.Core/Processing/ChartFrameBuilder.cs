@@ -8,8 +8,9 @@ namespace MagnetometerSystem.Core.Processing;
 /// <param name="ChannelCount">通道布局的通道数；索引不小于它的通道不画。显示值可能少于这么多通道（晚到的通道），缺的通道没有曲线。</param>
 public readonly record struct ChartWindowData(double[] Times, double[][] Channels, int Start, int Count, int ChannelCount);
 
-/// <summary>曲线的显示设置：多图模式、显示滤波和降采样目标点数（不大于 0 时不降采样）。</summary>
-public readonly record struct ChartDisplaySettings(bool MultiPlot, DisplayFilterSettings Filter, int DownsampleTargetCount);
+/// <summary>曲线的显示设置：多图模式、显示滤波、降采样目标点数（不大于 0 时不降采样），以及多图是否附带每张图的显示窗口统计。</summary>
+public readonly record struct ChartDisplaySettings(bool MultiPlot, DisplayFilterSettings Filter, int DownsampleTargetCount,
+    bool PanelStatistics = false);
 
 /// <summary>
 /// 把一个时间窗口的显示数据按通道配置算成 <see cref="ChartFrame"/>。协议通道按 <see cref="ChannelDisplayConfig.ChannelIndex"/>
@@ -78,7 +79,7 @@ public sealed class ChartFrameBuilder(DisplaySeriesPipeline pipeline, ComputedCh
             {
                 var series = Prepare(data, windowTimes, ch, config.DisplayOffset, display);
                 curve = new ChartCurve(series.Xs, series.Ys, config.ParseColor(), ChannelLineWidth, null, null);
-                statistics = WindowStatistics(config.Name, series);
+                statistics = display.PanelStatistics ? WindowStatistics(config.Name, series) : null;
             }
             panels.Add(new ChartPanel($"{config.Name} ({config.Unit})", curve, statistics, config));
         }
@@ -86,7 +87,7 @@ public sealed class ChartFrameBuilder(DisplaySeriesPipeline pipeline, ComputedCh
         foreach (var (definition, series) in ComputedSeries(data, windowTimes, display, computed))
             panels.Add(new ChartPanel($"{definition.Name} ({definition.Unit})",
                 new ChartCurve(series.Xs, series.Ys, ParseColor(definition.ColorHex), definition.LineWidth, null, null),
-                WindowStatistics(definition.Name, series), null));
+                display.PanelStatistics ? WindowStatistics(definition.Name, series) : null, null));
         return panels;
     }
 
@@ -116,7 +117,7 @@ public sealed class ChartFrameBuilder(DisplaySeriesPipeline pipeline, ComputedCh
         pipeline.Prepare(windowTimes, data.Channels[ch].AsSpan(data.Start, data.Count).ToArray(), offset,
             display.Filter, display.DownsampleTargetCount);
 
-    /// <summary>多图右上角的统计标注：显示窗口内、按显示值（偏移、滤波后，降采样前）计算。</summary>
+    /// <summary>多图右上角的统计标注（开启时）：显示窗口内、按显示值（偏移、滤波后，降采样前）计算。</summary>
     private static string WindowStatistics(string name, DisplaySeries series) =>
         "显示窗口\n" + StatisticsResultItem.Compute(name, series.Values).FormatMultiline();
 

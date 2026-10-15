@@ -58,7 +58,7 @@ The Acquire page shows the plot in the middle, a collapsible tool panel on the r
 
 ![Single plot: three gradient channels and depth in one plot, depth on its own right-hand axis](images/tutorial/04-chart-single.png)
 
-**Multi plot (2 columns):** one plot per channel in two columns, each labelled with statistics of the displayed window (computed from displayed values); the Interval tab on the right shows raw-reading statistics for the selected time span.
+**Multi plot (2 columns):** one plot per channel in two columns; tick "Show statistics on charts in multi plot" (多图时在图上显示统计) in the Statistics tab to label each plot's top-right corner with statistics of the displayed window (computed from displayed values; off by default, shown on in the screenshot below); the Interval tab on the right shows raw-reading statistics for the selected time span.
 
 ![Multi plot in two columns: six magnetic channels, interval statistics on the right](images/tutorial/04-chart-multi.png)
 
@@ -68,7 +68,7 @@ The Acquire page shows the plot in the middle, a collapsible tool panel on the r
 - **Time window (时间窗口):** how many recent seconds to show.
 - **Main Y axis (主 Y 轴):** Auto fits the data; Manual takes lower and upper limits.
 - **Pause / resume display (暂停显示 / 继续显示):** freezes the view; **capture and saving continue while paused**.
-- **Zero / undo zero (一键归零 / 取消归零):** shifts each curve by its window mean to around 0 for comparing fluctuations; display only; saved data and the side-panel Statistics and Interval results are unaffected (the per-plot "display window" statistics in multi plot do change).
+- **Zero / undo zero (一键归零 / 取消归零):** shifts each curve by its window mean to around 0 for comparing fluctuations; display only; saved data and the side-panel Statistics and Interval results are unaffected (the per-plot statistics in multi plot, when turned on, do change).
 - **Focus plot (专注曲线):** hides the side and bottom panels so the plot fills the window; Exit focus (退出专注) restores them.
 - **Mouse:** the wheel zooms the time axis, Ctrl + wheel zooms the Y axis (with a manual range); hovering shows each channel's raw value at the crosshair time.
 - More (更多) toggles auto-scroll to latest and the grid, sets the display point limit, and clears the plot (display only; saved data is unaffected).
@@ -76,10 +76,10 @@ The Acquire page shows the plot in the middle, a collapsible tool panel on the r
 **Side panel**
 
 - **Channels (通道):** the checkbox controls plotting only, not saving; each channel shows its latest raw value; change color, display offset and order.
-- **Statistics (统计):** mean, standard deviation, peak-to-peak, RMS, minimum and maximum over the recent window, using raw readings.
+- **Statistics (统计):** mean, standard deviation, peak-to-peak, RMS, minimum and maximum over the recent window, using raw readings. Tick "Show statistics on charts in multi plot" to also label each multi-plot chart with its displayed-window statistics (off by default).
 - **Interval (区间):** drag with the left mouse button on the plot (or type start and end seconds) to get statistics for that span, and export it with Export this span (导出这一段).
 - **Calculate (计算):** add total-field `sqrt(A²+B²+C²)`, gradient `(A−B)/baseline` or formula channels.
-- **Filter (滤波):** display only; saving, the side-panel Statistics and Interval tabs and export always use raw readings. The per-plot "display window" (显示窗口) statistics in multi plot follow the displayed values, so display offset and filtering change them.
+- **Filter (滤波):** display only; saving, the side-panel Statistics and Interval tabs and export always use raw readings. The per-plot statistics in multi plot (when turned on) follow the displayed values, so display offset and filtering change them.
 
 The plot keeps the latest 100,000 points per channel for display and interval analysis; use the Analysis page on a saved session for longer spans.
 

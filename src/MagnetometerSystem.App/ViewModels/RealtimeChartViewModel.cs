@@ -352,7 +352,7 @@ public partial class RealtimeChartViewModel : ObservableObject, IDisposable
         {
             frameReady(_frameBuilder.Build(new ChartWindowData(times, channelData, startIdx, count, Layout.Count),
                 new ChartAxes(xMin, xMax, AutoScroll, AutoScaleY, YMin, YMax, ShowGrid),
-                new ChartDisplaySettings(IsMultiPlotMode, DisplayFilter, DownsampleTargetCount),
+                new ChartDisplaySettings(IsMultiPlotMode, DisplayFilter, DownsampleTargetCount, StatisticsConfig.ShowOnChart),
                 ChannelConfigs, ComputedChannels));
         }
 
