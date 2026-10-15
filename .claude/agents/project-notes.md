@@ -27,7 +27,7 @@
 - `ChannelDisplayConfig` 是显示层概念：`ChannelIndex` 是物理索引，列表顺序是显示顺序
 - **关键约束**：渲染图表时循环用 `ChannelDisplayConfig`，取数据用 `config.ChannelIndex`，不要混
   - 历史 bug：`for (int ch = 0; ch < count; ch++)` 用 ch 同时索引 configs 和 data → 拖拽后错位
-  - 正确写法看 `RealtimeChartViewModel.RenderMultiPlot` foreach 循环
+  - 正确写法看 `ChartFrameBuilder.Panels`（`Core/Processing/ChartFrameBuilder.cs`）的 foreach 循环
 
 ---
 

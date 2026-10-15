@@ -231,7 +231,7 @@
                         <!-- 拟合通道：协议决定通道顺序，按名称自动识别 X / Y / Z，可以改 -->
                         <StackPanel Margin="0,0,0,14" Visibility="{Binding ShowsFittingChannels, Converter={StaticResource BoolToVis}}">
                             <DockPanel Margin="0,0,0,6">
-                                <Button DockPanel.Dock="Right" Content="自动识别" Style="{StaticResource SmallGhostButton}" Command="{Binding SuggestFittingChannelsCommand}"
+                                <Button DockPanel.Dock="Right" Content="自动识别" Style="{StaticResource SmallGhostButton}" Command="{Binding Fitting.AutoDetectCommand}"
                                         IsEnabled="{Binding IsCollecting, Converter={StaticResource InverseBool}}" ToolTip="按通道名称（如 X1 / Y1 / Z1）重新匹配"/>
                                 <TextBlock Text="拟合通道" Style="{StaticResource FieldLabel}" Margin="0" VerticalAlignment="Center"/>
                             </DockPanel>
@@ -244,12 +244,12 @@
                                 <TextBlock Grid.Column="2" Text="Y" HorizontalAlignment="Center" Foreground="{DynamicResource MutedBrush}" Margin="6,0,0,2"/>
                                 <TextBlock Grid.Column="3" Text="Z" HorizontalAlignment="Center" Foreground="{DynamicResource MutedBrush}" Margin="6,0,0,2"/>
                                 <TextBlock Grid.Row="1" Text="探头 1" VerticalAlignment="Center" Foreground="{DynamicResource Ink2Brush}"/>
-                                <ComboBox Grid.Row="1" Grid.Column="1" Margin="6,0,0,0" ItemsSource="{Binding FittingChannelOptions}" DisplayMemberPath="Label"
-                                          SelectedValuePath="Index" SelectedValue="{Binding FitX1}" ToolTip="{Binding SelectedItem.Label, RelativeSource={RelativeSource Self}}"/>
-                                <ComboBox Grid.Row="1" Grid.Column="2" Margin="6,0,0,0" ItemsSource="{Binding FittingChannelOptions}" DisplayMemberPath="Label"
-                                          SelectedValuePath="Index" SelectedValue="{Binding FitY1}" ToolTip="{Binding SelectedItem.Label, RelativeSource={RelativeSource Self}}"/>
-                                <ComboBox Grid.Row="1" Grid.Column="3" Margin="6,0,0,0" ItemsSource="{Binding FittingChannelOptions}" DisplayMemberPath="Label"
-                                          SelectedValuePath="Index" SelectedValue="{Binding FitZ1}" ToolTip="{Binding SelectedItem.Label, RelativeSource={RelativeSource Self}}"/>
+                                <ComboBox Grid.Row="1" Grid.Column="1" Margin="6,0,0,0" ItemsSource="{Binding Fitting.Options}" DisplayMemberPath="Label"
+                                          SelectedValuePath="Index" SelectedValue="{Binding Fitting.FitX1}" ToolTip="{Binding SelectedItem.Label, RelativeSource={RelativeSource Self}}"/>
+                                <ComboBox Grid.Row="1" Grid.Column="2" Margin="6,0,0,0" ItemsSource="{Binding Fitting.Options}" DisplayMemberPath="Label"
+                                          SelectedValuePath="Index" SelectedValue="{Binding Fitting.FitY1}" ToolTip="{Binding SelectedItem.Label, RelativeSource={RelativeSource Self}}"/>
+                                <ComboBox Grid.Row="1" Grid.Column="3" Margin="6,0,0,0" ItemsSource="{Binding Fitting.Options}" DisplayMemberPath="Label"
+                                          SelectedValuePath="Index" SelectedValue="{Binding Fitting.FitZ1}" ToolTip="{Binding SelectedItem.Label, RelativeSource={RelativeSource Self}}"/>
                             </Grid>
                             <Grid Margin="0,6,0,0" IsEnabled="{Binding IsCollecting, Converter={StaticResource InverseBool}}"
                                   Visibility="{Binding IsDualSensor, Converter={StaticResource BoolToVis}}">
@@ -257,19 +257,19 @@
                                     <ColumnDefinition Width="44"/><ColumnDefinition/><ColumnDefinition/><ColumnDefinition/>
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Text="探头 2" VerticalAlignment="Center" Foreground="{DynamicResource Ink2Brush}"/>
-                                <ComboBox Grid.Column="1" Margin="6,0,0,0" ItemsSource="{Binding FittingChannelOptions}" DisplayMemberPath="Label"
-                                          SelectedValuePath="Index" SelectedValue="{Binding FitX2}" ToolTip="{Binding SelectedItem.Label, RelativeSource={RelativeSource Self}}"/>
-                                <ComboBox Grid.Column="2" Margin="6,0,0,0" ItemsSource="{Binding FittingChannelOptions}" DisplayMemberPath="Label"
-                                          SelectedValuePath="Index" SelectedValue="{Binding FitY2}" ToolTip="{Binding SelectedItem.Label, RelativeSource={RelativeSource Self}}"/>
-                                <ComboBox Grid.Column="3" Margin="6,0,0,0" ItemsSource="{Binding FittingChannelOptions}" DisplayMemberPath="Label"
-                                          SelectedValuePath="Index" SelectedValue="{Binding FitZ2}" ToolTip="{Binding SelectedItem.Label, RelativeSource={RelativeSource Self}}"/>
+                                <ComboBox Grid.Column="1" Margin="6,0,0,0" ItemsSource="{Binding Fitting.Options}" DisplayMemberPath="Label"
+                                          SelectedValuePath="Index" SelectedValue="{Binding Fitting.FitX2}" ToolTip="{Binding SelectedItem.Label, RelativeSource={RelativeSource Self}}"/>
+                                <ComboBox Grid.Column="2" Margin="6,0,0,0" ItemsSource="{Binding Fitting.Options}" DisplayMemberPath="Label"
+                                          SelectedValuePath="Index" SelectedValue="{Binding Fitting.FitY2}" ToolTip="{Binding SelectedItem.Label, RelativeSource={RelativeSource Self}}"/>
+                                <ComboBox Grid.Column="3" Margin="6,0,0,0" ItemsSource="{Binding Fitting.Options}" DisplayMemberPath="Label"
+                                          SelectedValuePath="Index" SelectedValue="{Binding Fitting.FitZ2}" ToolTip="{Binding SelectedItem.Label, RelativeSource={RelativeSource Self}}"/>
                             </Grid>
-                            <TextBlock Text="{Binding FittingChannelHint}" TextWrapping="Wrap" FontSize="12" Margin="0,6,0,0">
+                            <TextBlock Text="{Binding Fitting.Hint}" TextWrapping="Wrap" FontSize="12" Margin="0,6,0,0">
                                 <TextBlock.Style>
                                     <Style TargetType="TextBlock">
                                         <Setter Property="Foreground" Value="{DynamicResource MutedBrush}"/>
                                         <Style.Triggers>
-                                            <DataTrigger Binding="{Binding IsFittingChannelValid}" Value="False">
+                                            <DataTrigger Binding="{Binding Fitting.IsValid}" Value="False">
                                                 <Setter Property="Foreground" Value="{DynamicResource WarnBrush}"/>
                                             </DataTrigger>
                                         </Style.Triggers>

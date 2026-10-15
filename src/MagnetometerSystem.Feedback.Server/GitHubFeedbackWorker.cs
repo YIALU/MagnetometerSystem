@@ -17,8 +17,11 @@ public sealed class GitHubFeedbackWorker(FeedbackStore store, IHttpClientFactory
         var fence = new string('`', Math.Max(3, longest + 1));
         return $"{fence}text\n{value}\n{fence}";
     }
+    // 附带日志只留在服务器私有数据库；公开 Issue 只注明有无，维护者按反馈编号在服务器上导出。
     public static string IssueBody(FeedbackSubmission request) =>
-        $"## 使用场景\n{Literal(request.Scenario)}\n\n## 问题或需求描述\n{Literal(request.Description)}\n\n## 软件版本\n{Literal(request.Version ?? "")}\n\n{Marker(request.FeedbackId)}";
+        $"## 使用场景\n{Literal(request.Scenario)}\n\n## 问题或需求描述\n{Literal(request.Description)}\n\n## 软件版本\n{Literal(request.Version ?? "")}\n\n" +
+        (string.IsNullOrEmpty(request.Logs) ? "" : $"> 已附带程序日志，仅保存在反馈服务器，按反馈编号 `{request.FeedbackId}` 查看。\n\n") +
+        Marker(request.FeedbackId);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {

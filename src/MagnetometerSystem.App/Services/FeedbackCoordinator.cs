@@ -7,7 +7,7 @@ using MagnetometerSystem.Infrastructure.Feedback;
 
 namespace MagnetometerSystem.App.Services;
 
-public sealed class FeedbackCoordinator(IFeedbackClient client, FeedbackDraftStore drafts)
+public sealed class FeedbackCoordinator(IFeedbackClient client, FeedbackDraftStore drafts, IFeedbackLogSource logs)
 {
     public static Uri Endpoint
     {
@@ -27,6 +27,6 @@ public sealed class FeedbackCoordinator(IFeedbackClient client, FeedbackDraftSto
         }
         var existing = Application.Current.Windows.OfType<FeedbackDialog>().FirstOrDefault();
         if (existing is not null) { existing.Activate(); return; }
-        new FeedbackDialog(new FeedbackViewModel(client, drafts)) { Owner = owner }.Show();
+        new FeedbackDialog(new FeedbackViewModel(client, drafts, logs)) { Owner = owner }.Show();
     }
 }

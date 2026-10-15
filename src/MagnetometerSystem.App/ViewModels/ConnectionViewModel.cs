@@ -32,6 +32,7 @@ public partial class ConnectionViewModel : ObservableObject
     private int _receiveUiPending;
     private long _receivedBytes, _parsedCount, _parseErrors;
     private long _lastParserRejectedCount;
+    private string _activeEndpoint = "";
     private bool _sessionPrepared;
     private string? _preparedSessionId;
     private int _rejectIncomingData;
@@ -265,6 +266,7 @@ public partial class ConnectionViewModel : ObservableObject
                 IpAddress = IpAddress, Port = Port,
             };
             var connection = _connectionFactory.Create(connConfig);
+            _activeEndpoint = DescribeEndpoint(connConfig);
             lock (_receiveGate)
             {
                 _parser = ParserFactory.Create(protocol);
@@ -284,6 +286,8 @@ public partial class ConnectionViewModel : ObservableObject
             connection.ErrorOccurred += OnErrorOccurred;
             connection.ConnectionStateChanged += OnConnectionStateChanged;
             StatusMessage = "正在准备采集会话...";
+            Serilog.Log.Information("开始采集: {Endpoint}，协议 {Protocol}（{ChannelCount} 通道: {Channels}），标称采样率 {SampleRate} Hz",
+                _activeEndpoint, protocol.Name, sensorConfig.ChannelCount, string.Join(", ", sensorConfig.ChannelNames.Zip(sensorConfig.ChannelUnits, (n, u) => $"{n}[{u}]")), SampleRate);
             _sessionPrepared = true;
             await _dataBus.PublishAcquisitionStartingAsync(sensorConfig, connConfig);
             IsAcquiring = true;
@@ -381,8 +385,10 @@ public partial class ConnectionViewModel : ObservableObject
         {
             // 先停止物理接收并等待其当前回调，最后才结束存储会话。
             await connection.DisconnectAsync();
+            long receivedBytes, parsedCount, parseErrors;
             lock (_receiveGate)
             {
+                (receivedBytes, parsedCount, parseErrors) = (_receivedBytes, _parsedCount, _parseErrors);
                 connection.DataReceived -= OnDataReceived;
                 connection.ErrorOccurred -= OnErrorOccurred;
                 connection.ConnectionStateChanged -= OnConnectionStateChanged;
@@ -396,6 +402,9 @@ public partial class ConnectionViewModel : ObservableObject
             OnUi(FlushReceiveStatus);
             _dataBus.PublishConnectionChanged(null);
             await connection.DisposeAsync();
+            // 帧数是保存消费者已接纳的条数，不等于已提交到数据库的条数（后者见会话结束日志）。
+            Serilog.Log.Information("已断开 {Endpoint}: 收到 {ReceivedBytes} 字节，接纳 {ParsedCount} 帧，解析错误 {ParseErrors} 处",
+                _activeEndpoint, receivedBytes, parsedCount, parseErrors);
         }
         IsConnected = false;
         if (_sessionPrepared)
@@ -517,8 +526,18 @@ public partial class ConnectionViewModel : ObservableObject
         if (ReferenceEquals(sender, _connection)) ReportError(message);
     }
 
+    /// <summary>日志用的连接描述：串口写端口与参数，TCP 写地址与端口。</summary>
+    private static string DescribeEndpoint(ConnectionConfig c) => c.Type == ConnectionType.Tcp
+        ? $"TCP {c.IpAddress}:{c.Port}"
+        : $"串口 {c.PortName} {c.BaudRate} {c.DataBits}-{c.Parity}-{c.StopBits}";
+
     private void OnConnectionStateChanged(object? sender, bool connected)
     {
+        if (ReferenceEquals(sender, _connection))
+        {
+            // 首次连上、TCP 重连成功、意外中断和主动断开都会走这里，措辞保持中性。
+            Serilog.Log.Information("连接状态: {State} {Endpoint}", connected ? "已连接" : "已断开", _activeEndpoint);
+        }
         if (!connected && ReferenceEquals(sender, _connection))
             lock (_receiveGate) _parser?.Reset();
         OnUi(() =>

@@ -304,7 +304,8 @@ public class OrthogonalityCalculator : IOrthogonalityService
     }
 
     /// <summary>
-    /// 归一化变换矩阵，使校正后数据球体半径等于参考场强。
+    /// 归一化变换矩阵，使校正后数据球体半径等于参考场强；未给参考场强时等于原始数据到中心的平均距离，
+    /// 让改正结果和残差保持输入单位的量级。
     /// </summary>
     private Matrix<double> NormalizeRadius(
         Matrix<double> T, Vector<double> center,
@@ -312,8 +313,9 @@ public class OrthogonalityCalculator : IOrthogonalityService
     {
         int n = rawData.GetLength(0);
 
-        // 用当前 T 和 center 计算校正后数据的平均总场
+        // 用当前 T 和 center 计算校正后数据的平均总场，并记录原始数据到中心的平均距离
         double sumMagnitude = 0;
+        double sumRawRadius = 0;
         for (int i = 0; i < n; i++)
         {
             double dx = rawData[i, 0] - center[0];
@@ -324,6 +326,7 @@ public class OrthogonalityCalculator : IOrthogonalityService
             var corrected = T * diff;
             double mag = corrected.L2Norm();
             sumMagnitude += mag;
+            sumRawRadius += diff.L2Norm();
         }
 
         double currentRadius = sumMagnitude / n;
@@ -341,8 +344,9 @@ public class OrthogonalityCalculator : IOrthogonalityService
         }
         else
         {
-            // 自动估算：使用校正后的平均总场作为目标
-            targetRadius = currentRadius;
+            // 自动估算：T 把椭球映射到单位球，currentRadius 约为 1；目标取原始数据的平均总场，
+            // 否则改正结果约为 1 而不是 nT 等输入单位，残差和质量评级也会被缩小同样倍数。
+            targetRadius = sumRawRadius / n;
         }
 
         double scale = targetRadius / currentRadius;

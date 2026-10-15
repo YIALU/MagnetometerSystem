@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Media;
 using System.Windows.Navigation;
 using System.Windows.Threading;
 using MagnetometerSystem.App.ViewModels;
@@ -30,6 +32,27 @@ public partial class FeedbackDialog : Window
     }
     public Task SaveDraftAsync() => _vm.SaveDraftAsync();
     private void Close_Click(object sender, RoutedEventArgs e) => Close();
+    private async void PreviewLogs_Click(object sender, RoutedEventArgs e)
+    {
+        string? text;
+        try { text = await _vm.PreviewLogsAsync(); }
+        catch { text = null; }
+        var box = new TextBox
+        {
+            Text = string.IsNullOrEmpty(text) ? "没有找到可附带的日志。" : text,
+            IsReadOnly = true, TextWrapping = TextWrapping.NoWrap, FontFamily = new FontFamily("Consolas, Microsoft YaHei UI"),
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            BorderThickness = new Thickness(0), Padding = new Thickness(8)
+        };
+        var preview = new Window
+        {
+            Title = "将随反馈发送的日志", Owner = this, Width = 760, Height = 520,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner, ShowInTaskbar = false, Content = box
+        };
+        preview.Loaded += (_, _) => box.ScrollToEnd();
+        preview.Show();
+    }
+
     private void IssueLink_RequestNavigate(object sender, RequestNavigateEventArgs e)
     {
         try { Process.Start(new ProcessStartInfo(e.Uri.ToString()) { UseShellExecute = true }); }

@@ -4,8 +4,9 @@ using MagnetometerSystem.Feedback.Server;
 using Microsoft.AspNetCore.HttpOverrides;
 
 var builder = WebApplication.CreateBuilder(args);
-// JSON 中中文可能编码为六字节 \u 转义；覆盖所有允许字段的最大编码尺寸。
-builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = 200_000);
+// JSON 中中文可能编码为六字节 \u 转义；文字字段最多约 200 KB，另加附带日志的 Base64
+// （FeedbackLogPayload.MaxEncodedLength，约 700 KB）。
+builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = 1_000_000);
 builder.Services.AddProblemDetails();
 builder.Services.Configure<ForwardedHeadersOptions>(options =>
 {

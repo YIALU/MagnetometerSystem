@@ -2,6 +2,7 @@ using System.Globalization;
 using System.IO;
 using System.Reflection;
 using MagnetometerSystem.App.ViewModels;
+using MagnetometerSystem.App.Views.Charting;
 using MagnetometerSystem.Core.Calibration;
 using MagnetometerSystem.Core.Models;
 using MagnetometerSystem.Core.Services;
@@ -27,7 +28,9 @@ public class UnitWorkflowTests
         }, new());
         await storage.SaveReadingsAsync([new() { SessionId = id, Timestamp = DateTime.Now, ChannelValues = [100, 30, 25] }]);
         await storage.EndSessionAsync(id);
-        using var chart = new RealtimeChartViewModel(bus) { PlotControl = new WpfPlot() };
+        using var chart = new RealtimeChartViewModel(bus);
+        using var renderer = new ChartRenderer(new WpfPlot());
+        renderer.Attach(chart);
         using var replay = new HistoryPlaybackViewModel(storage, bus, new OrthogonalityCorrector(), new SqliteCalibrationRepository(db));
         replay.SelectedSession = Assert.Single(await storage.GetSessionsAsync());
         await replay.LoadSessionCommand.ExecuteAsync(null);
@@ -45,7 +48,9 @@ public class UnitWorkflowTests
     public Task WizardsRejectIncompatibleSourcesAndDeriveUnitsWhileCustomUnitRemainsEditable() => WpfTestHost.RunAsync(async () =>
     {
         var bus = new DataBus();
-        using var chart = new RealtimeChartViewModel(bus) { PlotControl = new WpfPlot() };
+        using var chart = new RealtimeChartViewModel(bus);
+        using var renderer = new ChartRenderer(new WpfPlot());
+        renderer.Attach(chart);
         bus.PublishAcquisitionStarted(new SensorConfig
         {
             ChannelCountOverride = 7,
@@ -53,33 +58,34 @@ public class UnitWorkflowTests
             ChannelUnitsOverride = ["nT", "nT", "nT", "°C", "µT", "µT", "µT"],
         });
         await WpfTestHost.PumpAsync();
-        chart.StartAddTotalFieldCommand.Execute(null);
-        chart.WizardSourceA = 0; chart.WizardSourceB = 1; chart.WizardSourceC = 3;
-        chart.ConfirmAddTotalFieldCommand.Execute(null);
+        var wizard = chart.Wizard;
+        wizard.StartAddTotalFieldCommand.Execute(null);
+        wizard.WizardSourceA = 0; wizard.WizardSourceB = 1; wizard.WizardSourceC = 3;
+        wizard.ConfirmAddTotalFieldCommand.Execute(null);
         Assert.Empty(chart.ComputedChannels);
-        Assert.Contains("相同的磁场单位", chart.ComputationError);
-        chart.WizardSourceC = 2;
-        chart.ConfirmAddTotalFieldCommand.Execute(null);
+        Assert.Contains("相同的磁场单位", wizard.ComputationError);
+        wizard.WizardSourceC = 2;
+        wizard.ConfirmAddTotalFieldCommand.Execute(null);
         Assert.Equal("nT", Assert.Single(chart.ComputedChannels).Unit);
-        chart.StartAddTotalFieldCommand.Execute(null);
-        chart.WizardSourceA = 4; chart.WizardSourceB = 5; chart.WizardSourceC = 6;
-        chart.ConfirmAddTotalFieldCommand.Execute(null);
+        wizard.StartAddTotalFieldCommand.Execute(null);
+        wizard.WizardSourceA = 4; wizard.WizardSourceB = 5; wizard.WizardSourceC = 6;
+        wizard.ConfirmAddTotalFieldCommand.Execute(null);
         Assert.Equal("µT", chart.ComputedChannels[1].Unit);
-        chart.StartAddGradientCommand.Execute(null);
-        chart.WizardSourceA = 0; chart.WizardSourceB = 3;
-        chart.ConfirmAddGradientCommand.Execute(null);
+        wizard.StartAddGradientCommand.Execute(null);
+        wizard.WizardSourceA = 0; wizard.WizardSourceB = 3;
+        wizard.ConfirmAddGradientCommand.Execute(null);
         Assert.Equal(2, chart.ComputedChannels.Count);
-        chart.WizardSourceB = 1;
-        chart.GradientBaselineDistance = 0;
-        chart.ConfirmAddGradientCommand.Execute(null);
+        wizard.WizardSourceB = 1;
+        wizard.GradientBaselineDistance = 0;
+        wizard.ConfirmAddGradientCommand.Execute(null);
         Assert.Equal(2, chart.ComputedChannels.Count);
-        Assert.Contains("有限正数", chart.ComputationError);
+        Assert.Contains("有限正数", wizard.ComputationError);
         var originalCulture = CultureInfo.CurrentCulture;
         try
         {
             CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("fr-FR");
-            chart.GradientBaselineDistance = 0.5;
-            chart.ConfirmAddGradientCommand.Execute(null);
+            wizard.GradientBaselineDistance = 0.5;
+            wizard.ConfirmAddGradientCommand.Execute(null);
         }
         finally { CultureInfo.CurrentCulture = originalCulture; }
         Assert.Equal("nT/m", chart.ComputedChannels[2].Unit);
@@ -97,7 +103,7 @@ public class UnitWorkflowTests
         for (int i = 0; i < 3; i++)
             bus.PublishProcessedReading(new MagnetometerReading { Timestamp = start.AddMilliseconds(i * 10), ChannelValues = [100, 200, 300, 25, 1, 2, 3] });
         chart.RefreshPlot();
-        var lines = chart.PlotControl.Plot.GetPlottables().OfType<ScottPlot.Plottables.Scatter>().ToArray();
+        var lines = renderer.SinglePlot.Plot.GetPlottables().OfType<ScottPlot.Plottables.Scatter>().ToArray();
         Assert.Equal(11, lines.Length);
         Assert.Equal("°C", lines[^1].Axes.YAxis.Label.Text);
         Assert.Same(lines[3].Axes.YAxis, lines[^1].Axes.YAxis);

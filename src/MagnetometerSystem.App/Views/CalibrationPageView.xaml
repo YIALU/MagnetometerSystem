@@ -19,7 +19,7 @@
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="配置库"/>
                             <Border Style="{StaticResource Badge}" Margin="6,0,0,0" Padding="5,0">
-                                <TextBlock Text="{Binding Ortho.SavedProfiles.Count}" FontSize="11" FontWeight="Normal" Foreground="{DynamicResource Ink2Brush}"/>
+                                <TextBlock Text="{Binding Ortho.Library.SavedProfiles.Count}" FontSize="11" FontWeight="Normal" Foreground="{DynamicResource Ink2Brush}"/>
                             </Border>
                         </StackPanel>
                     </RadioButton>
@@ -32,7 +32,7 @@
                     Visibility="{Binding DataContext.SelectedTab, RelativeSource={RelativeSource AncestorType=UserControl}, Converter={StaticResource DockTabVisible}, ConverterParameter=0}"/>
                 <views:SensorCalibrationView DataContext="{Binding Sensor}"
                     Visibility="{Binding DataContext.SelectedTab, RelativeSource={RelativeSource AncestorType=UserControl}, Converter={StaticResource DockTabVisible}, ConverterParameter=1}"/>
-                <views:CalibrationLibraryView DataContext="{Binding Ortho}"
+                <views:CalibrationLibraryView DataContext="{Binding Ortho.Library}"
                     Visibility="{Binding DataContext.SelectedTab, RelativeSource={RelativeSource AncestorType=UserControl}, Converter={StaticResource DockTabVisible}, ConverterParameter=2}"/>
             </Grid>
         </Border>

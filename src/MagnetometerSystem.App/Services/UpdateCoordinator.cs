@@ -240,7 +240,11 @@ public sealed class UpdateCoordinator
             finally { _checkGate.Release(); }
             if (known is not null && onUpdateRestored is not null) await onUpdateRestored(known);
 
-            if (!await IsCheckDueAsync()) return;
+            if (!await IsCheckDueAsync())
+            {
+                Log.Information("距上次检查更新不足 24 小时，本次启动不联网检查");
+                return;
+            }
 
             await Task.Delay(StartupDelay);
 

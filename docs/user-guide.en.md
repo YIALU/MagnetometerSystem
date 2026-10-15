@@ -32,7 +32,9 @@ Written status confirms a local connection write. A matching-response status con
 
 ## Data correction
 
-Orthogonality and offset/gain tools are optional; ordinary capture does not require correction profiles. Applying correction preserves original values. Historical batch correction can save separate results.
+Orthogonality correction is optional; ordinary capture does not require correction profiles. Applying correction preserves original values. Historical batch correction can save separate results.
+
+The offset/gain page currently only stores and manages per-channel offset and gain parameters. Capture, chart display, playback and export never apply them.
 
 An orthogonality profile's fitting unit must match the target channels. `uT`, `µT`, and `μT` are equivalent, but offsets are not converted automatically. Older profiles without recorded units remain unknown and require refitting or an explicitly unit-tagged import.
 
@@ -65,4 +67,4 @@ Include the application version, reproduction steps, connection parameters, prot
 
 ## Feedback (development builds)
 
-Open Feedback from the main window status bar or About dialog. Enter the usage scenario and problem or feature description. Name and contact are optional and visible only to the maintainer. No account or login is needed. The window leaves acquisition controls available, saves a local draft, and preserves the submission ID for retries. The deployed service has been authorized, and automatic GitHub Issue creation has been verified; the maintainer decides whether to act on each submission. Published V0.5.0 packages do not yet include this feature.
+Open Feedback from the main window status bar or About dialog. Enter the usage scenario and problem or feature description. Name and contact are optional and visible only to the maintainer. No account or login is needed. The window leaves acquisition controls available, saves a local draft, and preserves the submission ID for retries. "Attach program logs from the last 3 days" is checked by default; "View log content" shows what will be sent. Logs have the Windows user name and computer name removed and are stored only on the feedback server for the maintainer, never published. The deployed service has been authorized, and automatic GitHub Issue creation has been verified; the maintainer decides whether to act on each submission. Published V0.5.0 packages do not yet include this feature.
