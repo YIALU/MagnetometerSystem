@@ -95,6 +95,21 @@ public sealed class DatabaseLocationTests : IDisposable
     }
 
     [Fact]
+    public async Task MarkerWriteFailure_AfterCopy_StillUsesMigratedTarget()
+    {
+        var sessionId = await CreateLegacyDatabaseWithSessionAsync();
+        // 标记文件的位置被同名目录占住：数据库已复制就位，只有标记写不进去
+        Directory.CreateDirectory(Path.Combine(Path.GetDirectoryName(TargetDb)!, DatabaseLocation.MigratedMarkerFileName));
+
+        var db = new DatabaseInitializer(TargetDb, LegacyDb);
+        await db.InitializeAsync();
+
+        Assert.Equal(TargetDb, db.DatabasePath);
+        Assert.DoesNotContain("失败", db.LocationNotice);
+        Assert.Equal(1, await CountSessionsAsync(db, sessionId));
+    }
+
+    [Fact]
     public async Task MigrationFailure_KeepsUsingLegacyDatabase_AndLeavesNoEmptyTarget()
     {
         var sessionId = await CreateLegacyDatabaseWithSessionAsync();

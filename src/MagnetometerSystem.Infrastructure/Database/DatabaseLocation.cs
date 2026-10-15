@@ -86,9 +86,18 @@ public static class DatabaseLocation
             throw;
         }
 
-        File.WriteAllText(marker,
-            $"数据库已于 {DateTime.Now:yyyy-MM-dd HH:mm:ss} 从 {legacyDbPath} 复制到本目录。{Environment.NewLine}" +
-            $"旧文件仍保留在原处，确认新位置数据完整后可自行删除。{Environment.NewLine}");
+        // 数据库已完整就位，迁移即告成功。标记只用于“删掉新库后不再重复复制”，写失败不能让本次
+        // 回退到旧库 —— 否则本次写进旧库的数据下次启动会被已存在的新库挡住而“消失”。
+        try
+        {
+            File.WriteAllText(marker,
+                $"数据库已于 {DateTime.Now:yyyy-MM-dd HH:mm:ss} 从 {legacyDbPath} 复制到本目录。{Environment.NewLine}" +
+                $"旧文件仍保留在原处，确认新位置数据完整后可自行删除。{Environment.NewLine}");
+        }
+        catch (Exception ex)
+        {
+            Trace.TraceWarning($"写入迁移标记失败（数据库已迁移，不影响使用）: {ex.Message}");
+        }
         TryWriteLegacyNote(legacyDbPath, targetDbPath);
         return true;
     }
