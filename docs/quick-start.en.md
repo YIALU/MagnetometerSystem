@@ -4,6 +4,8 @@
 
 A first capture takes four steps: **choose or configure a protocol → connect the device → use the plots → export data**. Commands, replay, noise analysis and correction are covered under [Advanced features](#advanced-features); everyday capture does not need them.
 
+The screenshots use the built-in protocol 磁梯度数采卡-pt (21 channels) with data from the serial simulator.
+
 The interface is in Chinese, so the original labels are shown in brackets. The left rail holds the pages: Acquire (采集), Connection (连接), Commands (命令), Data (数据), Analysis (分析), Correction (校正) and Settings (设置). The data-link strip at the top always shows receive → parse → save counters and the measured rate; the Connect and start saving (连接并开始保存) button is at the top right.
 
 ## Step 1: Choose or configure a protocol
@@ -44,15 +46,21 @@ Checksum settings, preset units and old protocol JSON are covered in [protocol c
 | Receive stays at 0 | Check port, baud rate or IP; some devices need a start command from the Commands page |
 | Save shows a failure | Reception stops and received readings stay in memory; fix the cause (such as disk space or folder permissions) and click Retry write (重试写入) |
 
-The Raw frames panel at the bottom has four tabs: Parse log (解析记录) with a verdict per frame, Data blocks (数据块) with raw bytes in arrival order, Traffic (收发) with commands and replies, and Events (事件) with connection, first frame, session start/end and save failures.
+The bottom panel has three tabs: Raw frames (原始报文), whose Parse log (解析记录) gives a verdict per frame and Data blocks (数据块) shows raw bytes in arrival order; Traffic (收发) with commands and replies; and Events (事件) with connection, first frame, session start/end and save failures.
 
 5. To finish, click **Stop and disconnect (停止并断开)**. All data is in the database once the button returns from "saving final batch" and Events shows that the session ended and the final batch was committed.
 
 ## Step 3: Use the plots
 
-The Acquire page shows the plot in the middle and a collapsible tool panel on the right.
+The Acquire page shows the plot in the middle, a collapsible tool panel on the right and the frames/events panel at the bottom.
 
-![Plot and side panel: channel list, statistics, interval and more](images/tutorial/04-chart.png)
+**Single plot:** the selected channels share one plot area, and different units get separate axes automatically (nT on the left, the depth channel's m axis on the right below).
+
+![Single plot: three gradient channels and depth in one plot, depth on its own right-hand axis](images/tutorial/04-chart-single.png)
+
+**Multi plot (2 columns):** one plot per channel in two columns; the Interval tab on the right shows statistics for the selected time span.
+
+![Multi plot in two columns: six magnetic channels, interval statistics on the right](images/tutorial/04-chart-multi.png)
 
 **Plot toolbar**
 
@@ -61,7 +69,8 @@ The Acquire page shows the plot in the middle and a collapsible tool panel on th
 - **Main Y axis (主 Y 轴):** Auto fits the data; Manual takes lower and upper limits.
 - **Pause / resume display (暂停显示 / 继续显示):** freezes the view; **capture and saving continue while paused**.
 - **Zero / undo zero (一键归零 / 取消归零):** shifts each curve by its window mean to around 0 for comparing fluctuations; display only, saving and statistics are unaffected.
-- **Mouse:** the wheel zooms the time axis, Ctrl + wheel zooms the Y axis (with a manual range); hovering shows each channel's raw value at the crosshair in the top-right box.
+- **Focus plot (专注曲线):** hides the side and bottom panels so the plot fills the window; Exit focus (退出专注) restores them.
+- **Mouse:** the wheel zooms the time axis, Ctrl + wheel zooms the Y axis (with a manual range); hovering shows each channel's raw value at the crosshair time.
 - More (更多) toggles auto-scroll to latest and the grid, sets the display point limit, and clears the plot (display only; saved data is unaffected).
 
 **Side panel**
