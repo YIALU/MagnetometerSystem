@@ -10,6 +10,16 @@
 
 The project centers on **customizable protocols, data recording, and live plotting**. Protocol configuration defines channel counts, names, and units, making it possible to work with different data formats and observe magnetic, temperature, and other auxiliary channels together. Correction and advanced analysis are optional tools.
 
+![Plot view: the data-link strip at the top, with X, Y and Z magnetic channels in separate plots](docs/images/01-replay.png)
+
+## Screenshots
+
+| Data: sessions, channels and CSV export | Analysis: noise and drift | Correction: orthogonality wizard |
+| --- | --- | --- |
+| ![Data page](docs/images/02-data.png) | ![Analysis page](docs/images/03-analysis.png) | ![Correction page](docs/images/04-calibration.png) |
+
+The screenshots show simulated three-axis data replayed from a saved session; live capture uses the same plot view. The interface is in Chinese.
+
 ## Features
 
 - **Connections and protocols:** serial or TCP. ASCII and binary protocols configure field mappings, frame structure, byte order, scaling, checksums, and channel units, with JSON import/export. Send parameterized commands from protocol-associated command groups, or free ASCII/HEX.
