@@ -262,6 +262,7 @@ git tag 版本 ($ver) 与 Directory.Build.props 的 <Version> ($propsVer) 不一
             '  运行日志：  本程序所在目录的 logs 文件夹',
             '  旧版本放在 %LOCALAPPDATA%\MagnetometerSystem 的数据库，首次启动会自动复制到 data，旧文件保留。',
             '  升级时把新版解压覆盖本目录即可，data 不会被覆盖；换到新文件夹时请把 data 一起拷过去。',
+            '  迁移后请不要再运行旧版本，旧版本写入的数据不会出现在新版本中。',
             '',
             '【升级】',
             '  程序会自动检查更新（可在"设置"里关闭）。',
