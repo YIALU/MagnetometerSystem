@@ -99,7 +99,8 @@ try {
     # 5. 远程备份、安装、本机健康检查（失败自动指回上一版本）。
     Write-Host '[4/6] 备份数据库并安装'
     & ssh @sshOptions -p $Port "$User@$Server" "sed -i 's/\r$//' $remoteDir/*.sh $remoteDir/*.service && bash $remoteDir/remote-deploy.sh"
-    if ($LASTEXITCODE) { throw "远程安装失败；上传目录保留在 $remoteDir 供排查" }
+    if ($LASTEXITCODE -eq 4) { throw "远程安装失败，已指回上一版本但服务未恢复，请立即登录服务器处理；上传目录保留在 $remoteDir" }
+    if ($LASTEXITCODE) { throw "远程安装失败（退出码 $LASTEXITCODE，1 表示已指回上一版本）；上传目录保留在 $remoteDir 供排查" }
 
     # 6. 公网验证：证书校验保持开启。任一项失败都在服务器上指回上一版本；
     #    回滚所需状态在 $remoteDir 中，验证通过后才删除。
@@ -116,7 +117,7 @@ try {
         Write-Host "[回滚] $($_.Exception.Message)"
         & ssh @sshOptions -p $Port "$User@$Server" "bash $remoteDir/remote-deploy.sh rollback"
         if ($LASTEXITCODE -eq 1) {
-            throw "公网验证失败，已指回上一版本：$($_.Exception.Message)；上传目录保留在 $remoteDir 供排查"
+            throw "公网验证失败，已指回上一版本并通过本机健康检查：$($_.Exception.Message)；上传目录保留在 $remoteDir 供排查"
         }
         throw "公网验证失败，且回滚未确认完成（退出码 $LASTEXITCODE），请登录服务器检查：$($_.Exception.Message)；上传目录保留在 $remoteDir"
     }

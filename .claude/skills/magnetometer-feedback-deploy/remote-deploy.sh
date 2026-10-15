@@ -9,6 +9,19 @@ ts=$(date -u +%Y%m%dT%H%M%SZ)
 db=/var/lib/magnetometer-feedback/feedback.db
 units="magnetometer-feedback.service magnetometer-feedback-proxy.service"
 
+# 最多等 20 秒：两个服务都 active 且本机 /health 正常才算就绪。
+wait_healthy() {
+    for _ in $(seq 1 20); do
+        # systemctl is-active 列多个单元时只要有一个 active 就返回成功，所以逐个检查。
+        if systemctl is-active --quiet magnetometer-feedback \
+            && systemctl is-active --quiet magnetometer-feedback-proxy \
+            && curl -fs -m 3 http://127.0.0.1:5188/health >/dev/null 2>&1; then return 0; fi
+        sleep 1
+    done
+    return 1
+}
+
+# 退出码：1 已指回上一版本且通过本机健康检查；3 无上一版本可指回；4 已指回但服务未恢复，需要人工处理。
 rollback() {
     echo "[deploy] $1" >&2
     journalctl -u magnetometer-feedback -u magnetometer-feedback-proxy -n 30 --no-pager >&2 || true
@@ -19,10 +32,14 @@ rollback() {
         systemctl daemon-reload || true
         ln -sfn "$previous" /opt/magnetometer-feedback/current
         systemctl restart magnetometer-feedback.service magnetometer-feedback-proxy.service || true
-        echo "[deploy] 已指回上一版本: $previous" >&2
-        exit 1
+        if wait_healthy; then
+            echo "[deploy] 已指回上一版本并通过本机健康检查: $previous" >&2
+            exit 1
+        fi
+        echo "[deploy] 已指回上一版本 $previous，但服务未恢复，需要人工处理" >&2
+        journalctl -u magnetometer-feedback -u magnetometer-feedback-proxy -n 30 --no-pager >&2 || true
+        exit 4
     fi
-    # 退出码 3：无上一版本可指回（调用方据此区分“已回滚”）。
     echo "[deploy] 没有可指回的上一版本" >&2
     exit 3
 }
@@ -65,16 +82,7 @@ sha256sum -c bundle.sha256
 # install.sh 失败时（例如切换 current 后重启服务失败）也要回滚，不能被 set -e 直接退出。
 bash "$dir/install.sh" "$dir/server-bundle.tar.gz" || rollback "install.sh 执行失败"
 
-ok=0
-for _ in $(seq 1 20); do
-    # systemctl is-active 列多个单元时只要有一个 active 就返回成功，所以逐个检查。
-    if systemctl is-active --quiet magnetometer-feedback \
-        && systemctl is-active --quiet magnetometer-feedback-proxy \
-        && curl -fs -m 3 http://127.0.0.1:5188/health >/dev/null 2>&1; then ok=1; break; fi
-    sleep 1
-done
-
-[ "$ok" = 1 ] || rollback "新版本未通过本机健康检查"
+wait_healthy || rollback "新版本未通过本机健康检查"
 
 systemctl is-active magnetometer-feedback magnetometer-feedback-proxy
 echo "[deploy] 新版本目录: $(readlink -f /opt/magnetometer-feedback/current)"

@@ -32,7 +32,7 @@ powershell -ExecutionPolicy Bypass -File .claude\skills\magnetometer-feedback-de
 4. 部署前先发一个约 600 KB、反馈编号为全零 GUID 的请求作基线（旧版 200 KB 上限返回 413）。
 5. 上传包、`install.sh`、两个 unit、`remote-deploy.sh` 到服务器 `/tmp` 下的 0700 临时目录。
 6. 服务器上：记录当前版本目录 → 用 SQLite backup API 备份为 `/var/lib/magnetometer-feedback/feedback-backup-<UTC时间>.db` → 校验包哈希 → 运行 `install.sh` → 等待两个服务 active 且 `127.0.0.1:5188/health` 正常；失败时恢复旧 unit、把 `/opt/magnetometer-feedback/current` 指回上一版本并重启。
-7. 本机经 HTTPS 检查 `https://<Server>/health`（不关闭证书校验），再发同样的大请求，预期 **400**（参数校验拒绝，不写库、不建 Issue）。任一项失败时运行 `remote-deploy.sh rollback` 按同样方式指回上一版本；两项都通过后才删除服务器临时目录。
+7. 本机经 HTTPS 检查 `https://<Server>/health`（不关闭证书校验），再发同样的大请求，预期 **400**（参数校验拒绝，不写库、不建 Issue）。任一项失败时运行 `remote-deploy.sh rollback` 按同样方式指回上一版本；两项都通过后才删除服务器临时目录。回滚后同样等待两个服务 active 且本机 `/health` 正常；仍未恢复时脚本明确提示需要立即登录服务器人工处理。
 
 ## 边界
 
