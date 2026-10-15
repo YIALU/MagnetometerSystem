@@ -30,6 +30,26 @@ function Test-OversizeRequest([string]$Label) {
     return $code
 }
 
+function Test-PublicHealth {
+    # 经公网 HTTPS（证书校验开启）访问 /health；成功返回响应内容，失败返回 $null。
+    $body = Invoke-Native { curl.exe -sS --fail -m 30 "https://$Server/health" }
+    if ($LASTEXITCODE) { return $null }
+    return ($body | Out-String).Trim()
+}
+
+function Get-RollbackSummary([int]$Code) {
+    # remote-deploy.sh 回滚退出码：10 已指回并通过本机检查；11 无上一版本；12 已指回但服务未恢复。
+    # 其他非零值（例如备份或校验失败）表示没有走回滚，current 未被改动或状态未知。
+    # 本机检查只覆盖后端和代理进程，所以 10 还要经公网 HTTPS 再确认一次。
+    if ($Code -eq 10) {
+        if (Test-PublicHealth) { return '已指回上一版本，并经公网 HTTPS /health 确认可用' }
+        return '已指回上一版本，但公网 HTTPS /health 仍失败，请立即登录服务器处理'
+    }
+    if ($Code -eq 11) { return '服务器上没有可指回的上一版本，请立即登录服务器处理' }
+    if ($Code -eq 12) { return '已指回上一版本但服务未恢复，请立即登录服务器处理' }
+    return "未确认是否已回滚（退出码 $Code），请登录服务器检查 /opt/magnetometer-feedback/current 和两个服务"
+}
+
 $repo = (git rev-parse --show-toplevel).Trim()
 $work = Join-Path $repo ('.codex_tmp/feedback-deploy/' + (Get-Date -Format 'yyyyMMddHHmmss'))
 $keyDir = Join-Path $work 'key'
@@ -99,27 +119,28 @@ try {
     # 5. 远程备份、安装、本机健康检查（失败自动指回上一版本）。
     Write-Host '[4/6] 备份数据库并安装'
     & ssh @sshOptions -p $Port "$User@$Server" "sed -i 's/\r$//' $remoteDir/*.sh $remoteDir/*.service && bash $remoteDir/remote-deploy.sh"
-    if ($LASTEXITCODE -eq 4) { throw "远程安装失败，已指回上一版本但服务未恢复，请立即登录服务器处理；上传目录保留在 $remoteDir" }
-    if ($LASTEXITCODE) { throw "远程安装失败（退出码 $LASTEXITCODE，1 表示已指回上一版本）；上传目录保留在 $remoteDir 供排查" }
+    if ($LASTEXITCODE) {
+        $summary = Get-RollbackSummary $LASTEXITCODE
+        throw "远程安装失败：$summary；上传目录保留在 $remoteDir 供排查"
+    }
 
     # 6. 公网验证：证书校验保持开启。任一项失败都在服务器上指回上一版本；
     #    回滚所需状态在 $remoteDir 中，验证通过后才删除。
     try {
         Write-Host '[5/6] 公网 HTTPS 健康检查'
-        $health = & curl.exe -sS --fail -m 30 "https://$Server/health"
-        if ($LASTEXITCODE) { throw '公网 /health 失败' }
+        $health = Test-PublicHealth
+        if (-not $health) { throw '公网 /health 失败' }
         Write-Host "      $health"
         Write-Host '[6/6] 大请求体验证'
         $after = Test-OversizeRequest '部署后'
         if ($after -ne '400') { throw "预期 400（参数校验拒绝），实际 $after；部署前为 $before" }
     }
     catch {
-        Write-Host "[回滚] $($_.Exception.Message)"
+        $reason = $_.Exception.Message
+        Write-Host "[回滚] $reason"
         & ssh @sshOptions -p $Port "$User@$Server" "bash $remoteDir/remote-deploy.sh rollback"
-        if ($LASTEXITCODE -eq 1) {
-            throw "公网验证失败，已指回上一版本并通过本机健康检查：$($_.Exception.Message)；上传目录保留在 $remoteDir 供排查"
-        }
-        throw "公网验证失败，且回滚未确认完成（退出码 $LASTEXITCODE），请登录服务器检查：$($_.Exception.Message)；上传目录保留在 $remoteDir"
+        $summary = Get-RollbackSummary $LASTEXITCODE
+        throw "公网验证失败（$reason）：$summary；上传目录保留在 $remoteDir"
     }
     & ssh @sshOptions -p $Port "$User@$Server" "rm -rf $remoteDir"
     if ($LASTEXITCODE) { Write-Warning "部署已通过验证，但删除远程临时目录 $remoteDir 失败，可稍后手动删除" }

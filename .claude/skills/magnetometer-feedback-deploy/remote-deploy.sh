@@ -21,7 +21,8 @@ wait_healthy() {
     return 1
 }
 
-# 退出码：1 已指回上一版本且通过本机健康检查；3 无上一版本可指回；4 已指回但服务未恢复，需要人工处理。
+# 回滚退出码（与 set -e 失败时的 1 区分开）：10 已指回上一版本且通过本机健康检查；
+# 11 无上一版本可指回；12 已指回但服务未恢复，需要人工处理。
 rollback() {
     echo "[deploy] $1" >&2
     journalctl -u magnetometer-feedback -u magnetometer-feedback-proxy -n 30 --no-pager >&2 || true
@@ -34,14 +35,14 @@ rollback() {
         systemctl restart magnetometer-feedback.service magnetometer-feedback-proxy.service || true
         if wait_healthy; then
             echo "[deploy] 已指回上一版本并通过本机健康检查: $previous" >&2
-            exit 1
+            exit 10
         fi
         echo "[deploy] 已指回上一版本 $previous，但服务未恢复，需要人工处理" >&2
         journalctl -u magnetometer-feedback -u magnetometer-feedback-proxy -n 30 --no-pager >&2 || true
-        exit 4
+        exit 12
     fi
     echo "[deploy] 没有可指回的上一版本" >&2
-    exit 3
+    exit 11
 }
 
 if [ "${1:-}" = rollback ]; then
