@@ -98,17 +98,30 @@ try {
 
     # 5. 远程备份、安装、本机健康检查（失败自动指回上一版本）。
     Write-Host '[4/6] 备份数据库并安装'
-    & ssh @sshOptions -p $Port "$User@$Server" "sed -i 's/\r$//' $remoteDir/*.sh $remoteDir/*.service && bash $remoteDir/remote-deploy.sh && rm -rf $remoteDir"
+    & ssh @sshOptions -p $Port "$User@$Server" "sed -i 's/\r$//' $remoteDir/*.sh $remoteDir/*.service && bash $remoteDir/remote-deploy.sh"
     if ($LASTEXITCODE) { throw "远程安装失败；上传目录保留在 $remoteDir 供排查" }
 
-    # 6. 公网验证：证书校验保持开启。
-    Write-Host '[5/6] 公网 HTTPS 健康检查'
-    $health = & curl.exe -sS --fail -m 30 "https://$Server/health"
-    if ($LASTEXITCODE) { throw '公网 /health 失败' }
-    Write-Host "      $health"
-    Write-Host '[6/6] 大请求体验证'
-    $after = Test-OversizeRequest '部署后'
-    if ($after -ne '400') { throw "预期 400（参数校验拒绝），实际 $after；部署前为 $before" }
+    # 6. 公网验证：证书校验保持开启。任一项失败都在服务器上指回上一版本；
+    #    回滚所需状态在 $remoteDir 中，验证通过后才删除。
+    try {
+        Write-Host '[5/6] 公网 HTTPS 健康检查'
+        $health = & curl.exe -sS --fail -m 30 "https://$Server/health"
+        if ($LASTEXITCODE) { throw '公网 /health 失败' }
+        Write-Host "      $health"
+        Write-Host '[6/6] 大请求体验证'
+        $after = Test-OversizeRequest '部署后'
+        if ($after -ne '400') { throw "预期 400（参数校验拒绝），实际 $after；部署前为 $before" }
+    }
+    catch {
+        Write-Host "[回滚] $($_.Exception.Message)"
+        & ssh @sshOptions -p $Port "$User@$Server" "bash $remoteDir/remote-deploy.sh rollback"
+        if ($LASTEXITCODE -eq 1) {
+            throw "公网验证失败，已指回上一版本：$($_.Exception.Message)；上传目录保留在 $remoteDir 供排查"
+        }
+        throw "公网验证失败，且回滚未确认完成（退出码 $LASTEXITCODE），请登录服务器检查：$($_.Exception.Message)；上传目录保留在 $remoteDir"
+    }
+    & ssh @sshOptions -p $Port "$User@$Server" "rm -rf $remoteDir"
+    if ($LASTEXITCODE) { Write-Warning "部署已通过验证，但删除远程临时目录 $remoteDir 失败，可稍后手动删除" }
     Write-Host "完成：提交 $commit，部署前 $before → 部署后 $after。"
 }
 finally {

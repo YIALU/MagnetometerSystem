@@ -1,16 +1,44 @@
 #!/usr/bin/env bash
 # 在反馈服务器上以 root 运行：备份数据库 → 校验包 → install.sh → 验证，失败则指回上一版本。
 # 由 Deploy-FeedbackServer.ps1 上传到临时目录后调用，不单独提交到服务器其他位置。
+# 用法：remote-deploy.sh            部署
+#       remote-deploy.sh rollback   公网验证失败时，按本目录保存的状态指回上一版本
 set -euo pipefail
 dir=$(cd -- "$(dirname -- "$0")" && pwd)
 ts=$(date -u +%Y%m%dT%H%M%SZ)
 db=/var/lib/magnetometer-feedback/feedback.db
+units="magnetometer-feedback.service magnetometer-feedback-proxy.service"
+
+rollback() {
+    echo "[deploy] $1" >&2
+    journalctl -u magnetometer-feedback -u magnetometer-feedback-proxy -n 30 --no-pager >&2 || true
+    if [ -n "$previous" ] && [ -d "$previous" ]; then
+        for u in $units; do
+            if [ -f "$dir/units-previous/$u" ]; then install -m 0644 "$dir/units-previous/$u" /etc/systemd/system/ || true; fi
+        done
+        systemctl daemon-reload || true
+        ln -sfn "$previous" /opt/magnetometer-feedback/current
+        systemctl restart magnetometer-feedback.service magnetometer-feedback-proxy.service || true
+        echo "[deploy] 已指回上一版本: $previous" >&2
+        exit 1
+    fi
+    # 退出码 3：无上一版本可指回（调用方据此区分“已回滚”）。
+    echo "[deploy] 没有可指回的上一版本" >&2
+    exit 3
+}
+
+if [ "${1:-}" = rollback ]; then
+    [ -f "$dir/previous-dir" ] || { echo "[deploy] 缺少 $dir/previous-dir，无法回滚" >&2; exit 2; }
+    previous=$(cat "$dir/previous-dir")
+    rollback "公网验证失败，回滚"
+fi
 
 previous=$(readlink -f /opt/magnetometer-feedback/current 2>/dev/null || true)
 echo "[deploy] 当前版本目录: ${previous:-（无）}"
+# 公网验证在本机完成后才删除本目录；验证失败时 rollback 模式从这里读取上一版本。
+printf '%s' "$previous" > "$dir/previous-dir"
 
 # install.sh 会覆盖 systemd unit；先保存旧 unit，回滚时一并恢复。
-units="magnetometer-feedback.service magnetometer-feedback-proxy.service"
 mkdir -p "$dir/units-previous"
 for u in $units; do
     if [ -f "/etc/systemd/system/$u" ]; then cp -p "/etc/systemd/system/$u" "$dir/units-previous/"; fi
@@ -31,21 +59,6 @@ PY
 else
     echo "[deploy] 未找到 $db，跳过备份（首次部署）"
 fi
-
-rollback() {
-    echo "[deploy] $1" >&2
-    journalctl -u magnetometer-feedback -u magnetometer-feedback-proxy -n 30 --no-pager >&2 || true
-    if [ -n "$previous" ] && [ -d "$previous" ]; then
-        for u in $units; do
-            if [ -f "$dir/units-previous/$u" ]; then install -m 0644 "$dir/units-previous/$u" /etc/systemd/system/ || true; fi
-        done
-        systemctl daemon-reload || true
-        ln -sfn "$previous" /opt/magnetometer-feedback/current
-        systemctl restart magnetometer-feedback.service magnetometer-feedback-proxy.service || true
-        echo "[deploy] 已指回上一版本: $previous" >&2
-    fi
-    exit 1
-}
 
 cd "$dir"
 sha256sum -c bundle.sha256
