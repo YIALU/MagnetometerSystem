@@ -9,7 +9,7 @@ namespace MagnetometerSystem.Infrastructure.Database;
 /// </summary>
 public class DatabaseInitializer
 {
-    private readonly string _dbPath;
+    private string _dbPath;
 
     /// <summary>数据库文件的完整路径（设置页只读显示）。</summary>
     public string DatabasePath => _dbPath;
@@ -23,12 +23,22 @@ public class DatabaseInitializer
 
     public string? LegacyDataWarning { get; private set; }
 
+    /// <summary>
+    /// 本次启动从旧位置迁移数据库或回退到旧位置的说明；无事发生时为 null。由启动流程写日志。
+    /// </summary>
+    public string? LocationNotice { get; private set; }
+
+    /// <summary>
+    /// 正式程序使用：数据库放在程序目录 data\，不可写时回退到 %LOCALAPPDATA%\MagnetometerSystem；
+    /// 首次启动把旧位置的数据库迁移过来。
+    /// </summary>
     public DatabaseInitializer()
+        : this(
+            Path.Combine(
+                DatabaseLocation.ResolveDirectory(DatabaseLocation.ProgramDataDirectory, DatabaseLocation.LegacyDirectory),
+                DatabaseLocation.FileName),
+            Path.Combine(DatabaseLocation.LegacyDirectory, DatabaseLocation.FileName))
     {
-        _dbPath = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "MagnetometerSystem",
-            "magnetometer.db");
     }
 
     public DatabaseInitializer(string dbPath)
@@ -36,8 +46,20 @@ public class DatabaseInitializer
         _dbPath = dbPath;
     }
 
+    /// <param name="dbPath">要使用的数据库。</param>
+    /// <param name="legacyDbPath">旧版本的数据库位置；新位置没有数据库时从这里迁移。</param>
+    public DatabaseInitializer(string dbPath, string? legacyDbPath)
+    {
+        _dbPath = dbPath;
+        _legacyDbPath = legacyDbPath;
+    }
+
+    private readonly string? _legacyDbPath;
+
     public async Task InitializeAsync()
     {
+        await MigrateFromLegacyLocationAsync();
+
         var directory = Path.GetDirectoryName(_dbPath);
         if (!string.IsNullOrEmpty(directory))
         {
@@ -58,6 +80,27 @@ public class DatabaseInitializer
             "SELECT COUNT(*) FROM pragma_table_info('orthogonality_profiles') WHERE name = 'unit'");
         if (hasProfileUnit == 0)
             await connection.ExecuteAsync("ALTER TABLE orthogonality_profiles ADD COLUMN unit TEXT NOT NULL DEFAULT '';");
+    }
+
+    /// <summary>
+    /// 旧数据库迁移到新位置。复制失败时本次继续用旧数据库（数据可用，下次启动再试），
+    /// 不在新位置建空库 —— 否则下次启动会认为已有数据库而不再迁移。
+    /// </summary>
+    private async Task MigrateFromLegacyLocationAsync()
+    {
+        if (_legacyDbPath is null) return;
+        var legacy = _legacyDbPath;
+        var target = _dbPath;
+        try
+        {
+            if (await Task.Run(() => DatabaseLocation.MigrateIfNeeded(legacy, target)))
+                LocationNotice = $"已把旧数据库 {legacy} 复制到 {target}，旧文件保留未删除";
+        }
+        catch (Exception ex)
+        {
+            _dbPath = legacy;
+            LocationNotice = $"迁移旧数据库到 {target} 失败，本次继续使用 {legacy}: {ex.Message}";
+        }
     }
 
     private static async Task EnsureSessionColumnAsync(SqliteConnection conn, string name, string type)

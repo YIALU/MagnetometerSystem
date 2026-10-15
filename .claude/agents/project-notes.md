@@ -91,7 +91,7 @@ publish.zip 曾被误提交过，**commit 前一定看 `git status`**。
 
 ## 运行时数据目录
 
-- 数据库：`%LocalAppData%\MagnetometerSystem\magnetometer.db`
+- 数据库：程序目录 `data\magnetometer.db`（不可写时回退 `%LocalAppData%\MagnetometerSystem\magnetometer.db`；旧位置首次启动自动复制过来，见 `Infrastructure/Database/DatabaseLocation.cs`）
 - 校准原始 CSV：`%LocalAppData%\MagnetometerSystem\statistics\calibration_raw\`
 - 日志：尚未建立统一位置（待补）
 

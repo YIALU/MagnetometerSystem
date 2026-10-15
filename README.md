@@ -50,10 +50,10 @@
 
 | 内容 | 位置 |
 | --- | --- |
-| 采集数据库 | `%LOCALAPPDATA%\MagnetometerSystem\magnetometer.db` |
+| 采集数据库 | 程序目录下的 `data\magnetometer.db`；目录不可写时为 `%LOCALAPPDATA%\MagnetometerSystem\magnetometer.db` |
 | 程序日志 | 程序目录下的 `logs`；目录不可写时为 `%LOCALAPPDATA%\MagnetometerSystem\logs` |
 
-升级、迁移或重装前先关闭程序并备份数据库文件。数据库与程序目录分开存放，覆盖升级不会影响它；卸载安装版时会询问是否一并删除数据和配置，默认保留。
+实际使用的路径可在「系统设置」中查看并打开所在文件夹。升级、迁移或重装前先关闭程序并备份数据库文件。覆盖升级（安装版自动更新，或便携版解压覆盖原目录）不会动 `data` 文件夹；便携版若解压到新文件夹，需把旧目录的 `data` 一起拷过去。v0.6.16 之前的版本把数据库放在 `%LOCALAPPDATA%\MagnetometerSystem`，新版首次启动会自动复制到 `data`，旧文件保留不删。卸载安装版时会询问是否一并删除数据和配置，默认保留。
 
 ## 快速使用
 
