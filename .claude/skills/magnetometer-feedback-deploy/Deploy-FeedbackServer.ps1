@@ -56,6 +56,7 @@ $keyDir = Join-Path $work 'key'
 $upload = Join-Path $work 'upload'
 $tree = Join-Path $work 'tree'
 [IO.Directory]::CreateDirectory($upload) | Out-Null
+$succeeded = $false
 
 # 1. 连通性：TCP 建立但没有 SSH banner，通常是本机代理 TUN（例如 FlClash 全局模式）接管了 22 端口。
 Write-Host '[1/6] 检查 SSH 连通性'
@@ -145,9 +146,13 @@ try {
     & ssh @sshOptions -p $Port "$User@$Server" "rm -rf $remoteDir"
     if ($LASTEXITCODE) { Write-Warning "部署已通过验证，但删除远程临时目录 $remoteDir 失败，可稍后手动删除" }
     Write-Host "完成：提交 $commit，部署前 $before → 部署后 $after。"
+    $succeeded = $true
 }
 finally {
     if (Test-Path -LiteralPath $key) { Remove-Item -LiteralPath $key -Force }
     if (Test-Path -LiteralPath $keyDir) { Remove-Item -LiteralPath $keyDir -Force }
     if (Test-Path -LiteralPath $tree) { git worktree remove --force $tree | Out-Null }
+    # 成功时删除本次的构建输出和上传包；失败时保留供排查。
+    if ($succeeded) { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue }
+    elseif (Test-Path -LiteralPath $work) { Write-Host "本地构建目录保留在 $work 供排查，确认后可删除。" }
 }

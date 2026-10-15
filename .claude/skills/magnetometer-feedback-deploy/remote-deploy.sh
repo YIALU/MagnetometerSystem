@@ -62,11 +62,13 @@ for u in $units; do
     if [ -f "/etc/systemd/system/$u" ]; then cp -p "/etc/systemd/system/$u" "$dir/units-previous/"; fi
 done
 # 每个版本目录下的 systemd/ 保存该版本配套的 unit，供日后手动回滚时一并恢复。
-# 上一版本目录若是在本脚本之前部署的，用当前（即上一版本）的 unit 补上。
-if [ -n "$previous" ] && [ -d "$previous" ] && [ ! -d "$previous/systemd" ]; then
+# 上一版本目录若是在本脚本之前部署的（或上次补写中断），用当前（即上一版本）的 unit 逐个补齐。
+if [ -n "$previous" ] && [ -d "$previous" ]; then
     install -d -m 0755 "$previous/systemd"
     for u in $units; do
-        if [ -f "$dir/units-previous/$u" ]; then install -m 0644 "$dir/units-previous/$u" "$previous/systemd/"; fi
+        if [ ! -f "$previous/systemd/$u" ] && [ -f "$dir/units-previous/$u" ]; then
+            install -m 0644 "$dir/units-previous/$u" "$previous/systemd/"
+        fi
     done
 fi
 

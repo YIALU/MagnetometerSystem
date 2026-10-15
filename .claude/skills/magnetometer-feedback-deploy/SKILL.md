@@ -16,7 +16,7 @@ description: "仅用于 YIALU/MagnetometerSystem 的匿名反馈服务重新部�
 
 ## 运行
 
-在仓库根（用户工作区未提交改动不受影响，构建在 `.codex_tmp/feedback-deploy/` 下的独立 worktree 中进行）：
+在仓库根（用户工作区未提交改动不受影响，构建在 `.codex_tmp/feedback-deploy/` 下的独立 worktree 中进行，成功后删除，失败时保留供排查）：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .claude\skills\magnetometer-feedback-deploy\Deploy-FeedbackServer.ps1 -KeyPath '<pem 绝对路径>'
