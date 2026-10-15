@@ -299,6 +299,22 @@ public sealed class DatabaseLocationTests : IDisposable
     }
 
     [Fact]
+    public async Task UninspectableLegacy_DoesNotCreateEmptyTarget()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        // 旧库存在但无法检查（自指符号链接制造非“不存在”的 I/O 错误）：不能当全新安装在新位置建空库
+        File.CreateSymbolicLink(LegacyDb, LegacyDb);
+
+        var db = new DatabaseInitializer(TargetDb, LegacyDb);
+        await Assert.ThrowsAnyAsync<Exception>(db.InitializeAsync);
+
+        Assert.False(db.IsInitialized);
+        Assert.Contains("失败", db.LocationNotice);
+        Assert.False(File.Exists(TargetDb));
+        Assert.False(File.Exists(Path.Combine(Path.GetDirectoryName(TargetDb)!, DatabaseLocation.MigratedMarkerFileName)));
+    }
+
+    [Fact]
     public void ResolveDirectory_FallsBackWhenPreferredIsNotWritable()
     {
         var blocked = Path.Combine(_root, "not-a-dir");

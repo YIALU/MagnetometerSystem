@@ -22,6 +22,9 @@ public class DatabaseInitializer
 
     private volatile bool _initialized;
 
+    /// <summary>初始化（含迁移）是否已成功完成。未完成时退出流程不保存设置。</summary>
+    public bool IsInitialized => _initialized;
+
     private string BuildConnectionString(SqliteOpenMode mode) => new SqliteConnectionStringBuilder
     {
         DataSource = _dbPath,

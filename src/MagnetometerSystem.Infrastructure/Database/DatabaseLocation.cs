@@ -94,8 +94,17 @@ public static class DatabaseLocation
                 TryWriteMarker(marker, $"本目录已有数据库，不再从 {legacyDbPath} 复制旧副本。");
             return new(MigrationOutcome.NotNeeded, targetDbPath);
         }
-        if (ProbeFile(marker) != FileState.Absent || !File.Exists(legacyDbPath))
+        if (ProbeFile(marker) != FileState.Absent)
             return new(MigrationOutcome.NotNeeded, targetDbPath);
+        switch (ProbeFile(legacyDbPath))
+        {
+            case FileState.Absent:
+                return new(MigrationOutcome.NotNeeded, targetDbPath);
+            case FileState.Unknown:
+                // 旧库可能存在但暂时无法检查：不能当作全新安装在新位置建空库（之后就再也不会迁移）
+                HoldLegacyInUse(legacyDbPath);
+                throw new IOException($"无法检查旧数据库 {legacyDbPath}，本次不迁移");
+        }
 
         // 拿不到迁移锁就不能保证没有别的实例正在迁移：本次不迁移，沿用旧库
         if (gate is null || anotherInstanceRunning || IsLegacyInUse(legacyDbPath))

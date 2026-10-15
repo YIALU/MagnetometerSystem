@@ -223,6 +223,13 @@ public partial class App : Application
         // Stop 已等待真实存储任务；异步刷新的错误文字/计数不能作为提交凭据。
         if (mainVm.SessionListVM.ActiveSessionId != null)
             throw new InvalidOperationException("当前会话尚未完成保存，请重试写入后再退出。");
+        // 数据库还没完成初始化（迁移中，或新位置无法访问而初始化失败）时没有地方保存设置；
+        // 硬要保存只会失败，让窗口永远关不掉。此时也从未开始采集，跳过不丢数据。
+        if (configService is null && Services.GetService<DatabaseInitializer>() is { IsInitialized: false })
+        {
+            Serilog.Log.Warning("数据库未完成初始化，退出时不保存界面设置");
+            return;
+        }
         await SaveCurrentSettingsAsync(mainVm, configService);
     }
 
