@@ -1,10 +1,24 @@
 # MagnetometerSystem
 
+[![最新版本](https://img.shields.io/github/v/release/YIALU/MagnetometerSystem?label=%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC)](https://github.com/YIALU/MagnetometerSystem/releases/latest)
+[![Windows CI](https://github.com/YIALU/MagnetometerSystem/actions/workflows/windows-ci.yml/badge.svg?branch=master)](https://github.com/YIALU/MagnetometerSystem/actions/workflows/windows-ci.yml)
+[![许可证](https://img.shields.io/github/license/YIALU/MagnetometerSystem?label=%E8%AE%B8%E5%8F%AF%E8%AF%81)](LICENSE)
+
 [English](README.en.md) · [下载最新版本](https://github.com/YIALU/MagnetometerSystem/releases/latest) · [使用说明](docs/使用说明.md) · [更新记录](docs/变更日志.md)
 
 **MagnetometerSystem 是面向日常调试与实验记录的通用磁力仪上位机。** 通过串口或 TCP 连接设备，按用户定义的通信协议接收数据，自动保存原始读数，并实时绘制曲线。
 
 项目以**协议可定制、数据可保存、曲线可观察**为核心。通道数量、名称和单位由协议配置，便于接入不同的数据格式，也可以同时观察磁场、温度及其他辅助通道。数据改正和高级分析作为可选工具，按需要使用。
+
+![曲线界面：顶部是数据链路条，按通道分图显示 X、Y、Z 三轴磁场](docs/images/01-replay.png)
+
+## 界面预览
+
+| 数据：会话列表、通道与导出 CSV | 分析：噪声与漂移 | 校正：正交度校正向导 |
+| --- | --- | --- |
+| ![数据页](docs/images/02-data.png) | ![分析页](docs/images/03-analysis.png) | ![校正页](docs/images/04-calibration.png) |
+
+截图使用模拟器生成的三轴数据（回放已保存会话），采集时的曲线界面与此相同。
 
 ## 主要功能
 
@@ -32,6 +46,15 @@
 
 程序支持 GitHub / Gitee 双平台更新，在「系统设置 → 软件更新」中选择自动或指定平台；发现新版本只会提示，点击“下载更新”后才开始下载和安装。正在使用的版本可在「关于」窗口查看，各版本变化见[更新记录](docs/变更日志.md)。
 
+### 数据存放位置
+
+| 内容 | 位置 |
+| --- | --- |
+| 采集数据库 | `%LOCALAPPDATA%\MagnetometerSystem\magnetometer.db` |
+| 程序日志 | 程序目录下的 `logs`；目录不可写时为 `%LOCALAPPDATA%\MagnetometerSystem\logs` |
+
+升级、迁移或重装前先关闭程序并备份数据库文件。数据库与程序目录分开存放，覆盖升级不会影响它；卸载安装版时会询问是否一并删除数据和配置，默认保留。
+
 ## 快速使用
 
 1. **配置连接**：选择串口或 TCP，填写连接参数。
@@ -41,6 +64,11 @@
 5. **回放与导出**：停止后等待尾批保存完成（「事件」中出现“会话已结束，尾批已提交”），在「数据」页选择会话，回放曲线或导出 CSV；长时段的噪声与漂移在「分析」页查看。
 
 协议配置、命令响应、校正使用与常见问题见[使用说明](docs/使用说明.md)。
+
+### 没有设备时试用
+
+- **解析测试**：不连接设备，在「连接」页的“解析测试”中粘贴一段数据，用当前协议试解析，查看每帧的解析结论和拒收原因，适合核对协议配置。
+- **模拟数据**：用 [`tools/serial_simulator`](tools/serial_simulator/README.md)（需要 Python 和一对虚拟串口）按协议配置持续发送数据帧，体验接收、保存、绘图和回放的完整流程。模拟数据只用于熟悉软件和联调，不能代替真实设备验收。
 
 ## 源码开发
 
@@ -55,7 +83,7 @@ dotnet run --project src/MagnetometerSystem.App/MagnetometerSystem.App.csproj
 dotnet test MagnetometerSystem.sln -c Debug --no-build -m:1
 ```
 
-`src/MagnetometerSystem.App` 为桌面界面，`Core` 为协议、通信与计算，`Infrastructure` 为数据库、配置与导出；测试位于 `tests`。没有设备时，可用 [`tools/serial_simulator`](tools/serial_simulator/README.md) 按协议配置生成数据帧，经虚拟串口手动联调；它不能代替真实设备验收。
+`src/MagnetometerSystem.App` 为桌面界面，`Core` 为协议、通信与计算，`Infrastructure` 为数据库、配置与导出；测试位于 `tests`。手动联调可用上面的串口模拟器；根目录的 `magnetometer_test.py` 是早期的命令行发送脚本，用法见[测试与验收](docs/testing-and-acceptance.md)。
 
 ## 项目文档
 
@@ -66,3 +94,15 @@ dotnet test MagnetometerSystem.sln -c Debug --no-build -m:1
 - [反馈服务说明](docs/feedback-deployment.md)：匿名反馈服务的部署与维护。
 - [贡献指南](CONTRIBUTING.md)：提交、PR 与审查流程。
 - [AGENTS.md](AGENTS.md)：Agent 工程入口与开发约束。
+- [早期计划与任务书](docs/archive/README.md)：00～18 号旧计划和 TASK 文档，仅作历史参考，不代表当前功能或验证状态。
+
+## 问题反馈
+
+- **程序内反馈**：在主窗口状态栏或「关于」窗口打开「反馈与建议」，匿名提交，无需 GitHub 账号；可选附带已去掉用户名和计算机名的最近日志。
+- **GitHub Issues**：有 GitHub 账号时，也可以直接在 [Issues](https://github.com/YIALU/MagnetometerSystem/issues) 提交。
+
+报告问题时请写明程序版本、复现步骤、连接参数和协议 JSON，必要时附上一段收发报文。
+
+## 许可证
+
+本项目基于 [Apache License 2.0](LICENSE) 发布。
