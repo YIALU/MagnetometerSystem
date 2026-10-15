@@ -79,7 +79,7 @@ The Acquire page shows the plot in the middle, a collapsible tool panel on the r
 - **Statistics (统计):** mean, standard deviation, peak-to-peak, RMS, minimum and maximum over the recent window, using raw readings.
 - **Interval (区间):** drag with the left mouse button on the plot (or type start and end seconds) to get statistics for that span, and export it with Export this span (导出这一段).
 - **Calculate (计算):** add total-field `sqrt(A²+B²+C²)`, gradient `(A−B)/baseline` or formula channels.
-- **Filter (滤波):** display only; saving, statistics and export always use raw readings.
+- **Filter (滤波):** display only; saving, the side-panel Statistics and Interval tabs and export always use raw readings. The per-plot "display window" (显示窗口) statistics in multi plot follow the displayed values, so display offset and filtering change them.
 
 The plot keeps the latest 100,000 points per channel for display and interval analysis; use the Analysis page on a saved session for longer spans.
 
