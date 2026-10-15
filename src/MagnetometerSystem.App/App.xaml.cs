@@ -51,7 +51,10 @@ public partial class App : Application
             services.AddTransient<RealtimeChartViewModel>();
             services.AddTransient<MainViewModel>();
 
-            services.AddSingleton(_ => new DatabaseInitializer { AnotherInstanceRunning = _anotherInstanceRunning });
+            services.AddSingleton(_ => new DatabaseInitializer
+            {
+                AnotherInstanceRunning = _anotherInstanceRunning || OtherAppProcessRunning()
+            });
             services.AddSingleton<IDataStorageService, SqliteStorageService>();
             services.AddTransient<IDataExporter, CsvExporter>();
             services.AddTransient<SessionListViewModel>();
@@ -185,6 +188,26 @@ public partial class App : Application
                 if (coordinator.IsCurrentUpdate(info)) mainVm.AvailableUpdateVersion = info.Version;
             }),
             UpdateLoopCts.Token);
+    }
+
+    /// <summary>
+    /// 是否有同名程序进程在运行（含其他 Windows 会话）。单实例 mutex 只在本会话可见，
+    /// 旧版本也不认识迁移锁和占用文件；另一会话里还开着旧版本时据此推迟数据库迁移。检测失败按“有”处理。
+    /// </summary>
+    private static bool OtherAppProcessRunning()
+    {
+        try
+        {
+            using var current = System.Diagnostics.Process.GetCurrentProcess();
+            var others = System.Diagnostics.Process.GetProcessesByName(current.ProcessName);
+            try { return others.Any(p => p.Id != current.Id); }
+            finally { foreach (var p in others) p.Dispose(); }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Trace.TraceWarning($"检测其他程序实例失败，本次按有其他实例处理: {ex.Message}");
+            return true;
+        }
     }
 
     /// <summary>
