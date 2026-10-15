@@ -282,6 +282,23 @@ public sealed class DatabaseLocationTests : IDisposable
     }
 
     [Fact]
+    public async Task UninspectableTarget_DoesNotFallBackToLegacyCopy()
+    {
+        // Windows 上创建符号链接需要特权；用指向自身的链接制造“无法检查”（非“不存在”）的 I/O 错误
+        if (OperatingSystem.IsWindows()) return;
+        await CreateLegacyDatabaseWithSessionAsync();
+        var dataDir = Path.GetDirectoryName(TargetDb)!;
+        Directory.CreateDirectory(dataDir);
+        File.CreateSymbolicLink(TargetDb, TargetDb);
+
+        Assert.Equal(TargetDb, DatabaseLocation.ResolveDatabasePath(dataDir, Path.GetDirectoryName(LegacyDb)!));
+        var result = DatabaseLocation.MigrateOrDefer(LegacyDb, TargetDb, anotherInstanceRunning: false, fallbackWhenNotWritable: true);
+        Assert.Equal(DatabaseLocation.MigrationOutcome.NotNeeded, result.Outcome);
+        Assert.Equal(TargetDb, result.DatabasePath);
+        Assert.False(File.Exists(Path.Combine(dataDir, DatabaseLocation.MigratedMarkerFileName)));
+    }
+
+    [Fact]
     public void ResolveDirectory_FallsBackWhenPreferredIsNotWritable()
     {
         var blocked = Path.Combine(_root, "not-a-dir");

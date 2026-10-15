@@ -29,8 +29,12 @@ public static class DatabaseLocation
     /// </summary>
     public const string LegacyInUseFileName = "magnetometer.db.inuse";
 
-    /// <summary>串行化各实例的“迁移还是沿用旧库”判断，避免同时首启时一个迁移、一个沿用旧库。</summary>
-    private const string MigrationMutexName = "MagnetometerSystem.DatabaseMigration";
+    /// <summary>
+    /// 串行化各实例的“迁移还是沿用旧库”判断，避免同时首启时一个迁移、一个沿用旧库。
+    /// 用 Global\ 前缀：不带前缀的命名 mutex 只在当前 Windows 会话内可见，同一用户在远程桌面
+    /// 和本地控制台同时启动时会各自迁移。
+    /// </summary>
+    private const string MigrationMutexName = @"Global\MagnetometerSystem.DatabaseMigration";
 
     private static readonly object HeldLocksGate = new();
     private static readonly Dictionary<string, FileStream> HeldLocks = new(StringComparer.OrdinalIgnoreCase);
@@ -81,14 +85,16 @@ public static class DatabaseLocation
         }
 
         var marker = Path.Combine(targetDir, MigratedMarkerFileName);
-        if (File.Exists(targetDbPath))
+        var targetState = ProbeFile(targetDbPath);
+        if (targetState != FileState.Absent)
         {
-            // 新库已是权威数据库：补写此前可能写失败的标记，之后删掉新库也不会再复制旧副本
-            if (File.Exists(legacyDbPath) && !File.Exists(marker))
+            // 新库已是权威数据库：补写此前可能写失败的标记，之后删掉新库也不会再复制旧副本。
+            // 新位置无法检查（权限、I/O 错误）时同样不迁移、不回退，由初始化打开时报错，避免写进旧副本。
+            if (targetState == FileState.Exists && File.Exists(legacyDbPath) && ProbeFile(marker) == FileState.Absent)
                 TryWriteMarker(marker, $"本目录已有数据库，不再从 {legacyDbPath} 复制旧副本。");
             return new(MigrationOutcome.NotNeeded, targetDbPath);
         }
-        if (File.Exists(marker) || !File.Exists(legacyDbPath))
+        if (ProbeFile(marker) != FileState.Absent || !File.Exists(legacyDbPath))
             return new(MigrationOutcome.NotNeeded, targetDbPath);
 
         // 拿不到迁移锁就不能保证没有别的实例正在迁移：本次不迁移，沿用旧库
@@ -198,9 +204,31 @@ public static class DatabaseLocation
     public static string ResolveDatabasePath(string preferredDir, string fallbackDir)
     {
         var preferred = Path.Combine(preferredDir, FileName);
-        if (File.Exists(preferred) || File.Exists(Path.Combine(preferredDir, MigratedMarkerFileName)))
+        // 只有确认首选目录里没有数据库和标记时才考虑回退；无法检查（权限、I/O 错误）时不回退，
+        // File.Exists 在这种情况下也返回 false，会误选迁移前的旧副本
+        if (ProbeFile(preferred) != FileState.Absent || ProbeFile(Path.Combine(preferredDir, MigratedMarkerFileName)) != FileState.Absent)
             return preferred;
         return Path.Combine(ResolveDirectory(preferredDir, fallbackDir), FileName);
+    }
+
+    private enum FileState { Absent, Exists, Unknown }
+
+    /// <summary>区分“确认不存在”和“无法检查”。同名目录不算文件。</summary>
+    private static FileState ProbeFile(string path)
+    {
+        try
+        {
+            using var _ = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            return FileState.Exists;
+        }
+        catch (FileNotFoundException) { return FileState.Absent; }
+        catch (DirectoryNotFoundException) { return FileState.Absent; }
+        catch (UnauthorizedAccessException) when (Directory.Exists(path)) { return FileState.Absent; }
+        catch (Exception ex)
+        {
+            Trace.TraceWarning($"无法检查 {path}: {ex.Message}");
+            return FileState.Unknown;
+        }
     }
 
     /// <summary>首选目录可创建且可写就用它，否则用回退目录。</summary>
