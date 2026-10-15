@@ -46,7 +46,7 @@ Historical batch corrections are saved as separate versions. Their identifiers i
 
 ## Data locations and upgrades
 
-- Default database: `data\magnetometer.db` in the program folder (installed and portable alike), falling back to `%LOCALAPPDATA%\MagnetometerSystem\magnetometer.db` if that folder is not writable. Settings shows the path in use.
+- Default database: `data\magnetometer.db` in the program folder (installed and portable alike), falling back to `%LOCALAPPDATA%\MagnetometerSystem\magnetometer.db` if that folder is not writable (once `data` holds a database there is no fallback; a write failure is reported instead of opening the old copy). Settings shows the path in use.
 - Upgrading from a version before v0.6.16: on first start the old `%LOCALAPPDATA%\MagnetometerSystem\magnetometer.db` is copied into `data`; the old file stays, with a note left beside it. If copying fails, the old database is used for that run and copying is retried next start. Migration happens once; deleting the database in `data` afterwards does not trigger another copy.
 - To upgrade the portable version, extract over its folder; if you extract to a new folder, copy the old `data` folder across.
 - Logs: the application directory's `logs` folder, falling back to `%LOCALAPPDATA%\MagnetometerSystem\logs` if necessary.

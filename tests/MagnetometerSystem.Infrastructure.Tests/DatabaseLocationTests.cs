@@ -54,7 +54,7 @@ public sealed class DatabaseLocationTests : IDisposable
         Assert.Equal(1, await CountSessionsAsync(db, sessionId));
         Assert.True(File.Exists(LegacyDb));
         Assert.True(File.Exists(Path.Combine(Path.GetDirectoryName(TargetDb)!, DatabaseLocation.MigratedMarkerFileName)));
-        Assert.False(File.Exists(TargetDb + ".migrating"));
+        Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(TargetDb)!, "*.migrating*"));
     }
 
     [Fact]
@@ -124,6 +124,51 @@ public sealed class DatabaseLocationTests : IDisposable
         Assert.Equal(LegacyDb, db.DatabasePath);
         Assert.Contains("失败", db.LocationNotice);
         Assert.Equal(1, await CountSessionsAsync(db, sessionId));
+    }
+
+    [Fact]
+    public async Task ConcurrentFirstStart_BothInstancesEndUpOnTheMigratedTarget()
+    {
+        var sessionId = await CreateLegacyDatabaseWithSessionAsync();
+
+        // 两个实例同时首次启动：只有一个能改名成功，另一个不能因此回退到旧库
+        var results = await Task.WhenAll(Enumerable.Range(0, 4).Select(_ => Task.Run(async () =>
+        {
+            var db = new DatabaseInitializer(TargetDb, LegacyDb);
+            await db.InitializeAsync();
+            return db;
+        })));
+
+        Assert.All(results, db => Assert.Equal(TargetDb, db.DatabasePath));
+        Assert.Equal(1, await CountSessionsAsync(results[0], sessionId));
+        Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(TargetDb)!, "*.migrating*"));
+    }
+
+    [Fact]
+    public async Task ResolveDatabasePath_AfterMigration_DoesNotFallBackToStaleLegacyCopy()
+    {
+        await CreateLegacyDatabaseWithSessionAsync();
+        var dataDir = Path.GetDirectoryName(TargetDb)!;
+        await new DatabaseInitializer(TargetDb, LegacyDb).InitializeAsync();
+        SqliteConnection.ClearAllPools();
+
+        // 已有权威数据库时直接选它，不做可写探测，也就不会因暂时不可写而回退到旧副本
+        Assert.Equal(TargetDb, DatabaseLocation.ResolveDatabasePath(dataDir, Path.GetDirectoryName(LegacyDb)!));
+
+        // 只有迁移标记（新库被删）也不回退
+        foreach (var suffix in new[] { "", "-wal", "-shm" }) File.Delete(TargetDb + suffix);
+        Assert.Equal(TargetDb, DatabaseLocation.ResolveDatabasePath(dataDir, Path.GetDirectoryName(LegacyDb)!));
+    }
+
+    [Fact]
+    public void ResolveDatabasePath_FreshInstall_FallsBackWhenPreferredIsNotWritable()
+    {
+        var blocked = Path.Combine(_root, "blocked-file");
+        File.WriteAllText(blocked, "");
+        var fallback = Path.Combine(_root, "fallback");
+
+        Assert.Equal(Path.Combine(fallback, DatabaseLocation.FileName),
+            DatabaseLocation.ResolveDatabasePath(Path.Combine(blocked, "data"), fallback));
     }
 
     [Fact]

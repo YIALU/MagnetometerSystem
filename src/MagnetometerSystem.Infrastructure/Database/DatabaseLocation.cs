@@ -23,6 +23,19 @@ public static class DatabaseLocation
     /// <summary>程序目录下的 data\。用 AppContext.BaseDirectory —— 单文件发布下 Assembly.Location 为空。</summary>
     public static string ProgramDataDirectory { get; } = Path.Combine(AppContext.BaseDirectory, DataFolderName);
 
+    /// <summary>
+    /// 选定本次使用的数据库文件。首选目录里已有数据库或迁移标记时，它就是唯一的权威数据库，
+    /// 即使目录暂时不可写也不回退 —— 回退会打开迁移前留下的旧副本，造成数据分叉
+    /// （写不进去时由初始化或保存报错，可诊断）。否则首选目录可写用首选，不可写用回退目录。
+    /// </summary>
+    public static string ResolveDatabasePath(string preferredDir, string fallbackDir)
+    {
+        var preferred = Path.Combine(preferredDir, FileName);
+        if (File.Exists(preferred) || File.Exists(Path.Combine(preferredDir, MigratedMarkerFileName)))
+            return preferred;
+        return Path.Combine(ResolveDirectory(preferredDir, fallbackDir), FileName);
+    }
+
     /// <summary>首选目录可创建且可写就用它，否则用回退目录。</summary>
     public static string ResolveDirectory(string preferred, string fallback)
     {
@@ -44,7 +57,8 @@ public static class DatabaseLocation
     /// <summary>
     /// 新位置还没有数据库、也没迁移过，而旧位置有数据库时，用 SQLite 备份接口复制一份过去
     /// （WAL 中未合并的内容一并带上）。旧文件原样保留。
-    /// 返回 true 表示本次完成了迁移；无需迁移返回 false；复制失败抛异常，目标位置不留半成品。
+    /// 返回 true 表示本次完成了迁移；无需迁移、或同时启动的另一个实例已先完成迁移时返回 false；
+    /// 复制失败抛异常，目标位置不留半成品。
     /// </summary>
     public static bool MigrateIfNeeded(string legacyDbPath, string targetDbPath)
     {
@@ -57,7 +71,8 @@ public static class DatabaseLocation
         if (!File.Exists(legacyDbPath)) return false;
 
         Directory.CreateDirectory(targetDir);
-        var temp = targetDbPath + ".migrating";
+        // 允许多开：每次迁移用独立的临时文件，谁先改名谁完成迁移
+        var temp = $"{targetDbPath}.migrating-{Guid.NewGuid():N}";
         DeleteIfExists(temp);
         try
         {
@@ -79,6 +94,12 @@ public static class DatabaseLocation
             }
 
             File.Move(temp, targetDbPath);
+        }
+        catch (IOException) when (File.Exists(targetDbPath))
+        {
+            // 另一个实例抢先把完整副本改名到位（它也是先写临时文件再改名），直接用它
+            DeleteIfExists(temp);
+            return false;
         }
         catch
         {

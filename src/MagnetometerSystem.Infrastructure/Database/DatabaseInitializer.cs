@@ -34,9 +34,7 @@ public class DatabaseInitializer
     /// </summary>
     public DatabaseInitializer()
         : this(
-            Path.Combine(
-                DatabaseLocation.ResolveDirectory(DatabaseLocation.ProgramDataDirectory, DatabaseLocation.LegacyDirectory),
-                DatabaseLocation.FileName),
+            DatabaseLocation.ResolveDatabasePath(DatabaseLocation.ProgramDataDirectory, DatabaseLocation.LegacyDirectory),
             Path.Combine(DatabaseLocation.LegacyDirectory, DatabaseLocation.FileName))
     {
     }
