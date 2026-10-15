@@ -22,22 +22,26 @@ wait_healthy() {
 }
 
 # 回滚退出码（与 set -e 失败时的 1 区分开）：10 已指回上一版本且通过本机健康检查；
-# 11 无上一版本可指回；12 已指回但服务未恢复，需要人工处理。
+# 11 无上一版本可指回；12 回滚步骤失败或服务未恢复，需要人工处理。
 rollback() {
     echo "[deploy] $1" >&2
     journalctl -u magnetometer-feedback -u magnetometer-feedback-proxy -n 30 --no-pager >&2 || true
     if [ -n "$previous" ] && [ -d "$previous" ]; then
+        # 每一步都尽量执行完，但任何一步失败都记下来，最终不报告为回滚成功。
+        restore_failed=0
         for u in $units; do
-            if [ -f "$dir/units-previous/$u" ]; then install -m 0644 "$dir/units-previous/$u" /etc/systemd/system/ || true; fi
+            if [ -f "$dir/units-previous/$u" ]; then
+                install -m 0644 "$dir/units-previous/$u" /etc/systemd/system/ || restore_failed=1
+            fi
         done
-        systemctl daemon-reload || true
-        ln -sfn "$previous" /opt/magnetometer-feedback/current
-        systemctl restart magnetometer-feedback.service magnetometer-feedback-proxy.service || true
-        if wait_healthy; then
+        systemctl daemon-reload || restore_failed=1
+        ln -sfn "$previous" /opt/magnetometer-feedback/current || restore_failed=1
+        systemctl restart magnetometer-feedback.service magnetometer-feedback-proxy.service || restore_failed=1
+        if [ "$restore_failed" = 0 ] && wait_healthy; then
             echo "[deploy] 已指回上一版本并通过本机健康检查: $previous" >&2
             exit 10
         fi
-        echo "[deploy] 已指回上一版本 $previous，但服务未恢复，需要人工处理" >&2
+        echo "[deploy] 回滚到 $previous 未完成（恢复 unit、daemon-reload、切换或重启失败，或服务未恢复），需要人工处理" >&2
         journalctl -u magnetometer-feedback -u magnetometer-feedback-proxy -n 30 --no-pager >&2 || true
         exit 12
     fi

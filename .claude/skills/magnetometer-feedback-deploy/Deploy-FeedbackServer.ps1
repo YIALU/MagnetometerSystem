@@ -38,7 +38,7 @@ function Test-PublicHealth {
 }
 
 function Get-RollbackSummary([int]$Code) {
-    # remote-deploy.sh 回滚退出码：10 已指回并通过本机检查；11 无上一版本；12 已指回但服务未恢复。
+    # remote-deploy.sh 回滚退出码：10 已指回并通过本机检查；11 无上一版本；12 回滚步骤失败或服务未恢复。
     # 其他非零值（例如备份或校验失败）表示没有走回滚，current 未被改动或状态未知。
     # 本机检查只覆盖后端和代理进程，所以 10 还要经公网 HTTPS 再确认一次。
     if ($Code -eq 10) {
@@ -46,7 +46,7 @@ function Get-RollbackSummary([int]$Code) {
         return '已指回上一版本，但公网 HTTPS /health 仍失败，请立即登录服务器处理'
     }
     if ($Code -eq 11) { return '服务器上没有可指回的上一版本，请立即登录服务器处理' }
-    if ($Code -eq 12) { return '已指回上一版本但服务未恢复，请立即登录服务器处理' }
+    if ($Code -eq 12) { return '回滚未完成（恢复 unit、切换或重启失败，或服务未恢复），请立即登录服务器处理' }
     return "未确认是否已回滚（退出码 $Code），请登录服务器检查 /opt/magnetometer-feedback/current 和两个服务"
 }
 
