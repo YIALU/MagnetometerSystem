@@ -16,7 +16,7 @@ The protocol tells the application how to split incoming bytes into channel read
 
 1. **Use an existing protocol:** pick a preset or a saved protocol in the Protocol library (协议库) drop-down and click Load selected (载入所选). Load a shared protocol JSON with Import… (导入…).
 2. **Adjust it to the device output** (Protocol panel on the right):
-   - **ASCII text (ASCII 文本):** set the line ending and separator, then fill in the column, name, unit and scale of each channel in the field table.
+   - **ASCII text (ASCII 文本):** enter the separator, tick Header row (首行为表头（跳过）) if needed, and fill in each channel's index, name, unit, column, scale and offset in the field table. Lines ending in LF or CRLF are recognized; if the device ends lines with CR only, the editor has no option for it, so set `AsciiLineEnding` to `"\r"` in the protocol JSON and load it with Import….
    - **Binary (二进制):** add segments in firmware order with + Header (+ 帧头), + Length (+ 长度), + Data (+ 数据), + Checksum (+ 校验), + Tail (+ 帧尾) and so on, and set the data type, byte order, channel index and unit of each data segment. The byte map above shows the frame to scale, with the frame length at the top right.
 3. **Check the channels:** make sure order, names and units match the device. The unit decides which axis a channel uses; a temperature channel with `°C` gets its own axis.
 4. **Save:** Save current (保存当前) stores it in the library; Export… (导出…) writes a JSON file to share or back up.

@@ -6,7 +6,7 @@
 
 Choose serial or TCP and enter the connection parameters. If the device requires a start-sampling command, send it from the command panel after connecting.
 
-The protocol defines how bytes become readings and what each channel means. Configure line endings, delimiters, and field mappings for ASCII, or frame structure, data types, byte order, scaling, and checksums for binary data. Confirm channel order, names, and units against device output, then save the configuration or export it as JSON.
+The protocol defines how bytes become readings and what each channel means. Configure delimiters and field mappings for ASCII (lines split on LF/CRLF by default; for CR-only devices set `AsciiLineEnding` in the protocol JSON), or frame structure, data types, byte order, scaling, and checksums for binary data. Confirm channel order, names, and units against device output, then save the configuration or export it as JSON.
 
 The two "磁梯度数采卡-pt" (ZDZ_C08) presets have a CRC field in the frame that the firmware does not compute yet, so their checksum segment is disabled by default and the presets connect as selected; once the firmware computes the CRC, tick "Enable checksum" in the checksum segment. See [protocol checksums and channel units](协议校验与单位.md) (Chinese) for setup, older protocol JSON files, variable-length segments, and preset units.
 
