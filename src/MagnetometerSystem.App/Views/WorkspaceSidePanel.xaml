@@ -233,6 +233,8 @@
                         <CheckBox Content="最小" IsChecked="{Binding StatisticsConfig.ShowMin}" Margin="0,0,12,6"/>
                         <CheckBox Content="最大" IsChecked="{Binding StatisticsConfig.ShowMax}" Margin="0,0,12,6"/>
                     </WrapPanel>
+                    <CheckBox Content="多图时在图上显示统计" IsChecked="{Binding StatisticsConfig.ShowOnChart}" Margin="0,0,0,10"
+                              ToolTip="在每张图右上角标注当前显示窗口的均值、标准差、最小/最大和峰峰值，按显示值（含偏移、滤波）计算"/>
 
                     <ItemsControl ItemsSource="{Binding StatisticsRows}">
                         <ItemsControl.ItemTemplate>

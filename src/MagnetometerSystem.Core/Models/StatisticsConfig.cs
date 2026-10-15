@@ -65,6 +65,14 @@ public class StatisticsConfig : INotifyPropertyChanged
         set { if (_showMax != value) { _showMax = value; OnPropertyChanged(nameof(ShowMax)); } }
     }
 
+    private bool _showOnChart;
+    /// <summary>多图模式下是否在每张图右上角标注显示窗口统计（按显示值计算），默认不标注</summary>
+    public bool ShowOnChart
+    {
+        get => _showOnChart;
+        set { if (_showOnChart != value) { _showOnChart = value; OnPropertyChanged(nameof(ShowOnChart)); } }
+    }
+
     private void OnPropertyChanged(string propertyName)
     {
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));

@@ -10,7 +10,8 @@ public class ChartFrameBuilderTests
 
     private static ChartFrameBuilder Builder() => new(new DisplaySeriesPipeline(), new ComputedChannelEvaluator());
 
-    private static ChartDisplaySettings Display(bool multiPlot, int downsample = 0) => new(multiPlot, NoFilter, downsample);
+    private static ChartDisplaySettings Display(bool multiPlot, int downsample = 0, bool panelStatistics = false) =>
+        new(multiPlot, NoFilter, downsample, panelStatistics);
 
     // 拖动排序后的通道列表：温度排在最前，通道索引不变。
     private static ChannelDisplayConfig[] ReorderedChannels() =>
@@ -80,7 +81,7 @@ public class ChartFrameBuilderTests
         var window = Window();
         var sum = new ComputedChannelDefinition { Name = "和", Formula = "CH0 + CH1", Unit = "nT" };
 
-        var frame = Builder().Build(window, Axes, Display(multiPlot: true), channels, [sum]);
+        var frame = Builder().Build(window, Axes, Display(multiPlot: true, panelStatistics: true), channels, [sum]);
 
         Assert.True(frame.IsMultiPlot);
         Assert.Same(Axes, frame.Axes);
@@ -103,7 +104,7 @@ public class ChartFrameBuilderTests
     {
         var window = Window() with { Channels = [[1, 2, 3, 4], [10, 20, 30, 40], [25]] };   // 温度晚到
 
-        var frame = Builder().Build(window, Axes, Display(multiPlot: true), ReorderedChannels(), []);
+        var frame = Builder().Build(window, Axes, Display(multiPlot: true, panelStatistics: true), ReorderedChannels(), []);
 
         Assert.Equal(new[] { "温度 (°C)", "X (nT)", "Y (µT)" }, frame.Panels.Select(p => p.AxisLabel));
         Assert.Null(frame.Panels[0].Curve);
@@ -142,10 +143,21 @@ public class ChartFrameBuilderTests
         ChannelDisplayConfig[] channels = [new() { Name = "X", ChannelIndex = 0 }];
 
         var single = Builder().Build(window, Axes, Display(multiPlot: false, downsample: 10), channels, []);
-        var multi = Builder().Build(window, Axes, Display(multiPlot: true, downsample: 10), channels, []);
+        var multi = Builder().Build(window, Axes, Display(multiPlot: true, downsample: 10, panelStatistics: true), channels, []);
 
         Assert.Equal(10, single.Curves[0].Xs.Length);
         Assert.Equal(10, multi.Panels[0].Curve!.Ys.Length);
         Assert.Equal("显示窗口\n" + StatisticsResultItem.Compute("X", values).FormatMultiline(), multi.Panels[0].Statistics);
+    }
+
+    [Fact]
+    public void MultiPlotOmitsPerPanelStatisticsUnlessEnabled()
+    {
+        var sum = new ComputedChannelDefinition { Name = "和", Formula = "CH0 + CH1", Unit = "nT" };
+
+        var frame = Builder().Build(Window(), Axes, Display(multiPlot: true), ReorderedChannels(), [sum]);
+
+        Assert.All(frame.Panels, p => Assert.NotNull(p.Curve));
+        Assert.All(frame.Panels, p => Assert.Null(p.Statistics));
     }
 }

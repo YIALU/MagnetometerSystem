@@ -34,7 +34,7 @@ public sealed record ChartCurve(double[] Xs, double[] Ys, (byte A, byte R, byte 
 /// <summary>多图模式下的一张图。</summary>
 /// <param name="AxisLabel">左轴标题：名称和单位。</param>
 /// <param name="Curve">曲线；协议通道在时间窗口内缺数据时为 null，这时只画坐标轴。</param>
-/// <param name="Statistics">右上角的显示窗口统计（按显示值算）；没有曲线时为 null。</param>
+/// <param name="Statistics">右上角的显示窗口统计（按显示值算）；未开启或没有曲线时为 null。</param>
 /// <param name="Channel">这张图对应的协议通道，十字准线只读这个通道；计算通道为 null，十字准线读全部可见通道。</param>
 public sealed record ChartPanel(string AxisLabel, ChartCurve? Curve, string? Statistics, ChannelDisplayConfig? Channel);
 
