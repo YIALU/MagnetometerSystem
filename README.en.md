@@ -4,11 +4,13 @@
 [![Windows CI](https://github.com/YIALU/MagnetometerSystem/actions/workflows/windows-ci.yml/badge.svg?branch=master)](https://github.com/YIALU/MagnetometerSystem/actions/workflows/windows-ci.yml)
 [![License](https://img.shields.io/github/license/YIALU/MagnetometerSystem)](LICENSE)
 
-[简体中文](README.md) · [Download latest release](https://github.com/YIALU/MagnetometerSystem/releases/latest) · [User guide](docs/user-guide.en.md) · [Changelog](docs/变更日志.md)
+[简体中文](README.md) · [Download latest release](https://github.com/YIALU/MagnetometerSystem/releases/latest) · **[Quick start tutorial](docs/quick-start.en.md)** · [User guide](docs/user-guide.en.md) · [Changelog](docs/变更日志.md)
 
 **MagnetometerSystem is a general-purpose magnetometer desktop application for everyday debugging and experimental recording.** Connect a device through serial or TCP, receive data using a user-defined protocol, automatically save original readings, and plot live curves.
 
 The project centers on **customizable protocols, data recording, and live plotting**. Protocol configuration defines channel counts, names, and units, making it possible to work with different data formats and observe magnetic, temperature, and other auxiliary channels together. Correction and advanced analysis are optional tools.
+
+> **New here?** The [quick start tutorial](docs/quick-start.en.md) walks through four illustrated steps: choose or configure a protocol → connect the device → use the plots → export data.
 
 ![Plot view: the data-link strip at the top, with X, Y and Z magnetic channels in separate plots](docs/images/01-replay.png)
 
@@ -57,13 +59,14 @@ Settings shows the path in use and can open its folder. Close the application an
 
 ## Quick start
 
-1. **Set up the connection:** choose serial or TCP and enter the connection parameters.
-2. **Configure the protocol:** select a preset or edit a custom protocol; check fields, channel names, and units.
-3. **Connect and capture:** enter the nominal sampling rate, connect, and check incoming data and storage status. The nominal rate records metadata; adjust actual output using device-supported commands or settings.
-4. **Inspect and analyze:** on the Acquire page, select channels and a time window, switch plot layouts, and open side panels as needed; Raw frames in the bottom dock shows the verdict for each frame. Pausing the display, collapsing panels, or switching pages keeps original-data recording active.
-5. **Replay and export:** stop, wait for the final batch ("session ended, final batch committed" under Events), then select a session on the Data page to replay or export as CSV; use the Analysis page for long-range noise and drift.
+See the **[quick start tutorial](docs/quick-start.en.md)** for full steps with screenshots. Everyday capture takes four steps:
 
-See the [user guide](docs/user-guide.en.md) for protocol setup, command responses, correction, and troubleshooting.
+1. **[Choose or configure a protocol](docs/quick-start.en.md#step-1-choose-or-configure-a-protocol):** load a preset or saved protocol from the library on the Connection page and adjust fields, channel names and units to the device output; check it first by pasting a sample into the parse test.
+2. **[Connect the device](docs/quick-start.en.md#step-2-connect-the-device-and-start-capturing):** choose serial or TCP, enter the parameters, click Connect and start saving, and confirm that receive → parse → save all grow in the top strip.
+3. **[Use the plots](docs/quick-start.en.md#step-3-use-the-plots):** on the Acquire page switch single/multi plots, adjust the time window and axis, and use the side panel for channels, statistics and intervals. Pausing the display does not affect saving.
+4. **[Export data](docs/quick-start.en.md#step-4-export-data):** stop, wait for the final batch, then select the session on the Data page and export CSV by time, channel and precision.
+
+Commands, replay, noise analysis and correction are [advanced features](docs/quick-start.en.md#advanced-features); see the [user guide](docs/user-guide.en.md).
 
 ### Trying it without a device
 
@@ -87,6 +90,7 @@ dotnet test MagnetometerSystem.sln -c Debug --no-build -m:1
 
 ## Documentation
 
+- [Quick start tutorial](docs/quick-start.en.md): illustrated steps for protocol, connection, plots and export.
 - [User guide](docs/user-guide.en.md): configuration, data management, correction, and troubleshooting.
 - [Protocol checksums and channel units](docs/协议校验与单位.md) (Chinese): checksum setup, presets, and units.
 - [Testing and acceptance](docs/testing-and-acceptance.md) (Chinese): test instructions, evidence, and device acceptance.

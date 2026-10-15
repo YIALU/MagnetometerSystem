@@ -1,6 +1,6 @@
 # User guide
 
-[Project overview](../README.en.md) · [简体中文](使用说明.md)
+[Project overview](../README.en.md) · [Quick start](quick-start.en.md) · [简体中文](使用说明.md)
 
 ## Connections and protocols
 
