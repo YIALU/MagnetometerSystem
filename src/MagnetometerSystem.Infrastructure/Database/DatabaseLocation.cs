@@ -90,7 +90,7 @@ public static class DatabaseLocation
         {
             // 新库已是权威数据库：补写此前可能写失败的标记，之后删掉新库也不会再复制旧副本。
             // 新位置无法检查（权限、I/O 错误）时同样不迁移、不回退，由初始化打开时报错，避免写进旧副本。
-            if (targetState == FileState.Exists && File.Exists(legacyDbPath) && ProbeFile(marker) == FileState.Absent)
+            if (targetState == FileState.Exists && ProbeFile(legacyDbPath) != FileState.Absent && ProbeFile(marker) == FileState.Absent)
                 TryWriteMarker(marker, $"本目录已有数据库，不再从 {legacyDbPath} 复制旧副本。");
             return new(MigrationOutcome.NotNeeded, targetDbPath);
         }
