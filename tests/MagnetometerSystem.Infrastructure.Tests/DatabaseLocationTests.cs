@@ -212,6 +212,23 @@ public sealed class DatabaseLocationTests : IDisposable
     }
 
     [Fact]
+    public async Task ConsumerOpeningBeforeInitialization_DoesNotCreateEmptyTarget()
+    {
+        var sessionId = await CreateLegacyDatabaseWithSessionAsync();
+        var db = new DatabaseInitializer(TargetDb, LegacyDb);
+
+        // 迁移完成前有人提前打开（如迁移中途关窗触发保存设置）：只报错，不在新位置生成空库
+        Directory.CreateDirectory(Path.GetDirectoryName(TargetDb)!);
+        using (var early = new SqliteConnection(db.ConnectionString))
+            Assert.Throws<SqliteException>(() => early.Open());
+        Assert.False(File.Exists(TargetDb));
+
+        await db.InitializeAsync();
+        Assert.Equal(TargetDb, db.DatabasePath);
+        Assert.Equal(1, await CountSessionsAsync(db, sessionId));
+    }
+
+    [Fact]
     public void ResolveDirectory_FallsBackWhenPreferredIsNotWritable()
     {
         var blocked = Path.Combine(_root, "not-a-dir");

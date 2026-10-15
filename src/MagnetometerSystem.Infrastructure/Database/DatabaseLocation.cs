@@ -64,6 +64,13 @@ public static class DatabaseLocation
         if (File.Exists(targetDbPath) || File.Exists(Path.Combine(targetDir, MigratedMarkerFileName)) || !File.Exists(legacyDbPath))
             return MigrationOutcome.NotNeeded;
 
+        // 拿不到迁移锁就不能保证没有别的实例正在迁移：本次不迁移，沿用旧库
+        if (gate is null)
+        {
+            HoldLegacyInUse(legacyDbPath);
+            return MigrationOutcome.DeferredLegacyInUse;
+        }
+
         if (anotherInstanceRunning || IsLegacyInUse(legacyDbPath))
         {
             HoldLegacyInUse(legacyDbPath);
@@ -114,36 +121,38 @@ public static class DatabaseLocation
     private static string LegacyInUsePath(string legacyDbPath) =>
         Path.Combine(Path.GetDirectoryName(Path.GetFullPath(legacyDbPath))!, LegacyInUseFileName);
 
-    private static IDisposable AcquireMigrationGate()
+    /// <summary>
+    /// 获取跨进程迁移锁。持锁实例可能正在复制很大的数据库，因此无限等待；
+    /// 创建失败返回 null，调用方据此放弃迁移。
+    /// </summary>
+    private static MutexRelease? AcquireMigrationGate()
     {
+        Mutex? mutex = null;
         try
         {
-            var mutex = new Mutex(initiallyOwned: false, MigrationMutexName);
+            mutex = new Mutex(initiallyOwned: false, MigrationMutexName);
             try
             {
-                if (!mutex.WaitOne(TimeSpan.FromMinutes(5)))
-                    Trace.TraceWarning("等待其他实例完成数据库迁移超时，继续启动");
-                else
-                    return new MutexRelease(mutex);
+                mutex.WaitOne();
             }
             catch (AbandonedMutexException)
             {
-                return new MutexRelease(mutex);
+                // 上一个持锁进程异常退出；锁已归本进程，迁移本身是“临时文件 + 改名”，不留半成品
             }
-            mutex.Dispose();
+            return new MutexRelease(mutex);
         }
         catch (Exception ex)
         {
-            Trace.TraceWarning($"创建数据库迁移锁失败: {ex.Message}");
+            mutex?.Dispose();
+            Trace.TraceWarning($"获取数据库迁移锁失败，本次不迁移: {ex.Message}");
+            return null;
         }
-        return new MutexRelease(null);
     }
 
-    private sealed class MutexRelease(Mutex? mutex) : IDisposable
+    private sealed class MutexRelease(Mutex mutex) : IDisposable
     {
         public void Dispose()
         {
-            if (mutex is null) return;
             mutex.ReleaseMutex();
             mutex.Dispose();
         }
@@ -183,8 +192,8 @@ public static class DatabaseLocation
     /// <summary>
     /// 新位置还没有数据库、也没迁移过，而旧位置有数据库时，用 SQLite 备份接口复制一份过去
     /// （WAL 中未合并的内容一并带上）。旧文件原样保留。
-    /// 返回 true 表示本次完成了迁移；无需迁移、或同时启动的另一个实例已先完成迁移时返回 false；
-    /// 复制失败抛异常，目标位置不留半成品。
+    /// 返回 true 表示本次完成了迁移；无需迁移返回 false；复制失败（包括目标位置已被别的文件占用）
+    /// 抛异常，目标位置不留半成品。多实例之间由 <see cref="MigrateOrDefer"/> 的迁移锁串行。
     /// </summary>
     public static bool MigrateIfNeeded(string legacyDbPath, string targetDbPath)
     {
@@ -197,7 +206,7 @@ public static class DatabaseLocation
         if (!File.Exists(legacyDbPath)) return false;
 
         Directory.CreateDirectory(targetDir);
-        // 允许多开：每次迁移用独立的临时文件，谁先改名谁完成迁移
+        // 每次迁移用独立的临时文件，异常退出残留的旧临时文件不会干扰下一次
         var temp = $"{targetDbPath}.migrating-{Guid.NewGuid():N}";
         DeleteIfExists(temp);
         try
@@ -220,12 +229,6 @@ public static class DatabaseLocation
             }
 
             File.Move(temp, targetDbPath);
-        }
-        catch (IOException) when (File.Exists(targetDbPath))
-        {
-            // 另一个实例抢先把完整副本改名到位（它也是先写临时文件再改名），直接用它
-            DeleteIfExists(temp);
-            return false;
         }
         catch
         {

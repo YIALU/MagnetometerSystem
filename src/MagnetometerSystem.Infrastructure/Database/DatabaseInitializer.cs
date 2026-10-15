@@ -14,9 +14,18 @@ public class DatabaseInitializer
     /// <summary>数据库文件的完整路径（设置页只读显示）。</summary>
     public string DatabasePath => _dbPath;
 
-    public string ConnectionString => new SqliteConnectionStringBuilder
+    /// <summary>
+    /// 供各存储服务使用的连接串。初始化（含迁移）完成前不允许创建文件：此时若有人提前打开
+    /// （例如迁移中途关闭窗口触发保存设置），只会报错，不会在新位置生成空库挡住迁移。
+    /// </summary>
+    public string ConnectionString => BuildConnectionString(_initialized ? SqliteOpenMode.ReadWriteCreate : SqliteOpenMode.ReadWrite);
+
+    private volatile bool _initialized;
+
+    private string BuildConnectionString(SqliteOpenMode mode) => new SqliteConnectionStringBuilder
     {
         DataSource = _dbPath,
+        Mode = mode,
         ForeignKeys = true,
         DefaultTimeout = 2
     }.ToString();
@@ -70,7 +79,7 @@ public class DatabaseInitializer
             Directory.CreateDirectory(directory);
         }
 
-        using var connection = new SqliteConnection(ConnectionString);
+        using var connection = new SqliteConnection(BuildConnectionString(SqliteOpenMode.ReadWriteCreate));
         await connection.OpenAsync();
         await connection.ExecuteAsync("PRAGMA journal_mode=WAL;");
         await connection.ExecuteAsync("PRAGMA foreign_keys=ON;");
@@ -84,6 +93,8 @@ public class DatabaseInitializer
             "SELECT COUNT(*) FROM pragma_table_info('orthogonality_profiles') WHERE name = 'unit'");
         if (hasProfileUnit == 0)
             await connection.ExecuteAsync("ALTER TABLE orthogonality_profiles ADD COLUMN unit TEXT NOT NULL DEFAULT '';");
+
+        _initialized = true;
     }
 
     /// <summary>
