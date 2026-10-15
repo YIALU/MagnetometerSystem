@@ -18,17 +18,19 @@ public partial class SettingsViewModel : ObservableObject
 {
     private readonly IAppConfigService _configService;
     private readonly UpdateCoordinator _updateCoordinator;
+    private readonly DatabaseInitializer? _database;
 
     public SettingsViewModel(IAppConfigService configService, UpdateCoordinator updateCoordinator, DatabaseInitializer? database = null)
     {
         _configService = configService;
         _updateCoordinator = updateCoordinator;
-        DatabasePath = database?.DatabasePath ?? "";
+        _database = database;
     }
 
     private bool _isLoaded;
     public async Task EnsureLoadedAsync()
     {
+        OnPropertyChanged(nameof(DatabasePath));
         if (_isLoaded) return;
         await LoadSettingsAsync();
         _isLoaded = true;
@@ -36,8 +38,11 @@ public partial class SettingsViewModel : ObservableObject
 
     // ---- 存储与日志（只读显示） ----
 
-    /// <summary>采集数据所在的 SQLite 数据库文件。</summary>
-    public string DatabasePath { get; }
+    /// <summary>
+    /// 采集数据所在的 SQLite 数据库文件。每次读取当前值：迁移失败时初始化器会回退到旧位置，
+    /// 而本视图模型可能在初始化完成前就已创建。
+    /// </summary>
+    public string DatabasePath => _database?.DatabasePath ?? "";
 
     public string LogDirectory => GlobalErrorHandler.LogDirectory ?? "";
 

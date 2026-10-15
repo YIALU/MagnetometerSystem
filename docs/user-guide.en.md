@@ -46,7 +46,10 @@ Historical batch corrections are saved as separate versions. Their identifiers i
 
 ## Data locations and upgrades
 
-- Default database: `%LOCALAPPDATA%\MagnetometerSystem\magnetometer.db`.
+- Default database: `data\magnetometer.db` in the program folder (installed and portable alike), falling back to `%LOCALAPPDATA%\MagnetometerSystem\magnetometer.db` if that folder is not writable (once `data` holds a database there is no fallback; a write failure is reported instead of opening the old copy). Settings shows the path in use.
+- Upgrading from a version before v0.6.16: on first start the old `%LOCALAPPDATA%\MagnetometerSystem\magnetometer.db` is copied into `data`; the old file stays, with a note left beside it. If copying fails, the old database is used for that run and copying is retried next start. Migration happens once; deleting the database in `data` afterwards does not trigger another copy. If other windows of the program (including older versions) are open at startup, the old database is used for that run and migration waits until all are closed.
+- After migration, do not run versions before v0.6.16 (for example a kept old portable package): they still write `%LOCALAPPDATA%\MagnetometerSystem\magnetometer.db`, and that data will not appear in the new version.
+- To upgrade the portable version, extract over its folder; if you extract to a new folder, copy the old `data` folder across.
 - Logs: the application directory's `logs` folder, falling back to `%LOCALAPPDATA%\MagnetometerSystem\logs` if necessary.
 - Close the application and back up the database before upgrading or migrating. Legacy fixed-column records remain in `readings_legacy_*` / `corrected_readings_legacy_*`. Their sessions report that migration is required; they are not automatically converted for replay or export.
 - The development version supports Automatic, Gitee and GitHub update sources in Settings → Software updates; the preference is saved immediately. Automatic mode compares stable versions, prefers complete assets for the same version, and uses Gitee when both are complete. A network download failure can switch to a mirror of the same version and package kind, using that mirror's own checksum manifest. Missing/invalid checksums, hash mismatch and user cancellation do not trigger fallback.

@@ -29,6 +29,8 @@ public partial class App : Application
     private const string SingleInstanceMutexName = "MagnetometerSystem.SingleInstance";
 
     private Mutex? _singleInstanceMutex;
+    /// <summary>启动时同名 mutex 已存在，说明另有实例（任意版本）在运行；数据库迁移据此推迟。</summary>
+    private bool _anotherInstanceRunning;
     private static readonly CancellationTokenSource UpdateLoopCts = new();
 
     private void OnStartup(object sender, StartupEventArgs e)
@@ -49,7 +51,10 @@ public partial class App : Application
             services.AddTransient<RealtimeChartViewModel>();
             services.AddTransient<MainViewModel>();
 
-            services.AddSingleton<DatabaseInitializer>();
+            services.AddSingleton(_ => new DatabaseInitializer
+            {
+                AnotherInstanceRunning = _anotherInstanceRunning || OtherAppProcessRunning()
+            });
             services.AddSingleton<IDataStorageService, SqliteStorageService>();
             services.AddTransient<IDataExporter, CsvExporter>();
             services.AddTransient<SessionListViewModel>();
@@ -106,6 +111,8 @@ public partial class App : Application
         {
             var dbInit = Services.GetRequiredService<DatabaseInitializer>();
             await dbInit.InitializeAsync();
+            if (dbInit.LocationNotice is { } notice)
+                Serilog.Log.Warning("数据库位置: {Notice}", notice);
             Serilog.Log.Information("数据库就绪: {DatabasePath}", dbInit.DatabasePath);
 
             AppSettings? loadedSettings = null;
@@ -184,13 +191,34 @@ public partial class App : Application
     }
 
     /// <summary>
+    /// 是否有同名程序进程在运行（含其他 Windows 会话）。单实例 mutex 只在本会话可见，
+    /// 旧版本也不认识迁移锁和占用文件；另一会话里还开着旧版本时据此推迟数据库迁移。检测失败按“有”处理。
+    /// </summary>
+    private static bool OtherAppProcessRunning()
+    {
+        try
+        {
+            using var current = System.Diagnostics.Process.GetCurrentProcess();
+            var others = System.Diagnostics.Process.GetProcessesByName(current.ProcessName);
+            try { return others.Any(p => p.Id != current.Id); }
+            finally { foreach (var p in others) p.Dispose(); }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Trace.TraceWarning($"检测其他程序实例失败，本次按有其他实例处理: {ex.Message}");
+            return true;
+        }
+    }
+
+    /// <summary>
     /// 创建供安装包检测的命名 mutex。失败不影响运行，只是安装时可能提示不到关闭程序。
     /// </summary>
     private void TryCreateSingleInstanceMutex()
     {
         try
         {
-            _singleInstanceMutex = new Mutex(initiallyOwned: false, SingleInstanceMutexName, out _);
+            _singleInstanceMutex = new Mutex(initiallyOwned: false, SingleInstanceMutexName, out var createdNew);
+            _anotherInstanceRunning = !createdNew;
         }
         catch (Exception ex)
         {
@@ -218,6 +246,13 @@ public partial class App : Application
         // Stop 已等待真实存储任务；异步刷新的错误文字/计数不能作为提交凭据。
         if (mainVm.SessionListVM.ActiveSessionId != null)
             throw new InvalidOperationException("当前会话尚未完成保存，请重试写入后再退出。");
+        // 数据库还没完成初始化（迁移中，或新位置无法访问而初始化失败）时没有地方保存设置；
+        // 硬要保存只会失败，让窗口永远关不掉。此时也从未开始采集，跳过不丢数据。
+        if (configService is null && Services.GetService<DatabaseInitializer>() is { IsInitialized: false })
+        {
+            Serilog.Log.Warning("数据库未完成初始化，退出时不保存界面设置");
+            return;
+        }
         await SaveCurrentSettingsAsync(mainVm, configService);
     }
 

@@ -41,7 +41,8 @@ public class SessionUnitsAndWriteRecoveryTests
     public async Task PreUnitSchema_IsMigratedIdempotentlyWithoutChangingSavedValues()
     {
         var db = Database();
-        using (var connection = new SqliteConnection(db.ConnectionString))
+        // 模拟旧版本留下的库：初始化前的 ConnectionString 不允许创建文件，这里显式建库
+        using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = db.DatabasePath }.ToString()))
         {
             await connection.OpenAsync();
             await connection.ExecuteAsync("""

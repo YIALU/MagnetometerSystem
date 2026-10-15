@@ -9,42 +9,84 @@ namespace MagnetometerSystem.Infrastructure.Database;
 /// </summary>
 public class DatabaseInitializer
 {
-    private readonly string _dbPath;
+    private string _dbPath;
 
     /// <summary>数据库文件的完整路径（设置页只读显示）。</summary>
     public string DatabasePath => _dbPath;
 
-    public string ConnectionString => new SqliteConnectionStringBuilder
+    /// <summary>
+    /// 供各存储服务使用的连接串。初始化（含迁移）完成前不允许创建文件：此时若有人提前打开
+    /// （例如迁移中途关闭窗口触发保存设置），只会报错，不会在新位置生成空库挡住迁移。
+    /// </summary>
+    public string ConnectionString => BuildConnectionString(_initialized ? SqliteOpenMode.ReadWriteCreate : SqliteOpenMode.ReadWrite);
+
+    private volatile bool _initialized;
+
+    /// <summary>初始化（含迁移）是否已成功完成。未完成时退出流程不保存设置。</summary>
+    public bool IsInitialized => _initialized;
+
+    private string BuildConnectionString(SqliteOpenMode mode) => new SqliteConnectionStringBuilder
     {
         DataSource = _dbPath,
+        Mode = mode,
         ForeignKeys = true,
         DefaultTimeout = 2
     }.ToString();
 
     public string? LegacyDataWarning { get; private set; }
 
+    /// <summary>
+    /// 本次启动从旧位置迁移数据库或回退到旧位置的说明；无事发生时为 null。由启动流程写日志。
+    /// </summary>
+    public string? LocationNotice { get; private set; }
+
+    /// <summary>
+    /// 正式程序使用：数据库放在程序目录 data\，不可写时回退到 %LOCALAPPDATA%\MagnetometerSystem；
+    /// 首次启动把旧位置的数据库迁移过来。
+    /// </summary>
     public DatabaseInitializer()
+        : this(
+            Path.Combine(DatabaseLocation.ProgramDataDirectory, DatabaseLocation.FileName),
+            Path.Combine(DatabaseLocation.LegacyDirectory, DatabaseLocation.FileName))
     {
-        _dbPath = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "MagnetometerSystem",
-            "magnetometer.db");
+        // 是否因程序目录不可写而回退旧位置，在初始化时与迁移一起在迁移锁内决定
+        _fallbackWhenNotWritable = true;
     }
+
+    private readonly bool _fallbackWhenNotWritable;
 
     public DatabaseInitializer(string dbPath)
     {
         _dbPath = dbPath;
     }
 
+    /// <param name="dbPath">要使用的数据库。</param>
+    /// <param name="legacyDbPath">旧版本的数据库位置；新位置没有数据库时从这里迁移。</param>
+    public DatabaseInitializer(string dbPath, string? legacyDbPath)
+    {
+        _dbPath = dbPath;
+        _legacyDbPath = legacyDbPath;
+    }
+
+    private readonly string? _legacyDbPath;
+
+    /// <summary>
+    /// 启动时已有其他程序实例在运行（由 App 根据单实例 mutex 判断）。此时若尚未迁移，
+    /// 本次沿用旧数据库，避免复制后对方仍往旧库写入；全部关闭后再启动时迁移。
+    /// </summary>
+    public bool AnotherInstanceRunning { get; init; }
+
     public async Task InitializeAsync()
     {
+        await MigrateFromLegacyLocationAsync();
+
         var directory = Path.GetDirectoryName(_dbPath);
         if (!string.IsNullOrEmpty(directory))
         {
             Directory.CreateDirectory(directory);
         }
 
-        using var connection = new SqliteConnection(ConnectionString);
+        using var connection = new SqliteConnection(BuildConnectionString(SqliteOpenMode.ReadWriteCreate));
         await connection.OpenAsync();
         await connection.ExecuteAsync("PRAGMA journal_mode=WAL;");
         await connection.ExecuteAsync("PRAGMA foreign_keys=ON;");
@@ -58,6 +100,43 @@ public class DatabaseInitializer
             "SELECT COUNT(*) FROM pragma_table_info('orthogonality_profiles') WHERE name = 'unit'");
         if (hasProfileUnit == 0)
             await connection.ExecuteAsync("ALTER TABLE orthogonality_profiles ADD COLUMN unit TEXT NOT NULL DEFAULT '';");
+
+        _initialized = true;
+    }
+
+    /// <summary>
+    /// 旧数据库迁移到新位置。复制失败时本次继续用旧数据库（数据可用，下次启动再试），
+    /// 不在新位置建空库 —— 否则下次启动会认为已有数据库而不再迁移。
+    /// </summary>
+    private async Task MigrateFromLegacyLocationAsync()
+    {
+        if (_legacyDbPath is null) return;
+        var legacy = _legacyDbPath;
+        var target = _dbPath;
+        var anotherInstance = AnotherInstanceRunning;
+        var fallback = _fallbackWhenNotWritable;
+        try
+        {
+            var result = await Task.Run(() => DatabaseLocation.MigrateOrDefer(legacy, target, anotherInstance, fallback));
+            _dbPath = result.DatabasePath;
+            LocationNotice = result.Outcome switch
+            {
+                DatabaseLocation.MigrationOutcome.Migrated =>
+                    $"已把旧数据库 {legacy} 复制到 {target}，旧文件保留未删除",
+                DatabaseLocation.MigrationOutcome.DeferredLegacyInUse =>
+                    $"另有程序实例正在使用旧数据库，本次继续使用 {legacy}；关闭所有实例后再启动会迁移到 {target}",
+                DatabaseLocation.MigrationOutcome.FallbackNotWritable =>
+                    $"程序目录 {Path.GetDirectoryName(target)} 不可写，数据库使用 {result.DatabasePath}",
+                _ => null
+            };
+        }
+        catch (Exception ex)
+        {
+            _dbPath = legacy;
+            LocationNotice = $"迁移旧数据库到 {target} 失败，本次继续使用 {legacy}: {ex.Message}";
+            // 登记失败会抛出，初始化随之失败，不会在未登记占用的情况下写旧库
+            DatabaseLocation.HoldLegacyInUse(legacy);
+        }
     }
 
     private static async Task EnsureSessionColumnAsync(SqliteConnection conn, string name, string type)

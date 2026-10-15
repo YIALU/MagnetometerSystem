@@ -50,10 +50,10 @@ The application supports GitHub and Gitee updates: choose automatic comparison o
 
 | Content | Location |
 | --- | --- |
-| Capture database | `%LOCALAPPDATA%\MagnetometerSystem\magnetometer.db` |
+| Capture database | `data\magnetometer.db` in the program folder; `%LOCALAPPDATA%\MagnetometerSystem\magnetometer.db` if that folder is not writable |
 | Program logs | `logs` in the program folder; `%LOCALAPPDATA%\MagnetometerSystem\logs` if that folder is not writable |
 
-Close the application and back up the database file before upgrading, migrating, or reinstalling. The database is kept apart from the program folder, so upgrading in place does not touch it; uninstalling the installed version asks whether to delete data and settings too, and keeps them by default.
+Settings shows the path in use and can open its folder. Close the application and back up the database file before upgrading, migrating, or reinstalling. Upgrading in place (the installed version's automatic update, or extracting the portable package over its folder) does not touch the `data` folder; if you extract the portable package to a new folder, copy the old `data` folder across. Versions before v0.6.16 kept the database in `%LOCALAPPDATA%\MagnetometerSystem`; the new version copies it into `data` on first start and leaves the old file in place; do not run older versions after that, as data they write will not appear in the new version. Uninstalling the installed version asks whether to delete data and settings too, and keeps them by default.
 
 ## Quick start
 

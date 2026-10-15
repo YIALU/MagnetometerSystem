@@ -86,22 +86,36 @@ Filename: "{app}\{#MyAppExeName}"; \
 Type: filesandordirs; Name: "{app}\logs"
 
 [Code]
-// 测量数据库在 %LOCALAPPDATA%\MagnetometerSystem\，与程序目录分离，
-// 因此升级覆盖安装天然不会丢数据。卸载时才询问是否一并删除。
+// 测量数据库默认在程序目录 {app}\data\（程序目录不可写时回退到 %LOCALAPPDATA%\MagnetometerSystem\）。
+// 升级覆盖安装只替换安装包里的文件，不会动 data\。旧版本的数据库在 %LOCALAPPDATA%\MagnetometerSystem\，
+// 新版首次启动复制到 data\ 后旧文件保留。卸载时才询问是否一并删除这两处数据。
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
-  DataDir: String;
+  AppDataDir, LegacyDir, DirList: String;
 begin
   if CurUninstallStep = usPostUninstall then
   begin
-    DataDir := ExpandConstant('{localappdata}\MagnetometerSystem');
-    if DirExists(DataDir) then
+    AppDataDir := ExpandConstant('{app}\data');
+    LegacyDir := ExpandConstant('{localappdata}\MagnetometerSystem');
+    DirList := '';
+    if DirExists(AppDataDir) then
+      DirList := DirList + AppDataDir + #13#10;
+    if DirExists(LegacyDir) then
+      DirList := DirList + LegacyDir + #13#10;
+    if DirList <> '' then
     begin
       if MsgBox('是否同时删除测量数据和配置？' + #13#10 + #13#10 +
-                DataDir + #13#10 + #13#10 +
-                '选择"否"将保留数据，重新安装后可继续使用。',
+                DirList + #13#10 +
+                '选择"否"将保留数据，重新安装到同一位置后可继续使用。',
                 mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES then
-        DelTree(DataDir, True, True, True);
+      begin
+        if DirExists(AppDataDir) then
+          DelTree(AppDataDir, True, True, True);
+        if DirExists(LegacyDir) then
+          DelTree(LegacyDir, True, True, True);
+        // 数据删掉后程序目录若已空就一并移除；保留数据时目录留着
+        RemoveDir(ExpandConstant('{app}'));
+      end;
     end;
   end;
 end;
