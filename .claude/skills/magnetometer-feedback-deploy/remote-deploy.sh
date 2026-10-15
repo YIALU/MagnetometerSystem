@@ -90,10 +90,13 @@ cd "$dir"
 sha256sum -c bundle.sha256
 # install.sh 失败时（例如切换 current 后重启服务失败）也要回滚，不能被 set -e 直接退出。
 bash "$dir/install.sh" "$dir/server-bundle.tar.gz" || rollback "install.sh 执行失败"
-# 记录失败不影响部署结果，所以不让 set -e 在这里中断（此时 current 已切到新版本）。
+# 版本目录缺少配套 unit 就无法按 SKILL.md 手动回滚，所以保存失败按部署失败处理。
+# 此时 current 已切到新版本，必须走 rollback 而不是让 set -e 直接退出。
 current=$(readlink -f /opt/magnetometer-feedback/current)
-install -d -m 0755 "$current/systemd" || true
-for u in $units; do install -m 0644 "/etc/systemd/system/$u" "$current/systemd/" || true; done
+install -d -m 0755 "$current/systemd" || rollback "保存新版本 unit 失败"
+for u in $units; do
+    install -m 0644 "/etc/systemd/system/$u" "$current/systemd/" || rollback "保存新版本 unit 失败: $u"
+done
 
 wait_healthy || rollback "新版本未通过本机健康检查"
 
