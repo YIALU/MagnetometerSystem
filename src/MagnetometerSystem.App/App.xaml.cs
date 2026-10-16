@@ -161,9 +161,9 @@ public partial class App : Application
     }
 
     /// <summary>
-    /// 启动后在后台检查更新，之后在运行期间每 24 小时再查一次。发现新版本时弹一次提示窗，
+    /// 启动后在后台检查更新，之后在运行期间每小时再查一次。发现新版本时弹一次提示窗，
     /// 同时在状态栏挂上常驻角标，用户点"稍后提醒"关掉后仍能随时点角标回来；
-    /// 当天重启不再联网，但角标会按上次发现的版本恢复。
+    /// 一小时内重启不再联网，但角标会按上次发现的版本恢复。
     /// </summary>
     private static async Task RunStartupUpdateCheckAsync(MainViewModel mainVm)
     {

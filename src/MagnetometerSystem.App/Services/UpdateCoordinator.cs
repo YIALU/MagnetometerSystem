@@ -26,17 +26,23 @@ public sealed class UpdateCoordinator
     public const string KeyKnownUpdate = "update.knownUpdate";
     public const string KeyLastPrompt = "update.lastPrompt";
 
-    /// <summary>两次静默检查的最小间隔。</summary>
-    internal static readonly TimeSpan SilentCheckInterval = TimeSpan.FromHours(24);
+    /// <summary>
+    /// 两次成功联网检查的最小间隔。只为避免频繁重启时反复请求；发版后一小时内就能提示到，
+    /// 24 小时间隔会让当天发布的版本要等到次日才被发现。
+    /// </summary>
+    internal static readonly TimeSpan SilentCheckInterval = TimeSpan.FromHours(1);
+
+    /// <summary>同一版本自动弹窗的冷却时间。"稍后提醒"的版本次日再提示，冷却内只挂角标。</summary>
+    internal static readonly TimeSpan PromptCooldown = TimeSpan.FromHours(24);
 
     /// <summary>启动后延迟多久才检查，避开数据库初始化和串口连接的高峰。</summary>
     internal TimeSpan StartupDelay { get; set; } = TimeSpan.FromSeconds(8);
 
     /// <summary>
-    /// 运行期间多久看一次是否到了检查时间。真正联网仍受 24 小时间隔约束；
+    /// 运行期间多久看一次是否到了检查时间。真正联网仍受 <see cref="SilentCheckInterval"/> 约束；
     /// 检查失败不记时间，所以断网时也按这个节奏重试。
     /// </summary>
-    internal TimeSpan PollInterval { get; set; } = TimeSpan.FromHours(1);
+    internal TimeSpan PollInterval { get; set; } = TimeSpan.FromMinutes(15);
 
     internal Func<DateTime> UtcNow { get; set; } = () => DateTime.UtcNow;
 
@@ -185,11 +191,11 @@ public sealed class UpdateCoordinator
     // ------------------------------------------------------------ 静默检查
 
     /// <summary>
-    /// 启动后的静默检查，之后在程序运行期间每到 24 小时再查一次。
+    /// 启动后的静默检查，之后在程序运行期间每小时再查一次。
     /// 常年不关的实例也能收到新版本提示；"稍后提醒"的版本次日会再提示一次。
     /// </summary>
     /// <param name="onUpdateFound">联网发现新版本时的回调（挂角标并弹窗），由调用方负责切到 UI 线程。</param>
-    /// <param name="onUpdateRestored">只挂角标不弹窗的回调：启动时恢复上次发现的版本，或同一版本还在 24 小时提示冷却内。</param>
+    /// <param name="onUpdateRestored">只挂角标不弹窗的回调：启动时恢复上次发现的版本，或同一版本还在 24 小时弹窗冷却内。</param>
     public async Task RunAutoCheckLoopAsync(
         Func<UpdateInfo, Task> onUpdateFound, Func<UpdateInfo, Task>? onUpdateRestored, CancellationToken ct = default)
     {
@@ -232,7 +238,7 @@ public sealed class UpdateCoordinator
                 return;
             }
 
-            // 先把上次发现的版本挂回角标：24 小时内重启不联网，到期了联网又可能失败，
+            // 先把上次发现的版本挂回角标：刚检查过就重启时不联网，到期了联网又可能失败，
             // 两种情况下"稍后提醒"的版本都不该找不回来。之后的检查结果会再覆盖它。
             UpdateInfo? known;
             await _checkGate.WaitAsync();
@@ -242,7 +248,7 @@ public sealed class UpdateCoordinator
 
             if (!await IsCheckDueAsync())
             {
-                Log.Information("距上次检查更新不足 24 小时，本次启动不联网检查");
+                Log.Information("距上次检查更新不足 1 小时，本次启动不联网检查");
                 return;
             }
 
@@ -272,7 +278,7 @@ public sealed class UpdateCoordinator
 
             if (result.Status == UpdateCheckStatus.Failed)
             {
-                // 不记录本次检查时间，否则断网一次要等 24 小时才会再试
+                // 不记录本次检查时间，断网时下一轮轮询就会再试
                 Log.Warning("静默检查更新失败: {Message}", result.ErrorMessage);
                 return;
             }
@@ -331,7 +337,7 @@ public sealed class UpdateCoordinator
             now = UtcNow();
             var sinceLast = now - _promptedAtUtc;
             if (string.Equals(_promptedVersion, version, StringComparison.OrdinalIgnoreCase)
-                && sinceLast >= TimeSpan.Zero && sinceLast < SilentCheckInterval)
+                && sinceLast >= TimeSpan.Zero && sinceLast < PromptCooldown)
             {
                 return false;
             }
@@ -378,7 +384,7 @@ public sealed class UpdateCoordinator
     }
 
     /// <summary>
-    /// 弹窗记录要跨重启保留：部分平台失败时不写检查时间，24 小时内重启会立即再查，
+    /// 弹窗记录要跨重启保留：每次到期重启都会再查，
     /// 不读回这条记录就会把刚点过"稍后提醒"的版本再弹一次。
     /// </summary>
     private async Task LoadLastPromptAsync()
@@ -520,7 +526,7 @@ public sealed class UpdateCoordinator
 
         if (!matchesSource)
         {
-            // 检查时间也属于旧平台，留着会让新平台 24 小时内都不联网。
+            // 检查时间也属于旧平台，留着会让新平台在间隔内不联网。
             await TrySetKnownUpdateAsync(null);
             try { await _preferences.SetPreferenceAsync<DateTime?>(KeyLastCheckUtc, null); }
             catch (Exception ex) { Log.Warning(ex, "清除检查更新时间失败"); }

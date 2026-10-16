@@ -253,15 +253,23 @@ public class UpdateStartupTests
             Assert.True(await prompts.WaitAsync(TimeSpan.FromSeconds(15)));
             Assert.Equal(1, service.CheckCalls);
 
-            // 未满 24 小时：轮询多次也不联网。
-            Interlocked.Add(ref ticks, TimeSpan.FromHours(23).Ticks);
+            // 未满 1 小时：轮询多次也不联网。
+            Interlocked.Add(ref ticks, TimeSpan.FromMinutes(50).Ticks);
             await Task.Delay(300);
             Assert.Equal(1, service.CheckCalls);
 
-            // 满 24 小时后重新检查，"稍后提醒"的版本再提示一次。
-            Interlocked.Add(ref ticks, TimeSpan.FromHours(2).Ticks);
-            Assert.True(await prompts.WaitAsync(TimeSpan.FromSeconds(15)));
+            // 满 1 小时后重新联网，但同一版本还在 24 小时弹窗冷却内，不再弹。
+            Interlocked.Add(ref ticks, TimeSpan.FromMinutes(20).Ticks);
+            var deadline = DateTime.UtcNow.AddSeconds(15);
+            while (service.CheckCalls < 2 && DateTime.UtcNow < deadline) await Task.Delay(20);
             Assert.Equal(2, service.CheckCalls);
+            await Task.Delay(300);
+            Assert.Equal(0, prompts.CurrentCount);
+
+            // 满 24 小时后，"稍后提醒"的版本再提示一次。
+            Interlocked.Add(ref ticks, TimeSpan.FromHours(23).Ticks);
+            Assert.True(await prompts.WaitAsync(TimeSpan.FromSeconds(15)));
+            Assert.Equal(3, service.CheckCalls);
         }
         finally { cts.Cancel(); }
         await loop.WaitAsync(TimeSpan.FromSeconds(15));
