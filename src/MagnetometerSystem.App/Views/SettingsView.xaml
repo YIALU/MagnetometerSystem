@@ -90,7 +90,7 @@
                             <TextBlock Text="检查更新" Style="{StaticResource RowLabel}" Margin="0,0,16,0"/>
                             <StackPanel Grid.Column="1">
                                 <CheckBox Style="{StaticResource Switch}" Content="启动时检查" IsChecked="{Binding AutoCheckUpdateEnabled}"/>
-                                <TextBlock Style="{StaticResource Hint}" Margin="0,6,0,0" Text="两次成功检查至少间隔 24 小时，需要联网；修改立即保存。也可以点导航栏底部的版本号手动检查。"/>
+                                <TextBlock Style="{StaticResource Hint}" Margin="0,6,0,0" Text="启动时和运行期间每小时检查一次，需要联网；修改立即保存。也可以点导航栏底部的版本号手动检查。"/>
                             </StackPanel>
                             <TextBlock Grid.Row="1" Text="更新平台" Style="{StaticResource RowLabel}" Margin="0,14,16,0"/>
                             <StackPanel Grid.Row="1" Grid.Column="1" Margin="0,14,0,0">
